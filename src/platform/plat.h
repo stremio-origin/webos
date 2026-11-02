@@ -35,6 +35,10 @@ char *plat_luna_call(const char *uri, const char *payload, int timeoutMs);
    (always 0 off webOS) */
 typedef void (*PlatLunaCb)(const char *payload, void *ud);
 unsigned long plat_luna_subscribe(const char *uri, const char *payload, PlatLunaCb cb, void *ud);
+/* the same, on the app's own handle: the system helper library does not deliver subscription events */
+unsigned long plat_luna_subscribe_own(const char *uri, const char *payload, PlatLunaCb cb, void *ud);
+/* and the answer to it, from that handle */
+int plat_luna_send_own(const char *uri, const char *payload);
 void plat_luna_cancel(unsigned long handle);
 void plat_luna_pump(void);
 /* a call whose answer nobody waits for (a refusal is logged); 0 when it could not be sent (always 0 off webOS) */
