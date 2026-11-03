@@ -1976,7 +1976,7 @@ static void draw_art(void) {
     float o = 1; if (!P.live && !ss) { float p = fmodf((float)(now_() - P.openedAt) / 3.6f + .5f, 1); /* from full strength: it lands as it flew */ o = p < .5f ? .9f + .1f * bez(C_INOUT, p * 2) : 1 - .1f * bez(C_INOUT, (p - .5f) * 2); } /* breathing */
     if (P.closing) {} /* (the page's copy flies back) */
     else if (t) { char sk[80]; snprintf(sk, sizeof sk, "logo:%s", P.id); sx_image(sk, t, SB_W / 2 - lw / 2, y, lw, lh, 0, WHITE_A((int)(255 * o)), 0, 0, 1, 1); }
-    else if (nm) { float k = kf(P.nameAt, .45f, C_LGIN, 0); { char sk[80]; snprintf(sk, sizeof sk, "logo:%s", P.id); sx_text_wrapped(sk, P.name, SB_W * 0.1f, y, SB_W * 0.8f, 3, 78, 800, WHITE_A((int)(255 * o * k)), -1.5f, ALIGN_CENTER, 78 * 1.05f); } }
+    else if (nm) { float k = kf(P.nameAt, .45f, C_LGIN, 0); { char sk[80]; snprintf(sk, sizeof sk, "logo:%s", P.id); sx_text_wrapped(sk, P.name, SB_W / 2, y, SB_W * 0.8f, 3, 78, 800, WHITE_A((int)(255 * o * k)), -1.5f, ALIGN_CENTER, 78 * 1.05f); /* (centred: x is the middle of the block) */ } }
     y += lh; if (bk < 1) gfx_opacity_push(bk);
     if (tag && !ss) { y += 28; static UMemo tgU; static TMemo tgW; const char *tg = um_upper(&tgU, trailer_name()); float tw = tm_width(&tgW, tg, 24, 700, 8), totW = 84 + 22 + tw + 14 + 84, x0 = SB_W / 2 - totW / 2, ly = y + L24 / 2 - 1;
       gfx_rrect_h(x0, ly, 84, 2, 0, col_alpha(ACC, 0), ACC2); text_draw(tg, x0 + 84 + 22, y, 24, 700, WHITE_A(255), 8, 0, ALIGN_LEFT); gfx_rrect_h(x0 + 84 + 22 + tw + 14, ly, 84, 2, 0, ACC2, col_alpha(ACC, 0)); y += L24; }
