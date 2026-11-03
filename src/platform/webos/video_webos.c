@@ -307,7 +307,13 @@ static void start_load(void) {
   stop_session(); txtPending = -2; pthread_mutex_lock(&mu); S.st = VID_LOADING; S.curTxt = -1; if (timed.on) { S.pos = timed.off; S.dur = timed.dur; } pthread_mutex_unlock(&mu); unsigned mine = session;
   cropSX = -1; noCrop = 0;
   char payload[8192 + 512]; const char *win = expWin[0] ? expWin : "window_id_dummy";
-  int n = snprintf(payload, sizeof payload, "{\"payload\":{\"option\":{\"useSeekableRanges\":true,\"appId\":\"%s\",\"bufferControl\":{\"userBufferCtrl\":false},\"windowId\":\"%s\"}},\"uri\":\"%s\",\"type\":\"media\"}", SB_APP_ID, win, url);
+  /* an HLS address is named as HLS, as the TV's web engine does for a <video> with an m3u8 source: left as "URI" the pipeline
+     played on-demand HLS but a live playlist only buffered (36 s held, never loadCompleted). Origin's own converted streams
+     (127.0.0.1/h/) keep the path they were measured on */
+  const char *q = strchr(url, '?'); size_t ul = q ? (size_t)(q - url) : strlen(url);
+  int hls = memmem(url, ul, ".m3u8", 5) != NULL && !(strstr(url, "://127.0.0.1:") && strstr(url, "/h/"));
+  int n = snprintf(payload, sizeof payload, "{\"payload\":{%s\"option\":{\"useSeekableRanges\":true,\"appId\":\"%s\",\"bufferControl\":{\"userBufferCtrl\":false},\"windowId\":\"%s\"}},\"uri\":\"%s\",\"type\":\"media\"}", hls ? "\"mediaTransportType\":\"HLS\"," : "", SB_APP_ID, win, url);
+  if (hls) fprintf(stderr, "[video] loading as HLS\n");
   if (n >= (int)sizeof payload) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "address too long"); pthread_mutex_unlock(&mu); return; }
   if (expWin[0]) apply_plane(); /* the exported window gets its frame and place before the load */
   if (!call("load", payload, on_load, (void *)(uintptr_t)mine)) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "no media service"); pthread_mutex_unlock(&mu); }
