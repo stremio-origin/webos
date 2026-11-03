@@ -117,6 +117,9 @@ static struct {
   /* next episode from the closest source */
   int nextTried; struct { unsigned tok; int done, has; double bs, until; char vid[80], info[700], url[SB_URL_MAX], addon[96], binge[96]; Stream best; } nx;
   int ended; double endGoAt; double metaRetryAt;
+  /* a live HLS stream (a playlist without #EXT-X-ENDLIST: sports, TV channels): no progress, no watched mark, no resume
+     jump, and an end or an error loads it again at the live edge instead of closing */
+  int liveHls, liveRetries; unsigned liveTok; double liveRetryT0;
   /* the paused screensaver, the file size, the picture size */
   double liveT0, steadyAt; /* the first frame came / playing steadily since */
   int ssOn; double ssAt, ssCheckAt, lastAct; double size; char sizeTxt[24]; unsigned sizeTok; int httpSt, sizeAns, canNext; double errAt; int lastVw, lastVh; double aspRefreshAt;
@@ -244,14 +247,15 @@ static int episodic(void) {
   const cJSON *v = P.meta ? js_arr(P.meta, "videos") : NULL; return v && cJSON_GetArraySize(v) > 1;
 }
 static Item lib_item(void) { Item it; memset(&it, 0, sizeof it); snprintf(it.id, sizeof it.id, "%s", P.id); snprintf(it.type, sizeof it.type, "%s", P.type); snprintf(it.name, sizeof it.name, "%s", P.name); snprintf(it.poster, sizeof it.poster, "%s", P.poster); snprintf(it.background, sizeof it.background, "%s", P.bg); snprintf(it.logo, sizeof it.logo, "%s", P.logo); return it; }
-static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrailer || d <= 0 || getenv("SB_PLAY_NOSAVE")) return; /* (SB_PLAY_NOSAVE: development plays leave the library alone) */ Item it = lib_item(); lib_set_progress(P.id, &it, P.vid, video_time() * 1000, d * 1000, push); P.lastSave = now_(); }
+static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrailer || P.liveHls || d <= 0 || getenv("SB_PLAY_NOSAVE")) return; /* (SB_PLAY_NOSAVE: development plays leave the library alone) */ Item it = lib_item(); lib_set_progress(P.id, &it, P.vid, video_time() * 1000, d * 1000, push); P.lastSave = now_(); }
 static void mark_watched(void) {
-  if (P.isTrailer || P.marked || getenv("SB_PLAY_NOSAVE")) return; P.marked = 1; Item it = lib_item(); cJSON *l = lib_get(P.id); if (!l) l = lib_new_item(&it);
+  if (P.isTrailer || P.marked || P.liveHls || getenv("SB_PLAY_NOSAVE")) return; P.marked = 1; Item it = lib_item(); cJSON *l = lib_get(P.id); if (!l) l = lib_new_item(&it);
   if (episodic() && P.videos) { const char *ids[1] = { P.vid }; lib_set_eps_watched(l, P.videos, ids, 1, 1); } else lib_set_movie_watched(l, 1);
 }
 static char resumeMsg[80];
 static void try_resume(void) {
   if (P.didResume || P.isTrailer) return; P.didResume = 1;
+  if (P.liveHls) return; /* live: it starts where the broadcast is, never at a saved moment */
   if (P.startAt < 0) return; /* "Watch from the beginning" */
   if (P.startAt > 0) { video_seek(P.startAt); return; } /* another source: same moment */
   cJSON *l = lib_get(P.id); const cJSON *st = js_obj(l, "state"); if (!st) return;
@@ -1462,8 +1466,29 @@ static void dts_defer_tick(void) {
   if (listed && dv7_convert("known before loading")) return;
   video_load(P.url);
 }
+/* ---- live HLS: told by the playlist itself (no #EXT-X-ENDLIST), a master's first variant read for it; until the answer
+   comes, the kinds of item that are live by nature (sport, tv, channel, events) are taken as live ---- */
+static int live_kind(const char *t) { return !strcmp(t, "sport") || !strcmp(t, "tv") || !strcmp(t, "channel") || !strcmp(t, "events") || !strcmp(t, "live"); }
+static void on_live_probe(int st, const unsigned char *body, size_t len, void *ud);
+static void live_probe(const char *url, int depth) { unsigned d = (unsigned)depth & 1; net_get(url, on_live_probe, (void *)(uintptr_t)(P.liveTok << 1 | d)); }
+static void on_live_probe(int st, const unsigned char *body, size_t len, void *ud) {
+  (void)len; unsigned v = (unsigned)(uintptr_t)ud; if (!P.open || P.closing || (v >> 1) != P.liveTok || st < 200 || st >= 300 || !body) return;
+  const char *b = (const char *)body; if (!strstr(b, "#EXTM3U")) return;
+  const char *inf = strstr(b, "#EXT-X-STREAM-INF");
+  if (inf && !(v & 1)) { /* a master: its first variant says */
+    const char *l = strchr(inf, '\n'); while (l && (l[1] == '#' || l[1] == '\r' || l[1] == '\n')) l = strchr(l + 1, '\n'); if (!l) return; l++;
+    char ref[2048]; snprintf(ref, sizeof ref, "%.*s", (int)strcspn(l, "\r\n"), l); char abs[4096];
+    if (strstr(ref, "://")) snprintf(abs, sizeof abs, "%s", ref);
+    else if (ref[0] == '/') { const char *h = strstr(P.url, "://"); size_t n = h ? (size_t)(h + 3 - P.url) + strcspn(h + 3, "/?#") : 0; snprintf(abs, sizeof abs, "%.*s%s", (int)n, P.url, ref); }
+    else { size_t e = strcspn(P.url, "?#"), dir = 0; for (size_t i = 0; i < e; i++) if (P.url[i] == '/') dir = i + 1; snprintf(abs, sizeof abs, "%.*s%s", (int)dir, P.url, ref); }
+    live_probe(abs, 1); return; }
+  int live = !strstr(b, "#EXT-X-ENDLIST") && !strstr(b, "#EXT-X-PLAYLIST-TYPE:VOD");
+  if (live != P.liveHls) fprintf(stderr, "[player] the playlist says %s\n", live ? "live" : "on demand");
+  P.liveHls = live;
+}
 static void start_video(void) {
   P.started = 1; P.isTrailer = !strcmp(P.type, "other"); P.isHls = strstr(P.url, ".m3u8") != NULL;
+  if (P.isHls && !P.isTrailer) { static unsigned lt; P.liveTok = ++lt; P.liveHls = live_kind(P.type); live_probe(P.url, 0); }
   best_caps_probe(NULL, NULL); /* (once: kept) */
   if (dts_defer_wanted() || dv7_defer_wanted()) P.dts.deferUntil = now_() + 4; else video_load(P.url);
   build_btns(); apply_aspect(); P.res = res_of(P.sname);
@@ -1684,6 +1709,14 @@ int player_cast_state(double *pos, double *du, char *title, int cap) {
 }
 static void finish_close(void) { sync_stop(0); gfx_target_free(&handSnap); mo_set(&handA, 0); video_unload(); asssubs_close(); if (mkv) { mkv_close(mkv); mkv = NULL; } p2p_player_closed(); p2pTok++; metaTok++; P.open = 0; P.closing = 0; if (P.meta) cJSON_Delete(P.meta); P.meta = NULL; subs_free(P.cues, P.ncues); free(P.ext); free(P.adx); srcs_free(); cols_clear(); memset(&P, 0, sizeof P); sub_reset(); app_refresh_boards(); }
 static int closeNext, closeSim, closeArt; static double closeAt, closeT0; /* closeArt: closed on the loading screen (its line and words fade as the logo flies back) */
+/* a live stream that stopped (its end reached between playlist updates, a dropped connection): loaded again at the live
+   edge, up to 6 times in 2 minutes; 0 when it has been tried too often (then the usual end / error) */
+static int live_again(const char *why) {
+  double n = now_(); if (!P.liveRetryT0 || n - P.liveRetryT0 > 120) { P.liveRetryT0 = n; P.liveRetries = 0; }
+  if (P.liveRetries >= 6) return 0; P.liveRetries++;
+  fprintf(stderr, "[player] live stream stopped (%s): loading it again (%d)\n", why && *why ? why : "?", P.liveRetries);
+  P.live = 0; P.liveT0 = 0; P.didResume = 1; P.startAt = 0; P.ended = 0; P.endGoAt = 0; video_load(P.url); return 1;
+}
 static void close_player(int goNext, int goSim) {
   if (!P.open || P.closing) return; if (bestTok) { best_choose_cancel(bestTok); bestTok = 0; } P.closing = 1; closeArt = !P.live && P.artA.v > 0.999f; closeT0 = now_(); sx_begin_quick(0); /* the player's logo moves back to the page */ closeNext = goNext; closeSim = goSim; P.ssOn = 0; P.nx.tok = 0; P.sk.tok = 0;
   save_progress(1); video_pause();
@@ -1844,6 +1877,7 @@ void player_tick(float dt) {
   if (P.dts.deferUntil) dts_defer_tick();
   if (vs == VID_ERROR && !P.failed && P.started && P.isP2p && !P.p2pRetried && p2p_moved_recently()) { /* the torrent's storage moved (a USB drive pulled out): the same stream once more, same moment */
     P.p2pRetried = 1; P.startAt = P.lastPos > 0 ? P.lastPos : 0; P.didResume = 0; P.live = 0; fprintf(stderr, "[player] stream error after the torrent storage moved: again at %.0f s\n", P.startAt); video_load(P.url); vs = video_state(); }
+  if (vs == VID_ERROR && !P.failed && P.started && P.liveHls && live_again(video_error())) return;
   if (vs == VID_ERROR && !P.failed && P.started) { if (P.alt[0] && !P.altTried) { P.altTried = 1; fprintf(stderr, "[player] error, the fallback URL\n"); video_load(P.alt); } else { if (!P.errAt) P.errAt = now_(); if (!P.sizeTok || P.sizeAns || now_() - P.errAt > 4) fail(fail_reason()); } } /* the first URL failed: the same file the other way; the reason waits for the server's answer (4 s at most) */
   if (P.nx.tok && !P.nx.done && now_() >= P.nx.until) nx_finish();
   if (P.metaRetryAt && now_() >= P.metaRetryAt) { P.metaRetryAt = 0; if (!P.next.has || !P.videos) ask_meta(); }
@@ -1874,6 +1908,7 @@ void player_tick(float dt) {
     if (P.seekTxtUntil && now_() >= P.seekTxtUntil) { P.seekTxtUntil = 0; P.skOn = 0; P.skm = 0; }
     if (P.mode == 1 && now_() >= P.hideAt && !paused() && P.seekT < 0) hide_osd();
     if (vs == VID_PLAYING && now_() - P.lastSave >= 10) { save_progress(0); if (dur() > 0 && video_time() / dur() > 0.95) mark_watched(); }
+    if (vs == VID_ENDED && P.liveHls && live_again("the stream ended")) return;
     if (vs == VID_ENDED && !P.ended) { P.ended = 1; save_progress(1); mark_watched(); if (strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false") && P.next.has) P.endGoAt = now_() + 0.6; else close_player(0, 0); }
     if (P.endGoAt && now_() >= P.endGoAt) { P.endGoAt = 0; go_next(); if (!P.open || P.closing) return; }
     check_prompt();
