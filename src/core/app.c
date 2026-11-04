@@ -762,7 +762,9 @@ static void key_core(int k, int down, int repeat);
    and released (held on a card: its menu); a few targets act on release (a tab, a chip, the seek bar, beside a
    sheet = close it); a sheet's body absorbs a click. A click and an OK key within 150 ms are one press. The
    wheel is Up/Down, one step per notch (70 ms apart at most). An arrow key puts the pointer away; it comes
-   back only with a real movement: nothing in the first 350 ms, then 32 px from where the hand started again. */
+   back only with a real movement: nothing in the first 350 ms, then 32 px from where the hand started again.
+   The TV itself hides the pointer after 5 s without movement (webOS: SDL_HINT_WEBOS_CURSOR_SLEEP_TIME in
+   plat_webos.c) and says so with K_CURSOR_HIDE, like any other hide. */
 #define PTR_SETTLE 0.15
 #define PTR_DEDUPE 0.15
 #define PTR_WHEEL 0.07

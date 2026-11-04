@@ -1,6 +1,7 @@
 /* LG webOS: the compositor needs the app's identity in the environment before SDL starts, the
-   Wayland driver, and the hint that hands the Back key to the app (otherwise the system takes
-   it). Remote keys arrive as scancodes defined by the TV's SDL. */
+   Wayland driver, the hint that hands the Back key to the app (otherwise the system takes
+   it) and the one that times the Magic Remote pointer out. Remote keys arrive as scancodes
+   defined by the TV's SDL. */
 #include "platform/plat.h"
 #include "core/keys.h"
 #include "core/applog.h"
@@ -33,6 +34,9 @@ void plat_pre_init(const char *appId) {
   if (!getenv("XDG_RUNTIME_DIR")) setenv("XDG_RUNTIME_DIR", "/tmp/xdg", 1);
   SDL_SetHint(SDL_HINT_WEBOS_ACCESS_POLICY_KEYS_BACK, "true");
   SDL_SetHint(SDL_HINT_WEBOS_ACCESS_POLICY_KEYS_EXIT, "true");
+  /* the TV hides the pointer after this long without movement, as most TV apps do (milliseconds; the TV's SDL takes
+     3000-300000 and leaves it at 5 minutes when unset) */
+  SDL_SetHint(SDL_HINT_WEBOS_CURSOR_SLEEP_TIME, "5000");
   char *base = SDL_GetBasePath(); /* from /proc/self/exe: inside the jail, the jail's own path to the app */
   snprintf(assetDir, sizeof assetDir, "%sassets", base ? base : "./");
   /* the app's writable folder, kept across updates where the install allows it. The first that takes a file:
