@@ -339,7 +339,7 @@ static void *ref_main(void *arg) {
   for (int i = 0; i < j->nc && !j->cancel && tried < REF_TRIES && !done; i++) { const RefCand *c = &j->c[i]; if (c->score < 0) break; tried++;
     fprintf(stderr, "[sync] reference %d: %s from %s, %s, rank %.2f (%s)\n", tried, c->r.lang[0] ? c->r.lang : "?", c->r.from, c->r.hm ? "found by the file's hash" : c->r.own ? "carried by the stream" : c->score >= 3 ? "file name match" : "another subtitle of this video", c->score, c->r.rel[0] ? c->r.rel : c->r.url);
     j->stage = 1; size_t len = 0; unsigned char *b = fetch(j, c->r.url, REF_BYTES, &len); if (!b) { fails++; continue; }
-    Cue *cs = NULL; int n = subs_parse_body(b, len, &cs); free(b);
+    Cue *cs = NULL; int n = subs_parse_body(b, len, c->r.lang, &cs); free(b);
     if (n < 20) { fprintf(stderr, "[sync] reference unreadable (%d lines)\n", n); subs_free(cs, n); fails++; continue; }
     if (same_times(j, cs, n)) { subs_free(cs, n);
       if (c->r.hm || c->r.own) { fprintf(stderr, "[sync] reference has the same times as this subtitle: it already fits the file\n"); r.st = SYNC_OK; r.d = 0; r.f = 1; r.score = 1; done = 1; break; }

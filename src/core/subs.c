@@ -41,9 +41,26 @@ static int utf8_ok(const unsigned char *b, size_t n) {
 /* Windows-1252's 0x80-0x9F (the rest of the byte range is Latin-1 as it stands) */
 static const unsigned short CP1252[32] = { 0x20ac, 0xfffd, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0xfffd, 0x017d, 0xfffd,
   0xfffd, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0xfffd, 0x017e, 0x0178 };
+/* Windows-1250 (Central European), 0x80-0xFF: its letters differ from Latin-1's (Hungarian ő ű are õ û there) */
+static const unsigned short CP1250[128] = { 0x20ac, 0xfffd, 0x201a, 0xfffd, 0x201e, 0x2026, 0x2020, 0x2021, 0xfffd, 0x2030, 0x0160, 0x2039, 0x015a, 0x0164, 0x017d, 0x0179,
+  0xfffd, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0xfffd, 0x2122, 0x0161, 0x203a, 0x015b, 0x0165, 0x017e, 0x017a,
+  0x00a0, 0x02c7, 0x02d8, 0x0141, 0x00a4, 0x0104, 0x00a6, 0x00a7, 0x00a8, 0x00a9, 0x015e, 0x00ab, 0x00ac, 0x00ad, 0x00ae, 0x017b,
+  0x00b0, 0x00b1, 0x02db, 0x0142, 0x00b4, 0x00b5, 0x00b6, 0x00b7, 0x00b8, 0x0105, 0x015f, 0x00bb, 0x013d, 0x02dd, 0x013e, 0x017c,
+  0x0154, 0x00c1, 0x00c2, 0x0102, 0x00c4, 0x0139, 0x0106, 0x00c7, 0x010c, 0x00c9, 0x0118, 0x00cb, 0x011a, 0x00cd, 0x00ce, 0x010e,
+  0x0110, 0x0143, 0x0147, 0x00d3, 0x00d4, 0x0150, 0x00d6, 0x00d7, 0x0158, 0x016e, 0x00da, 0x0170, 0x00dc, 0x00dd, 0x0162, 0x00df,
+  0x0155, 0x00e1, 0x00e2, 0x0103, 0x00e4, 0x013a, 0x0107, 0x00e7, 0x010d, 0x00e9, 0x0119, 0x00eb, 0x011b, 0x00ed, 0x00ee, 0x010f,
+  0x0111, 0x0144, 0x0148, 0x00f3, 0x00f4, 0x0151, 0x00f6, 0x00f7, 0x0159, 0x016f, 0x00fa, 0x0171, 0x00fc, 0x00fd, 0x0163, 0x02d9 };
+/* the languages Windows writes in code page 1250, not 1252: a subtitle in one of them, not saved as Unicode, is read so */
+static int cp1250_lang(const char *lang) {
+  static const char *L[] = { "hun", "cze", "slo", "pol", "slv", "hrv", "bos", "bs", "srp", "rum", "alb", "sqi", "sq", NULL };
+  char k[16]; if (!lang || !*lang) return 0; subs_lang_canon(lang, k, sizeof k);
+  for (int i = 0; L[i]; i++) if (!strcmp(L[i], k)) return 1;
+  return 0;
+}
 /* subtitle files come in whatever their authors saved: UTF-16 (with a BOM, or told by its zero bytes), UTF-8 (BOM or not),
-   else the Windows code page most old SRT files use. Line ends become "\n" whatever they were. malloc'd */
-static char *to_text(const unsigned char *b, size_t n) {
+   else the Windows code page most old SRT files use: 1250 for the Central European languages (cp1250 set: cp1250_lang), 1252
+   otherwise. Line ends become "\n" whatever they were. malloc'd */
+static char *to_text(const unsigned char *b, size_t n, int cp1250) {
   int be = -1; /* UTF-16: 0 little-endian, 1 big-endian */
   if (n >= 2 && b[0] == 0xff && b[1] == 0xfe) { be = 0; b += 2; n -= 2; }
   else if (n >= 2 && b[0] == 0xfe && b[1] == 0xff) { be = 1; b += 2; n -= 2; }
@@ -55,7 +72,7 @@ static char *to_text(const unsigned char *b, size_t n) {
       if (c >= 0xd800 && c < 0xdc00 && i + 3 < n) { unsigned d = be ? (unsigned)(b[i + 2] << 8 | b[i + 3]) : (unsigned)(b[i + 3] << 8 | b[i + 2]); if (d >= 0xdc00 && d < 0xe000) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i += 2; } }
       if (c) o += put_utf8(out + o, c); }
   else if (utf8_ok(b, n)) { for (size_t i = 0; i < n; i++) if (b[i]) out[o++] = (char)b[i]; }
-  else for (size_t i = 0; i < n; i++) { unsigned c = b[i]; if (!c) continue; o += put_utf8(out + o, c >= 0x80 && c < 0xa0 ? CP1252[c - 0x80] : c); }
+  else for (size_t i = 0; i < n; i++) { unsigned c = b[i]; if (!c) continue; o += put_utf8(out + o, c < 0x80 ? c : cp1250 ? CP1250[c - 0x80] : c < 0xa0 ? CP1252[c - 0x80] : c); }
   out[o] = 0;
   size_t w = 0; for (size_t i = 0; i < o; i++) { if (out[i] == '\r') { out[w++] = '\n'; if (out[i + 1] == '\n') i++; } else out[w++] = out[i]; }
   out[w] = 0; return out;
@@ -94,7 +111,7 @@ static int parse_ass(const char *txt, Cue **out) {
 /* blocks separated by blank lines; the line with "-->" times the text under it; tags and {..} are dropped */
 int subs_parse(const char *txt, Cue **out) {
   *out = NULL; if (!txt) return 0; if (!strncmp(txt, "\xef\xbb\xbf", 3)) txt += 3;
-  char *buf = to_text((const unsigned char *)txt, strlen(txt)); /* "\r\n" must not read as a blank line */
+  char *buf = to_text((const unsigned char *)txt, strlen(txt), 0); /* "\r\n" must not read as a blank line */
   if (strstr(buf, "[Events]") || strstr(buf, "[events]") || !strncmp(buf, "[Script Info]", 13)) { int k = parse_ass(buf, out); free(buf); return k; }
   Cue *cues = NULL; int n = 0, cap = 0;
   char *blk = buf;
@@ -115,7 +132,7 @@ void subs_free(Cue *c, int n) { if (!c) return; for (int i = 0; i < n; i++) free
 
 /* some subtitle hosts hand out the .gz file itself (no Content-Encoding): unpacked here, 16 MB at most; then the
    text's own encoding (UTF-16 has zero bytes, so it is decoded before anything reads it as a C string) */
-int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
+int subs_parse_body(const unsigned char *body, size_t len, const char *lang, Cue **out) {
   *out = NULL; if (!body) return 0;
   unsigned char *buf = NULL; size_t n = 0;
   if (len >= 2 && body[0] == 0x1f && body[1] == 0x8b) {
@@ -129,7 +146,7 @@ int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
     inflateEnd(&z); if (rc != Z_STREAM_END && !n) { free(buf); return 0; }
     body = buf; len = n;
   }
-  char *txt = to_text(body, len); free(buf);
+  char *txt = to_text(body, len, cp1250_lang(lang)); free(buf);
   int k = subs_parse_any(txt, out); free(txt); return k;
 }
 
@@ -163,7 +180,7 @@ const char *subs_sub_name(const char *code) { char k[16]; base_code(code, k, siz
    lists, must not wait there. Each fetch runs on its own short thread (files are also read there, off the drawing
    thread); subs_pump hands the answers over on the main thread. */
 typedef struct FindQ FindQ;
-typedef struct SubJob { struct SubJob *next; char *url; int list, status; unsigned char *body; size_t len; Cue *cues; int n;
+typedef struct SubJob { struct SubJob *next; char *url, lang[24]; int list, status; unsigned char *body; size_t len; Cue *cues; int n;
   void (*cb)(int, Cue *, int, void *); void *ud;
   FindQ *fq; int src; SubEntry *got; int ngot; int os; } SubJob;   /* list: one addon's answer for a FindQ (src: which); os: the built-in OpenSubtitles list */
 static pthread_mutex_t jmu = PTHREAD_MUTEX_INITIALIZER; static SubJob *jdone;
@@ -173,7 +190,7 @@ static void *job_main(void *a) { plat_thread_background(5);
   SubJob *j = a; j->body = net_fetch_sync(j->url, &j->len, &j->status, 20000); /* one addon's limit: the others never wait for it */
   if (j->os) {} /* read on the main thread (on_list) */
   else if (j->list) list_parse(j);
-  else if (j->body) { j->n = subs_parse_body(j->body, j->len, &j->cues); free(j->body); j->body = NULL; }
+  else if (j->body) { j->n = subs_parse_body(j->body, j->len, j->lang, &j->cues); free(j->body); j->body = NULL; }
   job_finish(j);
   return NULL;
 }
@@ -189,8 +206,8 @@ void subs_pump(void) {
     else j->cb(j->status, j->cues, j->n, j->ud);
     free(j->body); free(j->url); free(j->got); free(j); }
 }
-void subs_load(const char *url, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud) {
-  SubJob *j = calloc(1, sizeof *j); j->url = strdup(url); j->cb = cb; j->ud = ud; job_start(j);
+void subs_load(const char *url, const char *lang, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud) {
+  SubJob *j = calloc(1, sizeof *j); j->url = strdup(url); snprintf(j->lang, sizeof j->lang, "%s", lang ? lang : ""); j->cb = cb; j->ud = ud; job_start(j);
 }
 
 /* ---- the OpenSubtitles hash: the size plus the 64-bit little-endian words of the first and the last 64 KB ---- */
