@@ -10,7 +10,7 @@
 #include <ctype.h>
 
 /* the country whose rating is shown, by the app's language; films without a key: which Wikidata rating */
-static const char *RATE_CC[][2] = { { "en", "US" }, { "de", "DE" }, { "fr", "FR" }, { "es", "ES" }, { "it", "IT" }, { "nl", "NL" }, { "pl", "PL" }, { "pt", "BR" }, { "ru", "RU" }, { "tr", "TR" }, { "ar", "AE" } };
+static const char *RATE_CC[][2] = { { "en", "US" }, { "de", "DE" }, { "fr", "FR" }, { "es", "ES" }, { "it", "IT" }, { "nl", "NL" }, { "pl", "PL" }, { "hu", "HU" }, { "pt", "BR" }, { "ru", "RU" }, { "tr", "TR" }, { "ar", "AE" } };
 static const char *RATE_WD[][2] = { { "de", "P1981" }, { "fr", "P2758" }, { "pt", "P3216" } }; /* FSK, CNC, ClassInd; MPA (P1657) otherwise */
 #define KEEP 120
 

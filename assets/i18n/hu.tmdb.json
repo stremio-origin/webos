@@ -1,0 +1,17 @@
+{
+"Search on TV": "Keresés a TV-n",
+"Search on your TV": "Keresés a TV-den",
+"What you type shows up on the TV as you type.": "Amit begépelsz, gépelés közben megjelenik a TV-n.",
+"Film or series": "Film vagy sorozat",
+"Sent": "Elküldve",
+"Can’t reach the TV": "A TV nem érhető el",
+"Paste your TMDB API key (or API Read Access Token). Get one at": "Illeszd be a TMDB API-kulcsodat (vagy az API Read Access Tokenedet). Kulcsot itt kaphatsz:",
+"It stays on your TV.": "A TV-den marad.",
+"API key": "API-kulcs",
+"Save": "Mentés",
+"Checking…": "Ellenőrzés…",
+"Saved. You can close this page.": "Elmentve. Bezárhatod ezt az oldalt.",
+"TMDB didn’t accept this key.": "A TMDB nem fogadta el ezt a kulcsot.",
+"In the app’s language, from TMDB. OK to change the key": "Az alkalmazás nyelvén, a TMDB-ből. OK: a kulcs módosítása",
+"Only in English. OK to add a TMDB key from your phone": "Csak angolul. OK: TMDB-kulcs hozzáadása a telefonodról"
+}

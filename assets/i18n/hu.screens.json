@@ -1,0 +1,21 @@
+{
+"Sunday": "Vasárnap",
+"Monday": "Hétfő",
+"Tuesday": "Kedd",
+"Wednesday": "Szerda",
+"Thursday": "Csütörtök",
+"Friday": "Péntek",
+"Saturday": "Szombat",
+"January": "január",
+"February": "február",
+"March": "március",
+"April": "április",
+"June": "június",
+"July": "július",
+"August": "augusztus",
+"September": "szeptember",
+"October": "október",
+"November": "november",
+"December": "december",
+"{weekday}, {month} {day}": "{weekday}, {month} {day}."
+}

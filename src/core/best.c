@@ -179,6 +179,7 @@ static const struct { const char *code, *w[9], *flag, *flag2; } LANG[] = {
   { "tur", { "turkish", "tur", NULL }, "\xf0\x9f\x87\xb9\xf0\x9f\x87\xb7", NULL },
   { "ara", { "arabic", "ara", NULL }, "\xf0\x9f\x87\xb8\xf0\x9f\x87\xa6", NULL },
   { "dut", { "dutch", "nld", NULL }, "\xf0\x9f\x87\xb3\xf0\x9f\x87\xb1", NULL },
+  { "hun", { "hungarian", "hun", "magyar", NULL }, "\xf0\x9f\x87\xad\xf0\x9f\x87\xba", NULL },
   { "hin", { "hindi", "hin", NULL }, "\xf0\x9f\x87\xae\xf0\x9f\x87\xb3", NULL },
   { "jpn", { "japanese", "jpn", NULL }, "\xf0\x9f\x87\xaf\xf0\x9f\x87\xb5", NULL },
   { "kor", { "korean", "kor", NULL }, "\xf0\x9f\x87\xb0\xf0\x9f\x87\xb7", NULL },
