@@ -7,6 +7,7 @@
 #include "core/net.h"
 #include "core/store.h"
 #include "core/subs.h"
+#include "core/forcedsubs.h"
 #include "core/video.h"
 #include "ui/shared.h"
 #include "ui/gfx.h"
@@ -261,6 +262,7 @@ static void try_resume(void) {
 
 /* ---- subtitles ---- */
 static const char *want_sub(void) { return store_get("subsLang", "eng"); }
+static int want_forced_sub(void) { return !strcmp(store_get("subsMode", "all"), "forced"); }
 static int size_idx(void) { int i = atoi(store_get("subtitleSize", "2")); return i < 0 || i > 6 ? 2 : i; }
 static const int SUB_SIZES[] = { 72, 80, 100, 120, 140, 160, 180 };
 static const char *SUB_COLORS[] = { "#ffffff", "#ffe600", "#00e5ff" }, *SUB_BGS[] = { "0", "1", ".6" };
@@ -283,6 +285,9 @@ static void emb_label(int i, char *out, size_t cap) {
   else if (*ln) snprintf(out, cap, "%s", ln);
   else if (t->lang[0] && strcmp(t->lang, "und")) snprintf(out, cap, "%s", t->lang);
   else snprintf(out, cap, "%s", T1("Track {n}", "n", num));
+  if (t->forced && !forcedsubs_name(t->name)) {
+    size_t l = strlen(out); if (l + 12 < cap) snprintf(out + l, cap - l, " · %s", T("Forced"));
+  }
   if (!(t->name[0] && strcmp(t->name, "#")) && i < 16 && embKind[i]) { size_t l = strlen(out); snprintf(out + l, cap - l, " · %s", embKind[i] == 2 ? "ASS" : T("Text")); } /* (the format's own short name: the column is narrow) */
 }
 static void sub_begin(void) { SL.tok++; SL.at = now_(); SL.checkAt = 0; SL.wait = 1; SL.tv = SL.mkv = SL.failed = SL.shown = SL.retry = SL.ready = 0; }
@@ -346,11 +351,15 @@ static void ass_sync(void) {
 static void sync_auto_arm(void);
 static void auto_sub(void) {
   const char *w = want_sub(); if (P.autoSubDone || strcmp(P.curSub, "off")) return; if (!*w) return;
-  int em = -1; for (int j = 0; j < P.nEmb; j++) if (lang_match(P.emb[j].lang, w) && (em < 0 || (P.emb[em].forced && !P.emb[j].forced))) em = j;
+  int forced = want_forced_sub(), em = -1;
+  for (int j = 0; j < P.nEmb; j++) {
+    if (!lang_match(P.emb[j].lang, w) || (forced && !P.emb[j].forced)) continue;
+    if (em < 0 || (!forced && P.emb[em].forced && !P.emb[j].forced)) em = j;
+  }
   if (em >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[em].idx); return; } /* embedded wins: it is in sync with the file */
   if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return; } /* the file's own tracks get 8 s to show up first */
-  for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
-  for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
+  for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w) && (!forced || P.ext[i].forced)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
+  for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w) && (!forced || P.adx[i].forced)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
 }
 /* a trailer's captions (IMDb's or YouTube's): handed over with the trailer, read when the CC button turns them on */
 static TrailerSub trSubs[TRAILER_MAX_SUBS], trNext[TRAILER_MAX_SUBS]; static int trSubsN, trNextN;
@@ -405,7 +414,7 @@ static void load_emb_tracks(void) {
   int st = mkv ? mkv_state(mkv) : MKV_FALLBACK; unsigned sig = 0; for (int i = 0; i < P.nEmb; i++) sig = sig * 31 + (unsigned)P.emb[i].idx + 7; sig = sig * 3 + (unsigned)P.nEmb + (unsigned)P.embKnown * 101;
   if (mkv && st != MKV_FALLBACK && !mkv_listed(mkv)) return; /* the file's head is still being read */
   if (mkv && st != MKV_FALLBACK) { MkvTrack t[16]; int n = mkv_tracks(mkv, t, 16), k = 0;
-    for (int i = 0; i < n && k < 16; i++) { if (!t[i].text) continue; embKind[k] = strstr(t[i].codec, "ASS") || strstr(t[i].codec, "SSA") ? 2 : 1; VidTrack *v = &P.emb[k++]; memset(v, 0, sizeof *v); snprintf(v->lang, sizeof v->lang, "%s", t[i].lang); snprintf(v->name, sizeof v->name, "%s", t[i].name); v->idx = t[i].n; v->forced = t[i].forced; }
+    for (int i = 0; i < n && k < 16; i++) { if (!t[i].text) continue; embKind[k] = strstr(t[i].codec, "ASS") || strstr(t[i].codec, "SSA") ? 2 : 1; VidTrack *v = &P.emb[k++]; memset(v, 0, sizeof *v); snprintf(v->lang, sizeof v->lang, "%s", t[i].lang); snprintf(v->name, sizeof v->name, "%s", t[i].name); v->idx = t[i].n; v->forced = t[i].forced || forcedsubs_name(t[i].name); }
     P.nEmb = k; P.embKnown = 1; P.mkvTracksOk = 1; }
   else { P.nEmb = video_text_tracks(P.emb, 16); memset(embKind, 0, sizeof embKind); P.mkvTracksOk = 0; if (P.nEmb || video_live()) P.embKnown = 1; }
   unsigned sig2 = 0; for (int i = 0; i < P.nEmb; i++) sig2 = sig2 * 31 + (unsigned)P.emb[i].idx + 7; sig2 = sig2 * 3 + (unsigned)P.nEmb + (unsigned)P.embKnown * 101;
@@ -1153,7 +1162,8 @@ static void tray_data(void) {
       if (!P.isTrailer) { if (!P.embKnown && !P.nEmb) { col_add(c1, 1); col_add(c1, 1); } /* the file's head is still being read */ else if (!P.nEmb) { x = col_add(c1, 0); snprintf(x->lb, 200, "%s", T("None in this file")); } else for (int i = 0; i < P.nEmb; i++) { x = col_add(c1, 4); emb_label(i, x->lb, 200); x->i = P.emb[i].idx; char k[16]; snprintf(k, sizeof k, "emb:%d", P.emb[i].idx); x->on = !strcmp(P.curSub, k); x->spin = x->on && SL.wait; snprintf(x->u, 1024, "%s", k); } }
       /* the built-in OpenSubtitles list (the addons' are in their own tab) */
       int onExt = sub_row(1, P.ext, P.nExt);
-      for (int i = 0; i < P.nExt; i++) { int same = 0; for (int j = 0; j < P.nExt; j++) if (!strcmp(P.ext[j].lang, P.ext[i].lang)) same++; x = col_add(c2, 4); if (same > 1) snprintf(x->lb, 200, "%s %d", T(P.ext[i].name), P.ext[i].n); /* the page's two spaces show as one */ else snprintf(x->lb, 200, "%s", T(P.ext[i].name)); x->on = i == onExt; x->spin = x->on && SL.wait; x->ls = 1; x->i = i; snprintf(x->u, 1024, "%s", P.ext[i].url); }
+      for (int i = 0; i < P.nExt; i++) { int same = 0; for (int j = 0; j < P.nExt; j++) if (!strcmp(P.ext[j].lang, P.ext[i].lang)) same++; x = col_add(c2, 4); if (same > 1) snprintf(x->lb, 200, "%s %d", T(P.ext[i].name), P.ext[i].n); /* the page's two spaces show as one */ else snprintf(x->lb, 200, "%s", T(P.ext[i].name)); if (P.ext[i].forced && !forcedsubs_name(x->lb)) { size_t l = strlen(x->lb); snprintf(x->lb + l, sizeof x->lb - l, " · %s", T("Forced")); }
+        x->on = i == onExt; x->spin = x->on && SL.wait; x->ls = 1; x->i = i; snprintf(x->u, 1024, "%s", P.ext[i].url); }
       if (!c2->n) { if (P.extLoading && !P.isTrailer) { col_add(c2, 1); col_add(c2, 1); col_add(c2, 1); } else { x = col_add(c2, 0); snprintf(x->lb, 200, "%s", T("None found")); } }
     } else {
       /* the addons' tab: their languages (the one you read first, then by name), and the chosen language's subtitles
@@ -1175,6 +1185,7 @@ static void tray_data(void) {
       for (int i = 0; i < P.nAdx; i++) { const SubEntry *e = &P.adx[i]; char k[24]; if (strcmp(subs_lang_canon(e->lang, k, sizeof k), P.subLang)) continue;
         int same = 0; for (int j = 0; j < P.nAdx; j++) { char k2[24]; if (P.adx[j].order == e->order && !strcmp(subs_lang_canon(P.adx[j].lang, k2, sizeof k2), k)) same++; }
         x = col_add(c2, 4); if (e->label[0]) snprintf(x->lb, 200, "%s", e->label); else if (same > 1) snprintf(x->lb, 200, "%s %d", T(e->name), e->n); else snprintf(x->lb, 200, "%s", T(e->name));
+        if (e->forced && !forcedsubs_name(x->lb)) { size_t l = strlen(x->lb); snprintf(x->lb + l, sizeof x->lb - l, " · %s", T("Forced")); }
         snprintf(x->sub, 120, "%s", e->addon); x->on = i == onAdx; x->spin = x->on && SL.wait; x->ls = 2; x->i = i; snprintf(x->u, 1024, "%s", e->url); }
       if (!c2->n && nk) { x = col_add(c2, 0); snprintf(x->lb, 200, "%s", T("None found")); }
       else if (!c2->n && P.adxLoading) { col_add(c2, 1); col_add(c2, 1); }
@@ -1276,10 +1287,10 @@ static void choose(TItem *it) {
   if (!it) return;
   if (it->k == 4 && P.tray.kind == 4) {
     if (!strncmp(it->u, "lang:", 5)) { snprintf(P.subLang, sizeof P.subLang, "%s", it->u + 5); render_tray(0); if (P.tray.ncols > 1) { int r = first_on(P.tray.cols[1].items, P.tray.cols[1].n); if (r >= 0) { P.tray.c = 1; P.tray.r[1] = r; } } } /* its subtitles: the focus goes over */
-    else if (!strcmp(it->u, "off")) subs_off(); else if (!strncmp(it->u, "emb:", 4)) set_emb_sub(it->i); else if (it->tool) { if (strcmp(it->u, "sync")) { TM.vkC = P.tray.c; snprintf(TM.vkU, sizeof TM.vkU, "%s", it->u); mo_set(&TM.vkA, 0); mo_to(&TM.vkA, 1, .2f, C_OUT, 0); } if (!strcmp(it->u, "sync")) sync_run(); else if (!strcmp(it->u, "dlyopen")) { dly_open(); return; } else if (!strcmp(it->u, "dly")) { P.subDelay = it->d ? (double)((int)((P.subDelay + it->d) * 10 + (P.subDelay + it->d >= 0 ? 0.5 : -0.5))) / 10 : 0; if (!it->d) sync_undo(); render_tray(0); } else adjust(it->u); }
+    else if (!strcmp(it->u, "off")) { P.autoSubDone = 1; subs_off(); } else if (!strncmp(it->u, "emb:", 4)) { P.autoSubDone = 1; set_emb_sub(it->i); } else if (it->tool) { if (strcmp(it->u, "sync")) { TM.vkC = P.tray.c; snprintf(TM.vkU, sizeof TM.vkU, "%s", it->u); mo_set(&TM.vkA, 0); mo_to(&TM.vkA, 1, .2f, C_OUT, 0); } if (!strcmp(it->u, "sync")) sync_run(); else if (!strcmp(it->u, "dlyopen")) { dly_open(); return; } else if (!strcmp(it->u, "dly")) { P.subDelay = it->d ? (double)((int)((P.subDelay + it->d) * 10 + (P.subDelay + it->d >= 0 ? 0.5 : -0.5))) / 10 : 0; if (!it->d) sync_undo(); render_tray(0); } else adjust(it->u); }
     else if (it->ls) { const SubEntry *l = it->ls == 1 ? P.ext : P.adx; int n = it->ls == 1 ? P.nExt : P.nAdx, k = it->i; /* the row's entry (found again by its file if the list moved) */
       if (k < 0 || k >= n || strcmp(l[k].url, it->u)) for (k = 0; k < n && strcmp(l[k].url, it->u); k++) ;
-      if (k < n) set_ext_sub(it->ls, &l[k]); }
+      if (k < n) { P.autoSubDone = 1; set_ext_sub(it->ls, &l[k]); } }
   } else if (it->k == 4 && P.tray.kind == 3 && it->i >= 1000) { int ord = it->i - 1000; /* another track converted, from here */
     if (P.dts.conv == 2 && ord != P.dts.convOrd && ord >= 0) { P.dts.convOrd = ord; P.dts.conv = 1; P.dts.convAt = video_time(); P.dts.convT0 = now_();
       int fl = conv_flags(ord); P.dts.copyA = !!(fl & HC_COPYAUDIO);

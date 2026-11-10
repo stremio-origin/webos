@@ -114,7 +114,7 @@ void sb_remember_stream(const char *id, const char *vid, const Stream *s);
 /* from: where it came from (the stream itself, a subtitles addon, the OpenSubtitles fallback); addon: that source's
    name; label: the addon's own label for it ("" when none); order: the addon's place in the list */
 enum { SUB_STREAM = 0, SUB_ADDON = 1, SUB_FALLBACK = 2 };
-typedef struct { char lang[24], name[64], url[1024]; int n; char addon[64], label[96]; int from, order; char rel[96]; int hm; double fps; } SubEntry; /* rel: the file's own name when told; hm: found by the video's hash; fps: the frame rate it was timed for (0 unknown) */
+typedef struct { char lang[24], name[64], url[1024]; int n; char addon[64], label[96]; int from, order; char rel[96]; int hm, forced; double fps; } SubEntry; /* rel: the file's own name when told; hm: found by the video's hash; fps: the frame rate it was timed for (0 unknown) */
 /* the subtitles a stream object carried (stream.subtitles), kept from its addon's answer; *out malloc'd (NULL when none) */
 int  sb_stream_subs(const Stream *s, SubEntry **out);
 
