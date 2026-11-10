@@ -97,11 +97,13 @@ static void str_in(const char *p, const char *end, const char *key, char *out, s
 }
 static const char *obj_end(const char *o) { int d = 0, inStr = 0; for (; *o; o++) { if (inStr) { if (*o == '\\' && o[1]) o++; else if (*o == '"') inStr = 0; continue; } if (*o == '"') inStr = 1; else if (*o == '{') d++; else if (*o == '}') { if (--d == 0) return o; } } return NULL; }
 static SDL_Rect to_surface(int x, int y, int w, int h) { SDL_Rect r = { x * surfW / 1920, y * surfH / 1080, w * surfW / 1920, h * surfH / 1080 }; return r; }
-/* the ACB path (webOS 3/4) reads a partial rectangle in the TV's own video space, 1280x720 on the sets measured, not in
-   the drawable's pixels: a 1920-wide rectangle there falls outside it and the picture blanks while the sound plays.
-   A full-screen one is flagged as such and is not affected. SB_PLANE=WxH overrides (development) */
+/* ACB coordinates are independent of the drawable: webOS 3 uses 1920x1080 on the OLED55E7N,
+   while webOS 4 uses 1280x720 on the 43LK5900. SB_PLANE=WxH overrides (development). */
 static SDL_Rect to_plane(int x, int y, int w, int h) {
-  static int pw, ph; if (!pw) { const char *e = getenv("SB_PLANE"); if (!e || sscanf(e, "%dx%d", &pw, &ph) != 2 || pw <= 0 || ph <= 0) { pw = 1280; ph = 720; } fprintf(stderr, "[video] partial rectangles in a %dx%d video space\n", pw, ph); }
+  static int pw, ph; if (!pw) { const char *e = getenv("SB_PLANE"); if (!e || sscanf(e, "%dx%d", &pw, &ph) != 2 || pw <= 0 || ph <= 0) {
+      int major = 0; sscanf(plat_device_name(), "LG webOS %d", &major);
+      pw = major == 3 ? 1920 : 1280; ph = major == 3 ? 1080 : 720;
+    } fprintf(stderr, "[video] partial rectangles in a %dx%d video space\n", pw, ph); }
   SDL_Rect r = { x * pw / 1920, y * ph / 1080, w * pw / 1920, h * ph / 1080 }; return r;
 }
 static int screensaverHeld(void) { return S.mediaId[0] && S.playing && !S.pausedByUs && !S.ended && !S.error; }

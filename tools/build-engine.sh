@@ -16,11 +16,16 @@ ZIG="${ZIG:-$ORIGIN_BUILD/zig-aarch64-macos-0.17.0/zig}"
 COMMIT=99a1860
 SRC="$W/src"
 if [ ! -d "$SRC/.git" ]; then git clone -q https://github.com/NuvioMedia/nuvio-engine "$SRC"; fi
-git -C "$SRC" checkout -q "$COMMIT"; git -C "$SRC" reset -q --hard "$COMMIT"; git -C "$SRC" clean -qfd -- src include tests cmake
-git -C "$SRC" apply --whitespace=nowarn "$ROOT/tools/engine/engine.patch"
+git -C "$SRC" checkout -q "$COMMIT"
+if git -C "$SRC" apply --check "$ROOT/tools/engine/engine.patch" 2>/dev/null; then
+  git -C "$SRC" apply --whitespace=nowarn "$ROOT/tools/engine/engine.patch"
+elif ! git -C "$SRC" apply --reverse --check "$ROOT/tools/engine/engine.patch" 2>/dev/null; then
+  echo "engine sources conflict with tools/engine/engine.patch: use a clean ENGINE_WORK folder" >&2
+  exit 1
+fi
 DEPS="${ENGINE_DEPS:-$W/deps}"; mkdir -p "$DEPS"
 if [ ! -f "$DEPS/nuvio_boost-src/boost/version.hpp" ]; then
-  curl -fsSL -o "$DEPS/boost.tar.bz2" https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2
+  [ -f "$DEPS/boost.tar.bz2" ] || curl -fsSL -o "$DEPS/boost.tar.bz2" https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2
   echo "1bed88e40401b2cb7a1f76d4bab499e352fa4d0c5f31c0dbae64e24d34d7513b  $DEPS/boost.tar.bz2" | shasum -a 256 -c -
   rm -rf "$DEPS/nuvio_boost-src"; mkdir -p "$DEPS/nuvio_boost-src"; tar -xjf "$DEPS/boost.tar.bz2" -C "$DEPS/nuvio_boost-src" --strip-components 1; rm -f "$DEPS/boost.tar.bz2"
 fi
@@ -67,7 +72,7 @@ LT="$B/_deps/nuvio_libtorrent-build/libtorrent-rasterbar.a"
 if [ "$TARGET" = webos ]; then
   echo '{ global: sbe_get; local: *; };' > "$TC/exports.map"
   "$TC/c++" -std=c++20 -Os -fPIC $FL -shared -I"$SRC/include" -I"$ROOT/src" "$ROOT/tools/engine/sbengine.cpp" \
-    "$B/libnuvio_engine.a" "$LT" -Wl,--gc-sections -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbengine.so -lpthread -o "$OUT"
+    "$B/libnuvio_engine.a" "$LT" -Wl,--gc-sections -Wl,-T,"$ROOT/tools/webos-relocs.ld" -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbengine.so -lpthread -o "$OUT"
 else
   "$TC/c++" -std=c++20 -Os $FL -shared -I"$SRC/include" -I"$ROOT/src" "$ROOT/tools/engine/sbengine.cpp" \
     "$B/libnuvio_engine.a" "$LT" "${SSLLIB[@]}" -framework Security -framework CoreFoundation -framework SystemConfiguration \

@@ -27,7 +27,7 @@
 - Updates from inside the app
 
 ## Install
-For LG TVs running webOS 3 and later (ARM). It should work on all of them, but it has only been tested on webOS 4.4. [Compatibility](docs/compatibility.md)
+For LG TVs running webOS 3 and later (ARM). Tested on webOS 4.4; this fork also fixes startup on webOS 3.9.2, with initial playback checks on an OLED55E7N. The upstream 1.0.0 IPK does not include that fix. [Compatibility](docs/compatibility.md)
 
 - With the Homebrew Channel: add the repository `https://stremio-origin.github.io/webos/apps.json`,
   then install Stremio Origin.

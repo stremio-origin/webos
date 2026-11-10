@@ -17,6 +17,7 @@ SDK="${SDK:-$ORIGIN_BUILD/sdk/arm-webos-linux-gnueabi_sdk-buildroot/arm-webos-li
 VERSION=7.1.1
 SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
 TARBALL="$ORIGIN_BUILD/src/ffmpeg-$VERSION.tar.xz"
+mkdir -p "$(dirname "$TARBALL")"
 [ -f "$TARBALL" ] || curl -fsSL -o "$TARBALL" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
 echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null
 SRC="$W/ffmpeg-$VERSION"; [ -f "$SRC/configure" ] || tar -xJf "$TARBALL" -C "$W"
@@ -47,7 +48,7 @@ CONF="$COMMON $COMPONENTS $ARCH"
 if [ ! -f "$P/lib/libavformat.a" ] || [ "$(cat "$B/.conf" 2>/dev/null)" != "$CONF $XC" ]; then
   echo "== FFmpeg $VERSION ($TARGET)"
   (cd "$B" && "$SRC/configure" --prefix="$P" $CONF --extra-cflags="$XC" --extra-ldflags="$XL" >/dev/null \
-    && { [ "$TARGET" != webos ] || sed -i '' 's/#define HAVE_SYSCTL 1/#define HAVE_SYSCTL 0/' config.h; } \
+    && { [ "$TARGET" != webos ] || { sed 's/#define HAVE_SYSCTL 1/#define HAVE_SYSCTL 0/' config.h > config.h.tmp && mv config.h.tmp config.h; }; } \
     && make -j"${FFMPEG_JOBS:-4}" >/dev/null && make install >/dev/null)   # (the compiler's newer libc headers make configure see a sysctl glibc 2.17 never had)
   echo "$CONF $XC" > "$B/.conf"
 fi
@@ -65,7 +66,7 @@ cp "$SRC/COPYING.LGPLv2.1" "$L/ffmpeg-LGPL-2.1.txt"
 # symbols come from the TV's libgcc_s. Its source paths are rewritten (the build machine's folders never travel).
 case "$TARGET" in webos) RT=armv7-unknown-linux-gnueabi ;; mac) RT=$(rustc -vV | sed -n 's/^host: //p') ;; esac
 DV="$ORIGIN_BUILD/dovi"
-RUSTFLAGS="--remap-path-prefix=$HOME=/src --remap-path-prefix=$ROOT=/app" cargo build --manifest-path "$ROOT/tools/dovi/Cargo.toml" --locked --release --target "$RT" --target-dir "$DV/target" >/dev/null 2>&1 \
+RUSTFLAGS="--remap-path-prefix=$HOME=/src --remap-path-prefix=$ROOT=/app" cargo build --manifest-path "$ROOT/tools/dovi/Cargo.toml" --locked --release --target "$RT" --target-dir "$DV/target" \
   || { echo "the Dolby Vision library didn't build (rustup target add $RT)"; exit 1; }
 DOVI="$DV/target/$RT/release/libsbdovi.a"
 mkdir -p "$L/dovi"
@@ -85,7 +86,7 @@ LIBS="$P/lib/libavformat.a $P/lib/libavcodec.a $P/lib/libswresample.a $P/lib/lib
 if [ "$TARGET" = webos ]; then
   echo '{ global: sbd_get; local: *; };' > "$TC/exports.map"
   "$TC/cc" -std=c11 -O2 -fPIC -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app \
-    "$ROOT/tools/dts/sbdts.c" $LIBS "$SDK/usr/lib/libz.so" "$SDK/lib/libgcc_s.so.1" -Wl,--gc-sections -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbdts.so -lpthread -lm -o "$OUT"
+    "$ROOT/tools/dts/sbdts.c" $LIBS "$SDK/usr/lib/libz.so" "$SDK/lib/libgcc_s.so.1" -Wl,--gc-sections -Wl,-T,"$ROOT/tools/webos-relocs.ld" -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbdts.so -lpthread -lm -o "$OUT"
 else
   cc -std=c11 -O2 -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" "$ROOT/tools/dts/sbdts.c" $LIBS -lz -Wl,-dead_strip -o "$OUT"
 fi
