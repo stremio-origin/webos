@@ -135,6 +135,37 @@ int sb_home_defs(CatalogDef *out, int max) {
   }
   return n;
 }
+/* Anime: every catalog whose type or name says anime, across the installed addons, newest addon order
+   preserved. Only anime reaches this tab, so Home stays the general board. */
+int sb_anime_defs(CatalogDef *out, int max) {
+  int n = 0, ai = 0; cJSON *a = sb_addons(); const cJSON *ad;
+  if (!a) return 0;
+  cJSON_ArrayForEach(ad, a) {
+    if (!sb_addon_on(ad)) { ai++; continue; }
+    const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat;
+    char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
+    if (cats) cJSON_ArrayForEach(cat, cats) {
+      const char *ctype = js_str(cat, "type", NULL), *cid = js_str(cat, "id", NULL), *cnm = js_str(cat, "name", "");
+      char ex[200];
+      if (ctype && cid && *ctype && *cid && n < max && addon_cat_default_extra(cat, ex, sizeof ex) == 0) {
+        /* anime when the type says so, or the id/name does */
+        char low[256]; snprintf(low, sizeof low, "%s %s %s", ctype, cid, cnm);
+        for (char *q = low; *q; q++) if (*q >= 'A' && *q <= 'Z') *q += 32;
+        if (strstr(low, "anime") || strstr(low, "kitsu") || strstr(low, "myanimelist") || strstr(low, "anisearch") || strstr(low, "anilist")) {
+          CatalogDef *d = &out[n++]; char title[96], key[48], path[512], te[96], ie[300];
+          snprintf(title, sizeof title, "%s%s%s", *cnm ? cnm : cid, *cnm ? " · " : "", ctype);
+          snprintf(key, sizeof key, "an%d_%d", ai, ci);
+          addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie);
+          snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+          def_set(d, title, ctype, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key);
+        }
+      }
+      ci++;
+    }
+    ai++;
+  }
+  return n;
+}
 /* Discover: Cinemeta's trending and top rated, its genres (the ones its manifest offers), then the installed catalogs
    Home has no room for */
 int sb_disc_defs(CatalogDef *out, int max) {

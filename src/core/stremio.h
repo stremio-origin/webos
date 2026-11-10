@@ -42,6 +42,7 @@ void sb_addon_key(const cJSON *addon, char *out, size_t cap);  /* its manifest i
 /* ---- catalogs ---- */
 int  sb_home_defs(CatalogDef *out, int max);
 int  sb_disc_defs(CatalogDef *out, int max);
+int  sb_anime_defs(CatalogDef *out, int max);   /* the anime tab: only anime catalogs */
 /* cached copy first (cb with cached=1), then the fresh one if it differs; the list is malloc'd for the callback owner */
 void sb_catalog(const CatalogDef *def, void (*cb)(ItemList *list, int cached, void *ud), void *ud);
 void sb_catalog_url(const char *url, const char *type, int n, void (*cb)(ItemList *list, int cached, void *ud), void *ud);

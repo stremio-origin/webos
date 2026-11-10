@@ -62,8 +62,8 @@ typedef struct {
   Item remIt; int remRow, remIdx; double remAt;
 } Board;
 enum { HP_IDLE, HP_GATHER, HP_LATER_WAIT, HP_LATER_OUT };
-static Board boards[2];
-static Board *cur(void) { return SCR == SCR_HOME ? &boards[0] : SCR == SCR_DISC ? &boards[1] : NULL; }
+static Board boards[3];   /* 0 home, 1 discover, 2 anime */
+static Board *cur(void) { return SCR == SCR_HOME ? &boards[0] : SCR == SCR_DISC ? &boards[1] : SCR == SCR_ANIME ? &boards[2] : NULL; }
 static int spotOn(Board *b) { return b->kind == 1 && b->featOn; } /* the spotlight has the focus (its titles may still be on the way) */
 static int focusOn(Board *b) { return cur() == b && !topNav.active && !spotOn(b); }
 static float card_w(const Row *r) { return r->wide ? RW_W : RC_W; }
@@ -90,9 +90,12 @@ static void board_cw_row(Board *b) {
   ItemList cw; if (lib_cw_items(&cw) > 0) { Row *r = row_add(b, "Continue Watching", 1, 0); if (r) { r->items = cw; r->hidden = 0; } else itemlist_clear(&cw); } else itemlist_clear(&cw);
 }
 /* a catalog answer finds its row through a packed token (board, row, generation): nothing to free */
-static void *tok(Board *b, int row) { return (void *)(uintptr_t)(((uintptr_t)(b - boards) << 28) | ((uintptr_t)(b->gen & 0xffffff) << 4) | (uintptr_t)row); }
+/* Packed token: board | generation | row.  The row field is 6 bits so all MAXROWS (64) rows
+   fit; with the old 4 bits every row >= 16 aliased onto rows 0-15 and a late catalog
+   overwrote Continue Watching. */
+static void *tok(Board *b, int row) { return (void *)(uintptr_t)(((uintptr_t)(b - boards) << 30) | ((uintptr_t)(b->gen & 0xffffff) << 6) | (uintptr_t)(row & 0x3f)); }
 static void on_catalog(ItemList *l, int cached, void *ud) {
-  (void)cached; uintptr_t t = (uintptr_t)ud; Board *b = &boards[(t >> 28) & 1]; int row = t & 15; unsigned gen = (t >> 4) & 0xffffff;
+  (void)cached; uintptr_t t = (uintptr_t)ud; Board *b = &boards[(t >> 30) & 3]; int row = (int)(t & 0x3f); unsigned gen = (t >> 6) & 0xffffff;
   if ((b->gen & 0xffffff) != gen || row >= b->n) { itemlist_free(l); return; }
   Row *r = &b->rows[row]; row_clear(r); r->items = *l; free(l); r->locAt = 0;
   r->skipAt = r->items.total > r->items.n ? r->items.total : r->items.n; r->more = r->hasDef && r->def.skip && r->items.n > 0; r->paging = 0;
@@ -103,16 +106,16 @@ static int first_visible_row(Board *b, int from, int dir);
 static void load_catalog_rows(Board *b, int disc, int keep) {
   int oldRow = b->rowIdx, oldCols[MAXROWS]; for (int i = 0; i < b->n; i++) oldCols[i] = b->rows[i].col;
   Item *was = NULL; int nwas = 0; /* Continue Watching as it was, to find one taken out of it */
-  if (keep && !disc && b->n && !strcmp(b->rows[0].title, "Continue Watching") && b->rows[0].items.n) { nwas = b->rows[0].items.n; was = malloc(sizeof(Item) * (size_t)nwas); if (was) memcpy(was, b->rows[0].items.items, sizeof(Item) * (size_t)nwas); else nwas = 0; }
+  if (keep && b->kind == 0 && b->n && !strcmp(b->rows[0].title, "Continue Watching") && b->rows[0].items.n) { nwas = b->rows[0].items.n; was = malloc(sizeof(Item) * (size_t)nwas); if (was) memcpy(was, b->rows[0].items.items, sizeof(Item) * (size_t)nwas); else nwas = 0; }
   for (int i = 0; i < b->n; i++) row_clear(&b->rows[i]); b->n = 0; b->gen++;
-  if (!disc) board_cw_row(b);
+  if (b->kind == 0) board_cw_row(b);   /* only Home carries Continue Watching */
   if (was) { Row *r = b->n && !strcmp(b->rows[0].title, "Continue Watching") ? &b->rows[0] : NULL;
     if (r && r->items.n == nwas - 1) for (int i = 0; i < nwas; i++) { int in = 0; for (int j = 0; j < r->items.n && !in; j++) in = !strcmp(r->items.items[j].id, was[i].id);
       if (!in) { b->remIt = was[i]; b->remRow = 0; b->remIdx = i; b->remAt = app_now(); break; } }
     if (!r && nwas == 1) { Row *z = row_add(b, "Continue Watching", 1, 0); /* its last title taken out: the row stays a moment, the title fading and shrinking in it, then closes as the rows under it move up */
       if (z) { z->hidden = 0; z->closing = 1; z->closeAt = app_now(); z->hk = 1; b->remIt = was[0]; b->remRow = (int)(z - b->rows); b->remIdx = 0; b->remAt = app_now(); } }
     free(was); }
-  CatalogDef defs[64]; int nd = disc ? sb_disc_defs(defs, 64) : sb_home_defs(defs, 64);
+  CatalogDef defs[64]; int nd = b->kind == 1 ? sb_disc_defs(defs, 64) : b->kind == 2 ? sb_anime_defs(defs, 64) : sb_home_defs(defs, 64);
   for (int d = 0; d < nd; d++) { Row *r = row_add(b, defs[d].title, 0, 0); if (!r) break; int ri = (int)(r - b->rows); if (keep && ri < MAXROWS) r->col = oldCols[ri]; r->def = defs[d]; r->hasDef = 1; sb_catalog(&defs[d], on_catalog, tok(b, ri)); }
   if (keep) { b->rowIdx = oldRow < b->n ? oldRow : (b->n ? b->n - 1 : 0); if (b->rowIdx < b->n && b->rows[b->rowIdx].closing) { int nx = first_visible_row(b, b->rowIdx + 1, 1); if (nx >= 0) b->rowIdx = nx; } /* (never on the row closing) */ for (int j = 0; j < b->n; j++) { Row *r = &b->rows[j]; if (r->items.n && r->col >= r->items.n) r->col = r->items.n - 1; } }
   else b->rowIdx = 0;
@@ -158,7 +161,7 @@ static Item *item_at(Board *b, int row, int col) {
   if (row >= b->n || col >= b->rows[row].items.n) return NULL; return &b->rows[row].items.items[col];
 }
 static void on_meta(cJSON *m, void *ud) {
-  uintptr_t t = (uintptr_t)ud; Board *b = &boards[(t >> 28) & 1]; int row = (t >> 0) & 15, col = (t >> 8) & 0xfff; unsigned gen = (t >> 20) & 0xff;
+  uintptr_t t = (uintptr_t)ud; Board *b = &boards[(t >> 30) & 3]; int row = (int)(t & 0xff), col = (int)((t >> 8) & 0xfff); unsigned gen = (t >> 20) & 0xff;
   if (!m || (row != 15 && (b->gen & 0xff) != gen)) return; Item *it = item_at(b, row, col); if (!it) return;
   if (!it->description[0]) { const char *d = cJSON_GetStringValue(cJSON_GetObjectItem(m, "description")); if (d) snprintf(it->description, sizeof it->description, "%s", d); }
   /* the details' facts are what the title page shows (a catalog can list a series' total running time where the
@@ -168,14 +171,14 @@ static void on_meta(cJSON *m, void *ud) {
   if (b->heroSet && !strcmp(b->hero.id, it->id)) { snprintf(b->hero.description, sizeof b->hero.description, "%s", it->description); snprintf(b->hero.metaLine, sizeof b->hero.metaLine, "%s", it->metaLine); b->heroVer++; }
 }
 static void meta_ask(Board *b, int row, int col) { Item *it = item_at(b, row, col); if (!it || !it->id[0]) return; /* (the details also when the catalog gave words: their facts are the title page's) */
-  sb_meta(it->type, it->id, on_meta, (void *)(uintptr_t)(((uintptr_t)(b - boards) << 28) | ((uintptr_t)(b->gen & 0xff) << 20) | ((uintptr_t)col << 8) | (uintptr_t)row)); }
+  sb_meta(it->type, it->id, on_meta, (void *)(uintptr_t)(((uintptr_t)(b - boards) << 30) | ((uintptr_t)(b->gen & 0xff) << 20) | ((uintptr_t)(col & 0xfff) << 8) | (uintptr_t)(row & 0xff))); }
 static void logo_src(const Item *it, char *out, size_t cap) { const TmdbLoc *L = tmdb_loc(it->type, it->id, 1); if (L && L->logo && L->logo[0]) snprintf(out, cap, "%s", L->logo); else sb_logo_of(it, out, cap); }
 /* the text art of the titles the hero may show next, asked for well before (at the exact size it is drawn: one
    decode, ready when the hero changes): every spotlight title, and the cards around the focus in its row and the
    rows next to it. Asked again every half second, so translated art that turns up later is fetched too and what
    is near stays recently used */
 static void logos_ahead(Board *b, int force) {
-  static double at[2]; double now = app_now(); int bi = (int)(b - boards); if (!force && now - at[bi] < 0.5) return; at[bi] = now;
+  static double at[3]; double now = app_now(); int bi = (int)(b - boards); if (!force && now - at[bi] < 0.5) return; at[bi] = now;
   char lu[512];
   for (int i = 0; i < b->nfeat; i++) { logo_src(&b->feat[i], lu, sizeof lu); if (lu[0]) img_prefetch_pri(lu, 520, 175); }
   for (int ri = b->rowIdx - 1; ri <= b->rowIdx + 2; ri++) { if (ri < 0 || ri >= b->n || b->rows[ri].hidden) continue; Row *r = &b->rows[ri];
@@ -355,15 +358,16 @@ static void board_enter_k(Board *b) {
   tween_set(&b->hostY, 0); b->fastBg = 1; hero_soon(b, 70);
 }
 static void board_leave(void) {
-  for (int i = 0; i < 2; i++) { Board *b = &boards[i]; if (cur() == b) continue; /* another board: the last title leaves at once (its own will fade in) */
+  for (int i = 0; i < 3; i++) { Board *b = &boards[i]; if (cur() == b) continue; /* another board: the last title leaves at once (its own will fade in) */
     tween_set(&b->heroA, 0); b->heroShown = 0; b->heroPhase = HP_IDLE; b->heroSet = 0; b->fadeHold = 0; }
 }
 static void enter_home(const void *p) { (void)p; board_leave(); board_enter_k(&boards[0]); }
 static void enter_disc(const void *p) { (void)p; board_leave(); board_enter_k(&boards[1]); }
+static void enter_anime(const void *p) { (void)p; board_leave(); board_enter_k(&boards[2]); }
 /* the next page when the focus is a few cards from the row's end (the official apps load a catalog's pages the same
    way, with skip); a page that brings nothing new, a 404 or hasMore false ends it; a failed one is asked again later */
 static void on_page(ItemList *l, int more, void *ud) {
-  uintptr_t t = (uintptr_t)ud; Board *b = &boards[(t >> 28) & 1]; int row = t & 15; unsigned gen = (t >> 4) & 0xffffff;
+  uintptr_t t = (uintptr_t)ud; Board *b = &boards[(t >> 30) & 3]; int row = (int)(t & 0x3f); unsigned gen = (t >> 6) & 0xffffff;
   if ((b->gen & 0xffffff) != gen || row >= b->n) { itemlist_free(l); return; }
   Row *r = &b->rows[row]; if (!r->paging) { itemlist_free(l); return; } r->paging = 0; /* the row was filled again meanwhile */
   if (!l) { r->pageAt = app_now() + 10; return; }
@@ -405,6 +409,7 @@ static int board_key(Board *b, int k) {
 }
 static int key_home(int k) { return board_key(&boards[0], k); }
 static int key_disc(int k) { return board_key(&boards[1], k); }
+static int key_anime(int k) { return board_key(&boards[2], k); }
 static const Item *focused_cur(void) { Board *b = cur(); return b ? focused_of(b) : NULL; }
 /* the pointer on a card: the highlight moves there, the row follows as for the arrows */
 static void card_focus(int r, int c) { Board *b = cur(); if (!b || r >= b->n) return; Row *row = &b->rows[r]; if (c >= row->items.n) return; int was = topNav.active; if (!was && !spotOn(b) && r == b->rowIdx && c == row->col) return;
@@ -642,10 +647,11 @@ void board_refresh_current(void) { Board *b = cur(); if (b) { b->built = 0; boar
 void board_refresh_quiet(void) { Board *b = cur(); if (!b) return; b->built = 1; b->libVer = lib_version(); load_catalog_rows(b, b->kind == 1, b->n > 0); }
 Screen homeScreen = { enter_home, NULL, key_home, board_tick, board_draw, focused_cur, NULL, NULL, board_origin };
 Screen discScreen = { enter_disc, NULL, key_disc, board_tick, board_draw, focused_cur, NULL, NULL, board_origin };
-__attribute__((constructor)) static void board_kinds(void) { boards[0].kind = 0; boards[1].kind = 1; boards[1].featOn = 1; tween_set(&boards[1].rowsA, 1); for (int i = 0; i < 2; i++) tween_set(&boards[i].logoIn, 1); } /* Discover opens on its spotlight */
+Screen animeScreen = { enter_anime, NULL, key_anime, board_tick, board_draw, focused_cur, NULL, NULL, board_origin };
+__attribute__((constructor)) static void board_kinds(void) { boards[0].kind = 0; boards[1].kind = 1; boards[1].featOn = 1; tween_set(&boards[1].rowsA, 1); boards[2].kind = 2; for (int i = 0; i < 3; i++) tween_set(&boards[i].logoIn, 1); } /* Discover opens on its spotlight */
 int board_sample(Item *out, int max, char *rowTitle, int cap) {
   int n = 0; if (cap > 0) rowTitle[0] = 0;
-  for (int k = 0; k < 2 && !n; k++) { Board *b = &boards[k];
+  for (int k = 0; k < 3 && !n; k++) { Board *b = &boards[k];
     for (int i = 0; i < b->n && n < max; i++) { const Row *r = &b->rows[i]; if (r->wide || r->hidden) continue;
       if (cap > 0 && !rowTitle[0] && r->items.n) snprintf(rowTitle, (size_t)cap, "%s", T(r->title));
       for (int j = 0; j < r->items.n && n < max; j++) if (r->items.items[j].poster[0]) out[n++] = r->items.items[j]; } }
