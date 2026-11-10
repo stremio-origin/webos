@@ -125,7 +125,7 @@ static int board_defs(CatalogDef *out, int max, int from) {
     ai++; }
   return n;
 }
-#define HOME_ROWS 8
+#define HOME_ROWS 64   /* every row the addons offer (was 8: Home stopped early) */
 int sb_home_defs(CatalogDef *out, int max) {
   int n = board_defs(out, max < HOME_ROWS ? max : HOME_ROWS, 0);
   if (!n) {
