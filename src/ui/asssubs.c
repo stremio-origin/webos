@@ -112,11 +112,31 @@ static long long next_change(ASS_Track *t, long long now, int *anim) {
     else if (en > now) { long long edge = -1; if (nx < 0 || en < nx) nx = en; if (!*anim && animates(e, now, &edge)) *anim = 1; if (edge > now && edge < nx) nx = edge; } }
   return nx;
 }
+static void add_bundled_font(ASS_Library *lib, const char *path, const char *name) {
+  FILE *fp = fopen(path, "rb"); if (!fp) return;
+  if (fseek(fp, 0, SEEK_END) == 0) {
+    long sz = ftell(fp);
+    if (sz > 0 && sz < (8 << 20) && fseek(fp, 0, SEEK_SET) == 0) {
+      char *buf = malloc((size_t)sz);
+      if (buf && (long)fread(buf, 1, (size_t)sz, fp) == sz) ass_add_font(lib, name, buf, (int)sz);
+      free(buf);
+    }
+  }
+  fclose(fp);
+}
 static void *run(void *arg) {
   Inst *A = arg; plat_thread_background(5); /* (below the drawing and the file reader: at normal priority its heavy renders kept the reader of the lines it draws waiting) */
-  char font[1200], fam[32]; int ar = !strncasecmp(A->lang, "ar", 2) || !strncasecmp(A->lang, "fa", 2) || !strncasecmp(A->lang, "per", 3) || !strncasecmp(A->lang, "ur", 2);
-  snprintf(font, sizeof font, "%s/fonts/%s", plat_asset_dir(), ar ? "NotoSansArabic.ttf" : "InterVariable.ttf"); snprintf(fam, sizeof fam, "%s", ar ? "Noto Sans Arabic" : "Inter");
+  char interPath[1200], notoPath[1200];
+  snprintf(interPath, sizeof interPath, "%s/fonts/InterVariable.ttf", plat_asset_dir());
+  snprintf(notoPath, sizeof notoPath, "%s/fonts/NotoSansArabic.ttf", plat_asset_dir());
+  int ar = !strncasecmp(A->lang, "ar", 2) || !strncasecmp(A->lang, "fa", 2) || !strncasecmp(A->lang, "per", 3) || !strncasecmp(A->lang, "ur", 2);
+  /* Dual-font setup: libass checks default_family (with check_glyph) first, then falls back to default_font path.
+     Registering the primary bundled font in ASS_Library and setting the companion bundled font as default_font ensures
+     BOTH Latin (Inter Variable) and Arabic (Noto Sans Arabic) glyphs render even on 'und'/untagged MKV ASS tracks. */
+  const char *font = ar ? interPath : notoPath;
+  const char *fam  = ar ? "Noto Sans Arabic" : "Inter Variable";
   ASS_Library *lib = ass_library_init(); if (lib) ass_set_message_cb(lib, ass_log, NULL);
+  if (lib) add_bundled_font(lib, ar ? notoPath : interPath, ar ? "NotoSansArabic.ttf" : "InterVariable.ttf");
   ASS_Renderer *rd = lib ? ass_renderer_init(lib) : NULL; ASS_Track *tr = lib ? ass_new_track(lib) : NULL;
   if (!rd || !tr) { fprintf(stderr, "[ass] libass would not start\n"); pthread_mutex_lock(&A->mu); A->fail = 1; pthread_mutex_unlock(&A->mu); goto out; }
   ass_set_cache_limits(rd, 800, 12); ass_set_hinting(rd, ASS_HINTING_NONE); ass_set_shaper(rd, ASS_SHAPING_COMPLEX);

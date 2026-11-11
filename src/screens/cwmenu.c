@@ -136,7 +136,7 @@ static void act(int a) {
     case A_PLAY: close(); app_open_item(&it); break;
     case A_RESTART: close(); app_play_from_start(&it); break;
     case A_DETAILS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
-    case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
+    case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series") || !strcasecmp(it.type, "anime") || !strcasecmp(it.type, "Anime Series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
     case A_TRAILER: close(); detail_trailer(it.type, it.id, it.name); break;
     case A_SIMILAR: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_SIM, &p, 0); break; }
     case A_REVIEWS: close(); revpanel_show(&it, 0, M.from[0], M.from[1], M.from[2], M.from[3], M.from[4]); break;
@@ -204,13 +204,17 @@ void cwmenu_show(const Item *it) {
   M.from[0] = held ? fx : 0; M.from[1] = held ? fy : 0; M.from[2] = held ? fw : 0; M.from[3] = held ? fh : 0; M.from[4] = held ? fr : 0;
   float cur = M.closing ? M.out.v : M.open ? M.op.v : 0;
   M.it = *it; M.open = 1; M.closing = 0; M.idx = 0; M.n = 0; app_overlay = &menu;
-  snprintf(M.kind, sizeof M.kind, "%s", T(!strcmp(it->type, "series") ? "Series" : "Movie"));
-  M.sub[0] = 0; const char *c = strrchr(it->videoId, ':');
-  if (c) { const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') { char s[8], e[8]; snprintf(s, sizeof s, "%d", atoi(p + 1)); snprintf(e, sizeof e, "%d", atoi(c + 1)); snprintf(M.sub, sizeof M.sub, "%s", T2("Season {s} · Episode {e}", "s", s, "e", e)); if (it->epName[0]) { size_t l = strlen(M.sub); snprintf(M.sub + l, sizeof M.sub - l, "  ·  %s", it->epName); } } }
+  const char *kl = (!strcasecmp(it->type, "anime") || !strcasecmp(it->type, "Anime Movies") || !strcasecmp(it->type, "Anime Series")) ? "Anime" : !strcmp(it->type, "series") ? "Series" : "Movie";
+  snprintf(M.kind, sizeof M.kind, "%s", T(kl));
+  M.sub[0] = 0; int se = -1, ep = -1, vr = sb_parse_video_id(it->id, it->videoId, &se, &ep);
+  if (vr == 1) { char s[12], e[12]; snprintf(s, sizeof s, "%d", se); snprintf(e, sizeof e, "%d", ep); snprintf(M.sub, sizeof M.sub, "%s", T2("Season {s} · Episode {e}", "s", s, "e", e)); }
+  else if (vr == 2) { char e[12]; snprintf(e, sizeof e, "%d", ep); snprintf(M.sub, sizeof M.sub, "%s", T1("Episode {n}", "n", e)); }
+  if (vr > 0 && it->epName[0]) { size_t l = strlen(M.sub); snprintf(M.sub + l, sizeof M.sub - l, "  ·  %s", it->epName); }
   if (it->ep) add(A_STREAMS, "play", T("Streams")); else add(A_PLAY, "play", T(it->cw ? "Resume" : "Play"));
   Uint32 tm0 = SDL_GetTicks(); CwInfo ci; if (lib_cw_info(it, &ci) && (!it->ep || !strcmp(ci.vid, it->videoId))) add(A_RESTART, "restart", T("Watch from the beginning"));
   if (!it->ep) add(A_DETAILS, "info", T("Details"));
-  int canMark = strcmp(it->type, "series") || strchr(it->videoId, ':');
+  int isEpSeries = !strcmp(it->type, "series") || !strcasecmp(it->type, "Anime Series") || (!strcasecmp(it->type, "anime") && vr > 0);
+  int canMark = !isEpSeries || vr > 0;
   if (canMark) { int w = lib_is_marked_watched(it); add(A_WATCHED, w ? "eyeOff" : "eye", T(w ? "Mark as unwatched" : "Mark as watched")); }
   if (trailer_available(sb_meta_cached(it->type, it->id), it->id)) add(A_TRAILER, "trailer", T("Trailer"));
   if (!it->ep) add(A_SIMILAR, "similar", T("Watch something similar"));

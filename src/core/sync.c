@@ -18,11 +18,11 @@ static int SDLCALL on_event(void *ud, SDL_Event *e) {
 }
 /* a pull that changed the library: applied in a pause of the remote (a rebuild in the middle of a move is a
    hitch), at most 5 s later */
-static void on_lib(int changed, void *ud) { (void)ud; if (!changed) return; board_invalidate(); if (!rebuildWanted) { rebuildWanted = 1; rebuildSince = app_now(); } }
+static void on_lib(int changed, void *ud) { (void)ud; if (!changed) return; board_invalidate_home(); if (!rebuildWanted) { rebuildWanted = 1; rebuildSince = app_now(); } }
 static void on_addons(int changed, void *ud) {
   (void)ud; if (!changed) return;
   toast(T("Addons updated"), 2600, NULL);
-  board_invalidate(); if (SCR == SCR_HOME && !player_open()) board_rebuild();
+  board_invalidate(); if ((SCR == SCR_HOME || SCR == SCR_DISC || SCR == SCR_ANIME) && !player_open()) board_rebuild();
 }
 void sb_sync_soon(int force) {
   if (!libBoot) return; /* the pull a moment after start covers it */
@@ -42,6 +42,6 @@ void sync_tick(void) {
   if (now - idleAt >= 240) { idleAt = now; if (!away && app_idle() > 20 && sb_signed_in()) sb_sync_soon(0); }
   if (rebuildWanted && (app_idle() >= 0.7 || now - rebuildSince >= 5)) {
     rebuildWanted = 0;
-    if ((SCR == SCR_HOME || SCR == SCR_LIB) && !player_open()) board_rebuild(); /* elsewhere: rebuilt when shown */
+    if (SCR == SCR_HOME && !player_open()) board_rebuild(); /* Library polls lib_version() itself; elsewhere: rebuilt when shown */
   }
 }

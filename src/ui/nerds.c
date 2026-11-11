@@ -74,8 +74,8 @@ static void refresh(void) {
   add("frames", "%.0f fps · %.1f / %.1f ms · worst %.0f", fps, p50, p95, worst);
   add("late", "%.1f %% of the last 240", late);
   add("work", "%.1f ms a frame · %d calls · %d quads", cpuN ? cpuSum / cpuN : 0, lastCalls, lastQuads); cpuSum = 0; cpuN = 0;
-  static const char *SN[] = { "sign-in", "home", "discover", "library", "title", "similar", "search", "settings" };
-  add("screen", "%s · %d requests", (unsigned)SCR < 8 ? SN[SCR] : "?", net_pending());
+  static const char *SN[] = { "sign-in", "home", "discover", "library", "anime", "title", "similar", "search", "settings" };
+  add("screen", "%s · %d requests", (unsigned)SCR < SCR_N ? SN[SCR] : "?", net_pending());
   Uint32 up = SDL_GetTicks() / 1000; add("app", "%s · up %u:%02u:%02u", update_current(), up / 3600, up / 60 % 60, up % 60);
   if (player_open()) { char pl[6][120]; int n = player_nerd_lines(pl, 6);
     for (int i = 0; i < n; i++) { char *sp = strstr(pl[i], "  "); if (sp) { *sp = 0; add(pl[i], "%s", sp + 2); } else add("", "%s", pl[i]); } }

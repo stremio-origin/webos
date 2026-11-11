@@ -19,6 +19,7 @@ static CURLcode (*f_easy_setopt)(CURL *, CURLoption, ...);
 static CURLcode (*f_easy_perform)(CURL *);
 static CURLcode (*f_easy_getinfo)(CURL *, CURLINFO, ...);
 static void (*f_easy_cleanup)(CURL *);
+static void (*f_easy_reset)(CURL *);
 static struct curl_slist *(*f_slist_append)(struct curl_slist *, const char *);
 static void (*f_slist_free_all)(struct curl_slist *);
 static CURLcode (*f_global_init)(long);
@@ -29,7 +30,7 @@ static const char *ua(void) { static char u[96]; if (!u[0]) { const char *d = pl
 static int resolve(void) {
 #ifdef SB_MAC
   f_easy_init = curl_easy_init; f_easy_setopt = curl_easy_setopt; f_easy_perform = curl_easy_perform; f_easy_getinfo = curl_easy_getinfo;
-  f_easy_cleanup = curl_easy_cleanup; f_slist_append = curl_slist_append; f_slist_free_all = curl_slist_free_all; f_global_init = curl_global_init;
+  f_easy_cleanup = curl_easy_cleanup; f_easy_reset = curl_easy_reset; f_slist_append = curl_slist_append; f_slist_free_all = curl_slist_free_all; f_global_init = curl_global_init;
   return 1;
 #else
   static const char *names[] = { "libcurl.so.5", "libcurl.so.4", "libcurl.so", NULL };
@@ -38,9 +39,42 @@ static int resolve(void) {
 #define L(v, n) do { *(void **)(&v) = dlsym(h, n); if (!v) { fprintf(stderr, "[net] missing %s\n", n); return 0; } } while (0)
   L(f_easy_init, "curl_easy_init"); L(f_easy_setopt, "curl_easy_setopt"); L(f_easy_perform, "curl_easy_perform"); L(f_easy_getinfo, "curl_easy_getinfo");
   L(f_easy_cleanup, "curl_easy_cleanup"); L(f_slist_append, "curl_slist_append"); L(f_slist_free_all, "curl_slist_free_all"); L(f_global_init, "curl_global_init");
+  *(void **)(&f_easy_reset) = dlsym(h, "curl_easy_reset");
 #undef L
   return 1;
 #endif
+}
+
+/* ---- per-worker persistent CURL * handle: reuses TCP + TLS + HTTP/2 connections across requests ---- */
+static pthread_key_t tlsCurlKey;
+static pthread_once_t tlsCurlOnce = PTHREAD_ONCE_INIT;
+static int tlsCurlReady;
+static void tls_curl_dtor(void *p) { if (p && f_easy_cleanup) f_easy_cleanup((CURL *)p); }
+static void tls_curl_init(void) { if (pthread_key_create(&tlsCurlKey, tls_curl_dtor) == 0) tlsCurlReady = 1; }
+static CURL *tls_curl(int *owned) {
+  *owned = 0;
+  if (!f_easy_init && !resolve()) return NULL;
+  if (f_easy_reset) {
+    pthread_once(&tlsCurlOnce, tls_curl_init);
+    if (tlsCurlReady) {
+      CURL *c = pthread_getspecific(tlsCurlKey);
+      if (c) { f_easy_reset(c); return c; }
+      c = f_easy_init();
+      if (c && pthread_setspecific(tlsCurlKey, c) == 0) return c;
+      if (c) { *owned = 1; return c; }
+    }
+  }
+  CURL *c = f_easy_init();
+  if (c) *owned = 1;
+  return c;
+}
+static void tls_curl_done(CURL *c, int owned) {
+  if (!c) return;
+  if (owned) { f_easy_cleanup(c); return; }
+  f_easy_setopt(c, CURLOPT_HTTPHEADER, NULL);
+  f_easy_setopt(c, CURLOPT_POSTFIELDS, NULL);
+  f_easy_setopt(c, CURLOPT_WRITEDATA, NULL);
+  f_easy_setopt(c, CURLOPT_HEADERDATA, NULL);
 }
 
 /* ---- requests ------------------------------------------------------------------------------- */
@@ -49,6 +83,7 @@ typedef struct Req {
   int status; unsigned char *body; size_t len, cap; int cancelled, done;
   int size; double total;  /* net_size: only the headers are read */
   int file;                /* net_file: url is a local path */
+  int pri;                 /* interactive priority: jumps ahead of background catalog rows */
   struct Req *next;
 } Req;
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -77,10 +112,11 @@ static size_t on_header(char *p, size_t s, size_t n, void *ud) {
 }
 static size_t on_size_data(char *p, size_t s, size_t n, void *ud) { (void)p; (void)s; (void)n; (void)ud; return 0; } /* never the body: a 200 would be the whole film */
 static void perform(Req *r) {
-  CURL *c = f_easy_init(); if (!c) { r->status = 0; return; }
+  int owned = 0; CURL *c = tls_curl(&owned); if (!c) { r->status = 0; return; }
   struct curl_slist *hs = NULL;
   f_easy_setopt(c, CURLOPT_URL, r->url); f_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_data); f_easy_setopt(c, CURLOPT_WRITEDATA, r);
   f_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); f_easy_setopt(c, CURLOPT_MAXREDIRS, 8L); f_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+  f_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L); f_easy_setopt(c, CURLOPT_MAXCONNECTS, 8L);
   f_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, 8000L); f_easy_setopt(c, CURLOPT_TIMEOUT_MS, r->timeoutMs > 0 ? r->timeoutMs : 20000L);
   f_easy_setopt(c, CURLOPT_USERAGENT, ua()); if (!r->size) f_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
   if (caPath[0]) f_easy_setopt(c, CURLOPT_CAINFO, caPath);
@@ -95,8 +131,8 @@ static void perform(Req *r) {
   long code = 0; f_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
   r->status = rc == CURLE_OK ? (int)code : 0;
   if (r->size) { char t[32]; int k = snprintf(t, sizeof t, "%.0f", r->total > 0 ? r->total : 0); free(r->body); r->body = (unsigned char *)strdup(t); r->len = (size_t)k; r->status = (int)code; } /* the server's answer even without a size (a 404 says why a film will not play); 0 = no answer */
+  tls_curl_done(c, owned);
   if (hs) f_slist_free_all(hs);
-  f_easy_cleanup(c);
 }
 static void parse_body(Req *r) {
   if (r->body && r->len > 1 && r->len < 16u * 1024 * 1024 && r->status >= 200 && r->status < 300) { const unsigned char *b = r->body; while (*b == ' ' || *b == '\n' || *b == '\r' || *b == '\t') b++; if (*b == '{' || *b == '[') r->json = cJSON_ParseWithLength((const char *)r->body, r->len); }
@@ -184,21 +220,26 @@ int net_init(const char *ca) {
 }
 static void push_req(Req *r) { /* under mu */
   if (r->timeoutMs > 20000) { if (slowTail) slowTail->next = r; else slowQ = r; slowTail = r; pthread_cond_signal(&slowCv); }
+  else if (r->pri && queue && !queue->pri) { r->next = queue; queue = r; pthread_cond_signal(&cv); }
+  else if (r->pri && queue) { Req *p = queue; while (p->next && p->next->pri) p = p->next; r->next = p->next; p->next = r; if (!r->next) queueTail = r; pthread_cond_signal(&cv); }
   else { if (queueTail) queueTail->next = r; else queue = r; queueTail = r; pthread_cond_signal(&cv); }
 }
-static unsigned enqueue_x(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, int size, NetCb cb, void *ud) {
-  Req *r = calloc(1, sizeof *r); r->url = strdup(url); r->hdr = hdr ? strdup(hdr) : NULL; r->post = post ? strdup(post) : NULL; r->ctype = ctype ? strdup(ctype) : NULL; r->cb = cb; r->ud = ud; r->timeoutMs = timeoutMs; r->size = size;
+static unsigned enqueue_xp(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, int size, int pri, NetCb cb, void *ud) {
+  Req *r = calloc(1, sizeof *r); r->url = strdup(url); r->hdr = hdr ? strdup(hdr) : NULL; r->post = post ? strdup(post) : NULL; r->ctype = ctype ? strdup(ctype) : NULL; r->cb = cb; r->ud = ud; r->timeoutMs = timeoutMs; r->size = size; r->pri = pri;
   pthread_mutex_lock(&mu);
   r->id = nextId++; push_req(r); npending++;
   pthread_mutex_unlock(&mu);
   return r->id;
 }
+static unsigned enqueue_x(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, int size, NetCb cb, void *ud) { return enqueue_xp(url, hdr, post, ctype, timeoutMs, size, 0, cb, ud); }
 static unsigned enqueue_c(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, NetCb cb, void *ud) { return enqueue_x(url, hdr, post, ctype, timeoutMs, 0, cb, ud); }
 static unsigned enqueue_t(const char *url, const char *hdr, const char *post, long timeoutMs, NetCb cb, void *ud) { return enqueue_x(url, hdr, post, NULL, timeoutMs, 0, cb, ud); }
 static unsigned enqueue(const char *url, const char *hdr, const char *post, NetCb cb, void *ud) { return enqueue_t(url, hdr, post, 0, cb, ud); }
 unsigned net_get_timeout(const char *url, int timeoutMs, NetCb cb, void *ud) { return enqueue_t(url, NULL, NULL, timeoutMs, cb, ud); }
 unsigned net_get(const char *url, NetCb cb, void *ud) { return enqueue(url, NULL, NULL, cb, ud); }
+unsigned net_get_pri(const char *url, NetCb cb, void *ud) { return enqueue_xp(url, NULL, NULL, NULL, 0, 0, 1, cb, ud); }
 unsigned net_get_hdr(const char *url, const char *hdr, NetCb cb, void *ud) { return enqueue(url, hdr, NULL, cb, ud); }
+unsigned net_get_hdr_pri(const char *url, const char *hdr, NetCb cb, void *ud) { return enqueue_xp(url, hdr, NULL, NULL, 0, 0, 1, cb, ud); }
 unsigned net_size(const char *url, NetCb cb, void *ud) { return enqueue_x(url, NULL, NULL, NULL, 10000, 1, cb, ud); }
 unsigned net_post_json(const char *url, const char *json, NetCb cb, void *ud) { return enqueue(url, NULL, json, cb, ud); }
 unsigned net_post_hdr_t(const char *url, const char *body, const char *contentType, const char *headers, int timeoutMs, NetCb cb, void *ud) {
@@ -258,14 +299,17 @@ void net_pump(void) {
 unsigned char *net_fetch_sync(const char *url, size_t *len, int *status, int timeoutMs) { return net_fetch_sync_hdr(url, NULL, len, status, timeoutMs); }
 unsigned char *net_fetch_sync_hdr(const char *url, const char *hdr, size_t *len, int *status, int timeoutMs) {
   Req r; memset(&r, 0, sizeof r); r.url = (char *)url;
-  CURL *c = f_easy_init(); if (!c) { *status = 0; *len = 0; return NULL; }
+  int owned = 0; CURL *c = tls_curl(&owned); if (!c) { *status = 0; *len = 0; return NULL; }
   struct curl_slist *hs = hdr ? f_slist_append(NULL, hdr) : NULL; if (hs) f_easy_setopt(c, CURLOPT_HTTPHEADER, hs);
   f_easy_setopt(c, CURLOPT_URL, url); f_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_data); f_easy_setopt(c, CURLOPT_WRITEDATA, &r);
   f_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); f_easy_setopt(c, CURLOPT_MAXREDIRS, 8L); f_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+  f_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L); f_easy_setopt(c, CURLOPT_MAXCONNECTS, 8L);
   f_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, 8000L); f_easy_setopt(c, CURLOPT_TIMEOUT_MS, (long)timeoutMs);
   f_easy_setopt(c, CURLOPT_USERAGENT, ua()); f_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
   if (caPath[0]) f_easy_setopt(c, CURLOPT_CAINFO, caPath);
-  CURLcode rc = f_easy_perform(c); long code = 0; f_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code); f_easy_cleanup(c); if (hs) f_slist_free_all(hs);
+  CURLcode rc = f_easy_perform(c); long code = 0; f_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+  tls_curl_done(c, owned);
+  if (hs) f_slist_free_all(hs);
   *status = rc == CURLE_OK ? (int)code : 0; *len = r.len;
   if (*status != 200 && *status != 206) { free(r.body); return NULL; }
   return r.body;

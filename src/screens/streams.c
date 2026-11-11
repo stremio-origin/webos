@@ -20,8 +20,8 @@
 #include "core/stremio.h"
 #include "core/json.h"
 
-#define MAXG 24
-#define MAXITEMS 151
+#define MAXG 48
+#define MAXITEMS 300
 #define SW 960.0f          /* the sheet */
 #define PADX 52.0f
 #define LW (SW - 2 * PADX) /* its content */
@@ -86,7 +86,7 @@ static void on_done(int total, void *ud) { (void)total; if ((unsigned)(uintptr_t
 static int key(int k);
 static void tick(float dt);
 static void draw(void);
-static Screen sheet = { NULL, NULL, key, tick, draw, NULL, NULL, NULL };
+static Screen sheet = { NULL, NULL, key, tick, draw, NULL, NULL, NULL, NULL, NULL };
 static float sheet_x(void) { return app_rtl() ? 0 : SB_W - SW; }
 static char emptyNote[200]; /* said instead of "No streams found." (an episode that has not aired) */
 void streams_empty_note(const char *t) { snprintf(emptyNote, sizeof emptyNote, "%s", t ? t : ""); }
@@ -103,7 +103,7 @@ void streams_show(const char *type, const char *id, const char *vid, const char 
   if (!strcmp(k, S.key) && (S.loading || S.ng) && app_now() - S.t < 600) { render_chips(); rebuild(); return; }
   snprintf(S.key, sizeof S.key, "%s", k); S.t = app_now(); S.n = 0; S.idx = 0; S.nseen = 0; S.bestShown = 0; groups_clear(); snprintf(S.type, sizeof S.type, "%s", type); snprintf(S.id, sizeof S.id, "%s", id); snprintf(S.vid, sizeof S.vid, "%s", vid);
   S.filter = -1; S.chipIdx = 0; S.nchips = 0; S.tok++; S.loading = 1; qt_set(&S.chipsX, 0); qt_set(&S.listY, 0);
-  Stream r; if (sb_resume_stream(id, vid, &r)) { Stream x = r; /* (it keeps its addon: played again, it is remembered as that addon's, not as "Last used") */ snprintf(x.name, sizeof x.name, "%s", T("Resume last stream")); S.resumeSum[0] = 0; { BestRate br; memset(&br, 0, sizeof br); best_rate(&r, NULL, -1, 100, &br); snprintf(S.resumeSum, sizeof S.resumeSum, "%s", br.sum); } /* its specs laid out as the best fit's are */
+  Stream r; if (sb_resume_stream(id, vid, &r)) { Stream x = r; /* (it keeps its addon: played again, it is remembered as that addon's, not as "Last used") */ snprintf(x.name, sizeof x.name, "%s", T("Resume last stream")); S.resumeSum[0] = 0; { BestRate br; memset(&br, 0, sizeof br); best_rate(&r, NULL, -1, best_dur(sb_meta_cached(S.type, S.id), S.type), &br); snprintf(S.resumeSum, sizeof S.resumeSum, "%s", br.sum); } /* its specs laid out as the best fit's are */
     add(&x, 1, 0, T("Last used"), 1); }
   else rebuild();
   sb_streams(type, vid, on_part, on_done, (void *)(uintptr_t)S.tok);
@@ -155,17 +155,22 @@ static int key(int k) {
   if (S.info) { float mx = S.infoH - (S.infoTo[3] - 2 * INFO_PAD); if (mx < 0) mx = 0;
     /* any way out closes it (it shrinks back into its row): Back, OK, Left/Right, or Up/Down past its ends */
     if (k == K_BACK || k == K_OK || k == K_LEFT || k == K_RIGHT) info_close();
-    else if (k == K_DOWN || k == K_UP) { float to = S.infoY.to + (k == K_DOWN ? 160 : -160); to = to < 0 ? 0 : to > mx ? mx : to; if (to == S.infoY.to) info_close(); else qt_to(&S.infoY, to, 0.24f); }
+    else if (k == K_DOWN || k == K_UP || k == K_CH_DOWN || k == K_CH_UP) {
+      float st = (k == K_CH_DOWN || k == K_CH_UP) ? 480 : 160;
+      float to = S.infoY.to + ((k == K_DOWN || k == K_CH_DOWN) ? st : -st);
+      to = to < 0 ? 0 : to > mx ? mx : to; if (to == S.infoY.to) info_close(); else qt_to(&S.infoY, to, 0.24f); }
     return 1; }
   if (S.zone == 1) {
     if (k == K_RIGHT) { if (S.chipIdx >= S.nchips - 1) { nudge_start(&S.nudge, k); return 1; } S.chipIdx++; S.filter = S.chips[S.chipIdx]; S.idx = 0; S.enterAt = app_now(); rebuild(); }
     else if (k == K_LEFT) { if (S.chipIdx > 0) { S.chipIdx--; S.filter = S.chips[S.chipIdx]; S.idx = 0; S.enterAt = app_now(); rebuild(); } else streams_close(0); }
-    else if (k == K_DOWN || k == K_OK) { if (S.n) S.zone = 0; else if (k == K_DOWN) nudge_start(&S.nudge, k); }
-    else if (k == K_UP) { if (is_ep_list()) { S.zone = 2; sound_focus(); } else nudge_start(&S.nudge, k); }
+    else if (k == K_DOWN || k == K_CH_DOWN || k == K_OK) { if (S.n) S.zone = 0; else if (k == K_DOWN || k == K_CH_DOWN) nudge_start(&S.nudge, K_DOWN); }
+    else if (k == K_UP || k == K_CH_UP) { if (is_ep_list()) { S.zone = 2; sound_focus(); } else nudge_start(&S.nudge, K_UP); }
     else if (k == K_BACK) streams_close(0);
     return 1; }
   if (k == K_DOWN) { if (S.idx < S.n - 1) S.idx++; else nudge_start(&S.nudge, k); }
+  else if (k == K_CH_DOWN) { if (S.idx < S.n - 1) { S.idx = S.idx + 6 < S.n ? S.idx + 6 : S.n - 1; sound_focus(); } else nudge_start(&S.nudge, K_DOWN); }
   else if (k == K_UP) { if (S.idx > 0) S.idx--; else if (S.nchips > 1) S.zone = 1; else if (is_ep_list()) { S.zone = 2; sound_focus(); } else nudge_start(&S.nudge, k); }
+  else if (k == K_CH_UP) { if (S.idx > 0) { S.idx = S.idx > 6 ? S.idx - 6 : 0; sound_focus(); } else if (S.nchips > 1) S.zone = 1; else if (is_ep_list()) { S.zone = 2; sound_focus(); } else nudge_start(&S.nudge, K_UP); }
   else if (k == K_RIGHT) nudge_start(&S.nudge, k);
   else if (k == K_OK) { if (S.idx < S.n && S.kind[S.idx] != R_PLAIN) { S.holding = 1; S.swelled = 0; S.holdAt = app_now(); } /* a tap plays it, held: its details */
     else if (S.idx < S.n) play(S.idx); }

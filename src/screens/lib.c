@@ -74,7 +74,8 @@ static void load(void) {
   const cJSON *x; cJSON_ArrayForEach(x, lib) {
     if (js_bool(x, "removed", 0) || !js_str(x, "name", "")[0]) continue;
     LibIt *o = &L.all[L.nall++]; Item *it = &o->it; const cJSON *st = js_obj(x, "state");
-    snprintf(it->id, sizeof it->id, "%s", js_str(x, "_id", "")); snprintf(it->type, sizeof it->type, "%s", !strcmp(js_str(x, "type", ""), "series") ? "series" : "movie");
+    const char *ty = js_str(x, "type", "movie");
+    snprintf(it->id, sizeof it->id, "%s", js_str(x, "_id", "")); snprintf(it->type, sizeof it->type, "%s", *ty ? ty : "movie");
     snprintf(it->name, sizeof it->name, "%s", js_str(x, "name", "")); snprintf(it->poster, sizeof it->poster, "%s", js_str(x, "poster", ""));
     snprintf(it->background, sizeof it->background, "%s", js_str(x, "background", "")); snprintf(it->logo, sizeof it->logo, "%s", js_str(x, "logo", ""));
     const char *vid = js_str(st, "video_id", ""); snprintf(it->videoId, sizeof it->videoId, "%s", *vid ? vid : it->id);
@@ -86,8 +87,17 @@ static void load(void) {
     sb_poster_of(it, o->poster, sizeof o->poster);
   }
 }
+static int lib_is_ep(const LibIt *o) {
+  const char *t = o->it.type;
+  if (!strcmp(t, "series") || !strcasecmp(t, "Anime Series")) return 1;
+  if (!strcmp(t, "movie") || !strcasecmp(t, "Anime Movies")) return 0;
+  if (sb_parse_video_id(o->it.id, o->it.videoId, NULL, NULL) > 0) return 1;
+  cJSON *m = sb_meta_cached(t, o->it.id); if (m) { const cJSON *vs = js_arr(m, "videos"); if (vs) return cJSON_GetArraySize(vs) > 1; }
+  cJSON *l = lib_get(o->it.id); if (l && js_str(js_obj(l, "state"), "watched", "")[0]) return 1;
+  return 1; /* most type="anime" entries without cached meta yet are episodic anime series */
+}
 static int pass(const LibIt *o, int f) {
-  switch (f) { case 0: return 1; case 1: return !strcmp(o->it.type, "movie"); case 2: return !strcmp(o->it.type, "series");
+  switch (f) { case 0: return 1; case 1: return !lib_is_ep(o); case 2: return lib_is_ep(o);
     case 3: return o->cw; case 4: return o->done; default: return !o->done && !o->cw; }
 }
 static int sort_key(void) { const char *s = store_get("libSort", "added"); for (int i = 0; i < 4; i++) if (!strcmp(s, S_KEY[i])) return i; return 0; }
@@ -140,7 +150,9 @@ static void head_facts(const Item *h, const cJSON *m, Facts *F) {
     snprintf(F->meta, sizeof F->meta, "%s %s %s%s", rel, rt, *ir ? "IMDb " : "", ir);
     const cJSON *gs = js_arr(m, "genres"); if (gs) { int n = 0; const cJSON *g; cJSON_ArrayForEach(g, gs) { if (n >= 3 || !cJSON_IsString(g)) break; size_t l = strlen(F->gen); snprintf(F->gen + l, sizeof F->gen - l, "%s%s", n ? T(", ") : "", T(g->valuestring)); n++; } }
     snprintf(F->desc, sizeof F->desc, "%s", js_str(m, "description", "")); }
-  else if (o) { char y[16] = ""; if (o->year) snprintf(y, sizeof y, "%d", o->year); snprintf(F->bits, sizeof F->bits, "%s%s%s", T(!strcmp(o->it.type, "series") ? "Series" : "Movie"), y[0] ? "  \xc2\xb7  " : "", y); }
+  else if (o) { char y[16] = ""; if (o->year) snprintf(y, sizeof y, "%d", o->year);
+    const char *kl = (!strcasecmp(o->it.type, "anime") || !strcasecmp(o->it.type, "Anime Movies") || !strcasecmp(o->it.type, "Anime Series")) ? "Anime" : lib_is_ep(o) ? "Series" : "Movie";
+    snprintf(F->bits, sizeof F->bits, "%s%s%s", T(kl), y[0] ? "  \xc2\xb7  " : "", y); }
   if (o && o->cw) { if (o->left < 1) snprintf(F->lft, sizeof F->lft, "%s", T("Less than a minute left")); else { char r[32]; int mn = (int)(o->left + 0.5f); sb_fmt_runtime(mn < 1 ? 1 : mn, r, sizeof r); snprintf(F->lft, sizeof F->lft, "%s", T1("{t} left", "t", r)); } F->left = 1; F->pct = o->pct; }
   else if (o && o->done) snprintf(F->lft, sizeof F->lft, "%s", T("Watched"));
 }
@@ -234,17 +246,25 @@ static int key(int k) {
     else if (k == K_LEFT) { if (L.ri > 0) L.ri--; else nudge_start(&L.nudge, k); }
     if (L.ri != r0) sound_play(SND_FILTER); /* the filters' own tap */
     if ((k == K_RIGHT || k == K_LEFT) && L.ri < NF && L.ri != L.tab) { L.tab = L.ri; L.idx = 0; render(); } /* a filter applies as the focus lands on it */
-    else if (k == K_UP) { topnav_focus(); rail_paint(0); return 1; }
+    else if (k == K_UP || k == K_CH_UP) { topnav_focus(); rail_paint(0); return 1; }
     else if (k == K_OK && L.ri == NB - 1) { int si = (sort_key() + 1) % 4; store_set("libSort", S_KEY[si]); sound_play(SND_FILTER); L.idx = 0; timer_start(&L.press, 0.25f); render(); paint(); return 1; } /* OK on the sort: the next order */
-    else if (k == K_DOWN || (k == K_OK && L.ri < NF)) { L.ri = L.tab; if (L.n) L.zone = 1; else nudge_start(&L.nudge, k); } /* down (or OK) into the titles */
+    else if (k == K_DOWN || k == K_CH_DOWN || (k == K_OK && L.ri < NF)) { L.ri = L.tab; if (L.n) L.zone = 1; else nudge_start(&L.nudge, K_DOWN); } /* down (or OK) into the titles */
     else if (k == K_BACK) return 0;
     paint(); return 1; }
   int i0 = L.idx;
   if (k == K_RIGHT) { if (L.idx % COLS < COLS - 1 && L.idx < L.n - 1) L.idx++; else nudge_start(&L.nudge, k); }
   else if (k == K_LEFT) { if (L.idx % COLS > 0) L.idx--; else nudge_start(&L.nudge, k); }
   else if (k == K_DOWN) { if (L.idx + COLS < L.n) L.idx += COLS; else if (L.idx / COLS < (L.n - 1) / COLS) L.idx = L.n - 1; else nudge_start(&L.nudge, k); }
+  else if (k == K_CH_DOWN) {
+    if (L.idx / COLS < (L.n - 1) / COLS) { int nx = L.idx + COLS * 5; L.idx = nx < L.n ? nx : L.n - 1; }
+    else nudge_start(&L.nudge, K_DOWN);
+  }
   else if (k == K_UP) { if (L.idx >= COLS) L.idx -= COLS; else { L.zone = 0; L.ri = L.tab; } }
-  else if (k == K_BACK) return 0;
+  else if (k == K_CH_UP) {
+    if (L.idx >= COLS) L.idx = L.idx >= COLS * 5 ? L.idx - COLS * 5 : L.idx % COLS;
+    else { L.zone = 0; L.ri = L.tab; }
+  }
+  else if (k == K_BACK) { if (L.idx >= COLS) { L.idx = L.idx % COLS < L.n ? L.idx % COLS : 0; paint(); return 1; } return 0; }
   (void)i0; paint(); return 1;
 }
 static void tick(float dt) {

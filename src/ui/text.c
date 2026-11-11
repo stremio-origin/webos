@@ -334,8 +334,9 @@ static float shape_run(Shaped *out, Font *f, const uint32_t *cps, int a, int b, 
   hb_buffer_t *buf = hb_buffer_create();
   hb_buffer_add_codepoints(buf, cps, b, a, b - a);
   hb_buffer_set_direction(buf, rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
-  if (f->fam >= FAM_FB) { hb_buffer_set_script(buf, sc ? sc : HB_SCRIPT_COMMON); hb_buffer_set_flags(buf, HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES); }
+  if (f->fam >= FAM_FB) hb_buffer_set_script(buf, sc ? sc : HB_SCRIPT_COMMON);
   else hb_buffer_set_script(buf, f->fam == FAM_ARABIC ? HB_SCRIPT_ARABIC : HB_SCRIPT_LATIN);
+  hb_buffer_set_flags(buf, HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES);
   hb_buffer_set_language(buf, hb_language_get_default());
   hb_feature_t feats[2] = { { HB_TAG('c','v','1','1'), 1, 0, (unsigned)-1 }, { HB_TAG('s','s','0','1'), 1, 0, (unsigned)-1 } }; /* the web app's Inter features */
   hb_shape(f->hb, buf, f->fam == FAM_LATIN ? feats : NULL, f->fam == FAM_LATIN ? 2 : 0);
@@ -373,8 +374,11 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
   FriBidiParType base = shapeRtl ? FRIBIDI_PAR_RTL : FRIBIDI_PAR_LTR;
   fribidi_get_bidi_types((const FriBidiChar *)cps, n, types);
   /* Arabic UI: a line with no right-to-left letter at all (an addon's stream name, a Latin title) is laid out left to
-     right, as the page does with unicode-bidi: plaintext; otherwise its emoji and numbers jump to the far end */
+     right, as the page does with unicode-bidi: plaintext; otherwise its emoji and numbers jump to the far end.
+     English/LTR UI: a line whose first strong directional character is RTL (Arabic subtitles, Arabic catalog titles)
+     takes FRIBIDI_PAR_RTL so leading dashes and trailing punctuation (?, !, .) sit on the natural Arabic sides. */
   if (base == FRIBIDI_PAR_RTL) { int i = 0; while (i < n && !FRIBIDI_IS_RTL(types[i])) i++; if (i == n) base = FRIBIDI_PAR_LTR; }
+  else { for (int i = 0; i < n; i++) if (FRIBIDI_IS_STRONG(types[i]) && !FRIBIDI_IS_EXPLICIT(types[i])) { if (FRIBIDI_IS_RTL(types[i])) base = FRIBIDI_PAR_RTL; break; } }
   fribidi_get_bracket_types((const FriBidiChar *)cps, n, types, brk);
   if (!fribidi_get_par_embedding_levels_ex(types, brk, n, &base, levels)) { for (int i = 0; i < n; i++) levels[i] = 0; }
   /* runs: same level, same font, and (for fallback fonts) one script; a Latin line is one cluster per letter, all Inter */
@@ -382,8 +386,8 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
   Run *runs = malloc(n * sizeof *runs); int nr = 0;
   for (int i = 0; i < n;) {
     int j = cluster_end(cps, n, i), fid = pick_font(cps, i, j); uint32_t c = cps[i]; hb_script_t sc = 0;
-    /* spaces and punctuation join the run before them, so words don't split fonts at every space (not after emoji or flags) */
-    if (nr && j == i + 1 && (c == ' ' || c == '.' || c == ',' || c == ':' || (c >= '0' && c <= '9')) && runs[nr - 1].lv == levels[i] && runs[nr - 1].b == i) {
+    /* spaces, punctuation and bidi/joining marks join the run before them, so words don't split fonts mid-line */
+    if (nr && j == i + 1 && (c == ' ' || c == '.' || c == ',' || c == ':' || c == '!' || c == '?' || c == '-' || c == '(' || c == ')' || (c >= '0' && c <= '9') || is_ign(c)) && runs[nr - 1].lv == levels[i] && runs[nr - 1].b == i) {
       int pf = runs[nr - 1].fid;
       if (pf == FAM_LATIN || pf == FAM_ARABIC) fid = pf;
       else if (pf >= FAM_FB && strong_script(runs[nr - 1].sc) && font_has(&FS->fb[pf - FAM_FB], c)) fid = pf;

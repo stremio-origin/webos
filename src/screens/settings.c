@@ -227,7 +227,7 @@ static void enter(const void *p) { (void)p;
 }
 static void logout(void) { toast(T("Signing out…"), 1500, NULL); sb_logout(); board_invalidate(); app_go(SCR_LOGIN, NULL, 1); }
 static void on_sync_addons(int changed, void *ud) { (void)ud; toast(T(changed ? "Addons updated" : "Addons up to date"), 2000, NULL); if (changed) board_invalidate(); cats[5].n = addon_opts(); if (S.cat == 5 && S.idx >= cats[5].n) S.idx = cats[5].n - 1; S.dirty = 1; }
-static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate(); }
+static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate_home(); }
 static void sync_now(void) { toast(T("Syncing…"), 1500, NULL); sb_pull_library(on_sync_lib, NULL); sb_sync_addons(on_sync_addons, NULL); }
 /* the best stream: switched on only once the line is measured (once, kept); the row says why meanwhile */
 static int ab_busy(const Setting *o) { return !strcmp(o->k, "autoBest") && best_speed_busy(); }
