@@ -37,6 +37,11 @@ For LG TVs running webOS 3 and later (ARM). It should work on all of them, but i
 - Sign-in goes directly to Stremio. Your account stays on the TV.
 - No analytics. Nothing is sent to the developer.
 - Logs stay on the TV. Sharing them is your choice: the app seals them and shows a short code.
+- Trakt is optional. You link it on the TV with a code, and the sign-in stays on the TV.
+- While it is linked, what you watch is added to your Trakt history, and the app reads your Trakt name and viewing stats to show them in Settings.
+
+## Trakt
+Stremio Origin uses Trakt but is not endorsed or certified by Trakt.
 
 ## Support
 - Issues: https://github.com/stremio-origin/webos/issues
