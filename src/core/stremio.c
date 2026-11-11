@@ -1,4 +1,5 @@
 #include "core/stremio.h"
+#include "core/subs.h"
 #include "core/net.h"
 #include "core/store.h"
 #include "core/json.h"
@@ -579,7 +580,7 @@ static void stream_subs_keep(const char *key, const cJSON *arr, const char *addo
   if (!e) { e = &ssubs[ssubsAt]; ssubsAt = (ssubsAt + 1) % 128; } free(e->subs); e->h = h; e->subs = calloc(n, sizeof *e->subs); e->n = 0;
   const cJSON *x; cJSON_ArrayForEach(x, arr) { if (e->n >= n) break; const char *u = js_str(x, "url", NULL); if (!u || !*u) continue; SubEntry *o = &e->subs[e->n++];
     copy_str(o->url, sizeof o->url, u); copy_str(o->lang, sizeof o->lang, js_str(x, "lang", "und")); for (char *p = o->lang; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
-    copy_str(o->label, sizeof o->label, js_str(x, "label", "")); copy_str(o->addon, sizeof o->addon, addon); o->from = SUB_STREAM; o->n = e->n; }
+    copy_str(o->label, sizeof o->label, js_str(x, "label", "")); copy_str(o->addon, sizeof o->addon, addon); o->from = SUB_STREAM; o->n = e->n; subs_entry_facts(o, x); }
 }
 int sb_stream_subs(const Stream *s, SubEntry **out) {
   *out = NULL; unsigned long long h = str_hash(s->url[0] ? s->url : s->ext);

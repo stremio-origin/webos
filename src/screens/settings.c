@@ -52,12 +52,13 @@ static const Opt SIZES[] = { { "0", "72%" }, { "1", "80%" }, { "2", "100%" }, { 
 static const Opt COLORS[] = { { "#ffffff", "White" }, { "#ffe600", "Yellow" }, { "#00e5ff", "Cyan" } };
 static const Opt OUTL[] = { { "#000000", "Black" }, { "#ffffff", "White" } };
 static const Opt BGS[] = { { "0", "None" }, { "1", "Solid" }, { ".6", "Transparent" } };
+static const Opt SUB_MODES[] = { { "all", "All subtitles" }, { "forced", "Forced only" } };
 static const Opt ASSO[] = { { "styled", "Styled" }, { "plain", "Plain" } };
 static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" }, { "5", "5 min" }, { "10", "10 min" } };
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 9
 #define MAXROWS 48
-static Setting playBase[8], playS[8], subsS[6], audS[5], lookS[2], langS[2], keyS[4], addonS[40], acctS[1], supS[6];
+static Setting playBase[8], playS[8], subsS[7], audS[5], lookS[2], langS[2], keyS[4], addonS[40], acctS[1], supS[6];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -167,11 +168,12 @@ static void build(void) {
   set_s(&playBase[6], "bgTrailerVol", "Volume", "The sound comes up softly to this level", SVOL, 10, "70"); playBase[6].sub = 1; /* (shown right under the trailers while they are on: play_layout; drawn as theirs, set in) */
   usb_row();
   set_s(&subsS[0], "subsLang", "Default subtitles", "Chosen by itself when a film starts", LANG_OPTS, 18, "eng");
-  set_s(&subsS[1], "subtitleSize", "Size", "Also in the player, under Subtitles", SIZES, 7, "2");
-  set_s(&subsS[2], "subsColor", "Colour", "", COLORS, 3, "#ffffff");
-  set_s(&subsS[3], "subsOutlineColor", "Outline", "", OUTL, 2, "#000000");
-  set_s(&subsS[4], "subsBgStyle", "Background", "", BGS, 3, "0");
-  set_s(&subsS[5], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
+  set_s(&subsS[1], "subsMode", "Subtitle preference", "In the selected language, show all lines or foreign dialogue only", SUB_MODES, 2, "all");
+  set_s(&subsS[2], "subtitleSize", "Size", "Also in the player, under Subtitles", SIZES, 7, "2");
+  set_s(&subsS[3], "subsColor", "Colour", "", COLORS, 3, "#ffffff");
+  set_s(&subsS[4], "subsOutlineColor", "Outline", "", OUTL, 2, "#000000");
+  set_s(&subsS[5], "subsBgStyle", "Background", "", BGS, 3, "0");
+  set_s(&subsS[6], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
   set_s(&audS[0], "enableDefaultAudioTrack", "Auto audio track", "Pick the audio language below when a film has several", OO, 2, "false");
   set_s(&audS[1], "defaultAudioTrack", "Default audio language", "", LANG_OPTS + 1, 17, "eng");
   set_s(&audS[2], "dtsMode", "DTS sound", "Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV", DTSM, 3, "auto");
@@ -192,7 +194,7 @@ static void build(void) {
   /* grouped by task: what you watch, what the screens look like, account and system; Log out on its own, last */
   Cat c[NCAT] = {
     { "Watch", "Playback", "set_play", "Seek step, next episode, picture size", NULL, playS, 6, 0 }, /* (the count: play_layout) */
-    { "Watch", "Subtitles", "set_subs", "Language, size, colour, background", "subs", subsS, 6, 0 },
+    { "Watch", "Subtitles", "set_subs", "Language, size, colour, background", "subs", subsS, 7, 0 },
     { "Watch", "Audio", "set_aud", "Default audio language, DTS, interface sounds", NULL, audS, 5, 0 },
     { "Screens", "Appearance", "set_look", "Accent colour", "look", lookS, 2, 0 },
     { "Screens", "Language", "set_lang", "The language of the app", NULL, langS, nl, 0 },

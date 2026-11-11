@@ -18,7 +18,7 @@
 - Buttons and highlights take their colour from each title's logo or artwork
 - People, reviews and a spotlight of what's new on every title
 - A player with episodes, sources, subtitles and audio, skip intro and recap, and a next-episode card
-- Styled subtitles as the film made them, and subtitle sync
+- Styled subtitles as the film made them, subtitle sync, and optional forced-only subtitles in a chosen language
 - DTS sound converted on the TV, and Dolby Vision on TVs that support it
 - Torrent playback with a buffer sized to your TV, and an optional USB drive
 - Cast to the TV from your phone (the Android app is almost done)

@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "core/subs.h"
+#include "core/forcedsubs.h"
 #include "core/net.h"
 #include "core/json.h"
 #include "core/addons.h"
@@ -213,6 +214,7 @@ void subs_entry_facts(SubEntry *e, const struct cJSON *s) {
   e->hm = !strcmp(m, "h") || cJSON_IsTrue(hm) || (cJSON_IsNumber(hm) && hm->valuedouble > 0) || strstr(mb, "hash") != NULL;
   const cJSON *fm = cJSON_GetObjectItemCaseSensitive(s, "fpsMilli"); double fp = cJSON_IsNumber(fm) ? fm->valuedouble : cJSON_IsString(fm) ? atof(fm->valuestring) : 0;
   e->fps = fp > 10000 && fp < 61000 ? fp / 1000 : 0;
+  e->forced = forcedsubs_metadata(s, e->label, e->name);
 }
 /* the hash worked out for the stream last asked about (the reference Auto-sync uses asks again with it) */
 static pthread_mutex_t hmu = PTHREAD_MUTEX_INITIALIZER; static char hUrl[4096], hHash[24]; static double hSize;
