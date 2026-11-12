@@ -23,7 +23,7 @@
 - Torrent playback with a buffer sized to your TV, and an optional USB drive
 - Cast to the TV from your phone (the Android app is almost done)
 - Library, watched state and Continue Watching synced with your Stremio account
-- 11 languages, including Arabic (right to left)
+- 12 languages, including Arabic (right to left) and Hungarian
 - Updates from inside the app
 
 ## Install

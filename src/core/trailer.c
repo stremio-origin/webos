@@ -51,7 +51,7 @@ static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 /* a caption's language: the "/en-US-…" part of its URL, else its display name, else English */
 static void guess_lang(const char *name, const char *url, char *out) {
   static const char *two[][2] = { { "en", "eng" }, { "es", "spa" }, { "fr", "fre" }, { "de", "ger" }, { "it", "ita" }, { "pt", "por" }, { "ru", "rus" },
-    { "ar", "ara" }, { "nl", "dut" }, { "pl", "pol" }, { "tr", "tur" }, { "sv", "swe" }, { "ro", "rum" }, { "el", "gre" }, { "he", "heb" },
+    { "ar", "ara" }, { "nl", "dut" }, { "hu", "hun" }, { "pl", "pol" }, { "tr", "tur" }, { "sv", "swe" }, { "ro", "rum" }, { "el", "gre" }, { "he", "heb" },
     { "hi", "hin" }, { "ko", "kor" }, { "ja", "jpn" }, { "zh", "chi" } };
   for (const char *p = url ? strchr(url, '/') : NULL; p; p = strchr(p + 1, '/')) {
     int n = 0; while (n < 3 && lower(p[1 + n]) >= 'a' && lower(p[1 + n]) <= 'z') n++;

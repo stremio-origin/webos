@@ -530,7 +530,8 @@ static int aud_bad(const VidTrack *t) {
 static int aud_list(VidTrack *ts, int max) {
   int n = video_audio_tracks(ts, max); if (!n || !mkv_listed(mkv)) return n;
   MkvAudio ma[16]; int m = mkv_audio_tracks(mkv, ma, 16);
-  if (m == n) for (int i = 0; i < n; i++) if (!ts[i].codec[0]) { snprintf(ts[i].codec, sizeof ts[i].codec, "%s", ma[i].codec); if (!ts[i].channels) ts[i].channels = ma[i].channels; }
+  if (m == n) for (int i = 0; i < n; i++) { if (!ts[i].codec[0]) { snprintf(ts[i].codec, sizeof ts[i].codec, "%s", ma[i].codec); if (!ts[i].channels) ts[i].channels = ma[i].channels; }
+    if (!ts[i].lang[0]) snprintf(ts[i].lang, sizeof ts[i].lang, "%s", ma[i].lang); } /* a track the TV leaves unnamed: its language from the file, for the lists and the default-audio choice */
   return n;
 }
 static void aud_label(const VidTrack *t, char *out, size_t cap) { /* "AC3 5.1" */
@@ -1197,7 +1198,7 @@ static void tray_data(void) {
       else snprintf(x->sub, 120, "%s", ma[i].channels >= 6 ? T("Dolby Digital 5.1 (converted)") : T("Dolby Digital 2.0 (converted)"));
       x->i = 1000 + i; x->on = i == on; }
     if (!P.tray.n) { TItem *x = add_item(P.tray.row, &P.tray.n, MAXROW, 4); snprintf(x->lb, 200, "%s", T("Dolby Digital 5.1 (converted)")); x->i = 1000 + on; x->on = 1; }
-  } else if (t.kind == 3) { snprintf(P.tray.title, 300, "%s", T("Audio")); VidTrack ts[16]; int n = video_audio_tracks(ts, 16); int sel = P.curAud >= 0 ? P.curAud : video_audio_current();
+  } else if (t.kind == 3) { snprintf(P.tray.title, 300, "%s", T("Audio")); VidTrack ts[16]; int n = aud_list(ts, 16); int sel = P.curAud >= 0 ? P.curAud : video_audio_current();
     /* the language is the name; the format (AC3 5.1, EAC3 Atmos...) the line under it */
     for (int i = 0; i < n; i++) { TItem *x = add_item(P.tray.row, &P.tray.n, MAXROW, 4); const char *ln = lang_name(ts[i].lang);
       if (*ln) snprintf(x->lb, 200, "%s", ln); else if (ts[i].lang[0]) snprintf(x->lb, 200, "%s", ts[i].lang); else { char k[8]; snprintf(k, sizeof k, "%d", i + 1); snprintf(x->lb, 200, "%s %s", T("Audio"), k); }
@@ -1648,7 +1649,7 @@ char *player_cast_tracks(void) {
     for (int i = 0; i < m; i++) { cJSON *o = cJSON_CreateObject(); snprintf(id, sizeof id, "conv:%d", i); const char *ln = lang_name(ma[i].lang); snprintf(lb, sizeof lb, "%s", *ln ? ln : ma[i].lang[0] ? ma[i].lang : T("Audio"));
       cJSON_AddStringToObject(o, "id", id); cJSON_AddStringToObject(o, "label", lb); cJSON_AddStringToObject(o, "lang", ma[i].lang); cJSON_AddItemToArray(al, o); }
     snprintf(id, sizeof id, "conv:%d", P.dts.convOrd); cJSON_AddStringToObject(j, "aud", id); }
-  else { VidTrack ts[16]; int n = video_audio_tracks(ts, 16), sel = P.curAud >= 0 ? P.curAud : video_audio_current();
+  else { VidTrack ts[16]; int n = aud_list(ts, 16), sel = P.curAud >= 0 ? P.curAud : video_audio_current();
     for (int i = 0; i < n; i++) { cJSON *o = cJSON_CreateObject(); snprintf(id, sizeof id, "%d", ts[i].idx); const char *ln = lang_name(ts[i].lang);
       if (*ln) snprintf(lb, sizeof lb, "%s", ln); else if (ts[i].lang[0]) snprintf(lb, sizeof lb, "%s", ts[i].lang); else snprintf(lb, sizeof lb, "%s %d", T("Audio"), i + 1);
       if (ts[i].name[0] && strcmp(ts[i].name, lb)) { size_t L = strlen(lb); snprintf(lb + L, sizeof lb - L, " · %s", ts[i].name); }
@@ -1712,7 +1713,7 @@ static void info_update(void) {
   char hdr[32], au[48]; hdr_of(P.sname, hdr, sizeof hdr); audio_of(P.sname, au, sizeof au);
   char codec[48]; snprintf(codec, sizeof codec, "%s", au); char *sp = strrchr(codec, ' '), chs[8] = ""; if (sp && sp[1] >= '0' && sp[1] <= '9' && sp[2] == '.') { snprintf(chs, sizeof chs, "%s", sp + 1); *sp = 0; }
   char fmt[96]; snprintf(fmt, sizeof fmt, "%s%s%s%s", !strncmp(hdr, "DV", 2) ? "Dolby Vision" : hdr, !strncmp(hdr, "DV", 2) ? hdr + 2 : "", hdr[0] && codec[0] ? " · " : "", codec); /* the page's "  ·  " collapses to one space each side */
-  char aud[96] = ""; { VidTrack ts[16]; int nt = video_audio_tracks(ts, 16); int sel = P.curAud >= 0 ? P.curAud : video_audio_current(); for (int i = 0; i < nt; i++) if (ts[i].idx == sel) { const char *ln = lang_name(ts[i].lang); snprintf(aud, sizeof aud, "%s", *ln ? ln : ts[i].name); } }
+  char aud[96] = ""; { VidTrack ts[16]; int nt = aud_list(ts, 16); int sel = P.curAud >= 0 ? P.curAud : video_audio_current(); for (int i = 0; i < nt; i++) if (ts[i].idx == sel) { const char *ln = lang_name(ts[i].lang); snprintf(aud, sizeof aud, "%s", *ln ? ln : ts[i].name); } }
   if (chs[0]) { size_t l = strlen(aud); snprintf(aud + l, sizeof aud - l, "%s%s", l ? " " : "", chs); }
   char sub[140] = "";
   if (!strncmp(P.curSub, "emb:", 4)) { int nn = atoi(P.curSub + 4); for (int i = 0; i < P.nEmb; i++) if (P.emb[i].idx == nn) { char lb[120]; emb_label(i, lb, sizeof lb); snprintf(sub, sizeof sub, "%s · %s", lb, T("In the file")); } }
