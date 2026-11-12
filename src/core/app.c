@@ -769,9 +769,13 @@ static void key_core(int k, int down, int repeat);
 #define PTR_ARROW_WIN 0.35
 #define PTR_ARROW_DIST 32
 #define PTR_ARROW_PAUSE 0.3
-static struct { int on; float x, y; Hit hv; int hasHv; float hx, hy; double movedAt; int down, downAct; Hit act; double okKeyAt, clickAt, wheelAt; int eatUp, eatOk, arrowHid; double arrowAt; int anchor; float ax, ay; double tremAt; int dirty; } PTR;
-static void ptr_show(void) { PTR.arrowHid = 0; if (PTR.on) return; PTR.on = 1; PTR.hasHv = 0; }
-static void ptr_hide(void) { if (!PTR.on) return; PTR.on = 0; PTR.hasHv = 0; }
+#define PTR_IDLE_HIDE 5.0 /* a hand held still: the pointer goes away, as it does on the TV's own screens */
+static struct { int on; float x, y; Hit hv; int hasHv; float hx, hy; double movedAt, shownAt; int down, downAct; Hit act; double okKeyAt, clickAt, wheelAt; int eatUp, eatOk, arrowHid; double arrowAt; int anchor; float ax, ay; double tremAt; int dirty; } PTR;
+/* the visible pointer is the TV's own cursor: SDL shows and hides it for the app's window. Nothing else does
+   (webOS keeps the cursor drawn for a native client that never hides it, and its cursor messages only tell
+   the app what happened), so an arrow key and a still hand both leave it on screen without this */
+static void ptr_show(void) { PTR.arrowHid = 0; SDL_ShowCursor(SDL_ENABLE); PTR.shownAt = NOW; if (PTR.on) return; PTR.on = 1; PTR.hasHv = 0; }
+static void ptr_hide(void) { SDL_ShowCursor(SDL_DISABLE); if (!PTR.on) return; PTR.on = 0; PTR.hasHv = 0; }
 static int ptr_tremor(double now) { if (!PTR.arrowHid) return 0; if (now - PTR.arrowAt < PTR_ARROW_WIN) return 1;
   if (!PTR.anchor || now - PTR.tremAt > PTR_ARROW_PAUSE) { PTR.anchor = 1; PTR.ax = PTR.x; PTR.ay = PTR.y; } PTR.tremAt = now; float dx = PTR.x - PTR.ax, dy = PTR.y - PTR.ay; return dx * dx + dy * dy < PTR_ARROW_DIST * PTR_ARROW_DIST; }
 static void ptr_nav_back(void) { if (topNav.want >= 0) return; Scr cur = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; for (int j = 2; j < 5; j++) if (chipScr(j) == cur && topNav.idx != j) { topNav.idx = j; topnav_paint(); } }
@@ -879,6 +883,7 @@ void app_init(void) {
 static void amb_bake(void);
 void app_tick(float dt) {
   DT = dt; NOW = SDL_GetTicks() / 1000.0; FRAME++;
+  if (PTR.on && NOW - PTR.shownAt > PTR_IDLE_HIDE) ptr_hide(); /* a hand that stopped: the pointer goes away by itself */
   ptr_frame();
   { static int swelled; if (app_hold_progress() > 0 && !swelled) { swelled = 1; sound_play(SND_HOLD); } else if (!okHold.down) swelled = 0; } /* holding OK: a low swell as the line starts round */
   if (okHold.down && !okHold.menu && (NOW - okHold.at) * 1000 >= HOLD_MS) { okHold.menu = 1; menuGuard = 1; orbs_pulse(ORB_HOLD, 1); if (app_card_menu_hook) app_card_menu_hook(&okHold.item); }
