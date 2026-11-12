@@ -61,7 +61,8 @@ const char *detail_id(void) { return ID(); }
 /* episodic: a series, or a title of another kind whose details list videos of their own (an addon's anime, a channel);
    a title whose details name a default video plays that one, as a film */
 static int is_series(void) {
-  if (!strcmp(D.p.it.type, "series")) return 1; if (!D.meta || !strcmp(D.p.it.type, "movie") || js_str(js_obj(D.meta, "behaviorHints"), "defaultVideoId", NULL)) return 0;
+  if (!strcmp(D.p.it.type, "series") || !strcasecmp(D.p.it.type, "Anime Series")) return 1;
+  if (!D.meta || !strcmp(D.p.it.type, "movie") || !strcasecmp(D.p.it.type, "Anime Movies") || js_str(js_obj(D.meta, "behaviorHints"), "defaultVideoId", NULL)) return 0;
   const cJSON *v; cJSON_ArrayForEach(v, js_arr(D.meta, "videos")) { const char *id = js_str(v, "id", ""); if (*id && strcmp(id, D.p.it.id)) return 1; } return 0;
 }
 static const char *film_vid(void) { const char *dv = js_str(js_obj(D.meta, "behaviorHints"), "defaultVideoId", NULL); return dv && *dv ? dv : D.p.it.id; }
@@ -93,7 +94,12 @@ static void build_eps(void) {
 static void build_seasons(void) {
   D.ver++; for (int i = 0; i < D.nseasons; i++) free(D.seasons[i].eps); D.nseasons = 0;
   const cJSON *videos = js_arr(D.meta, "videos"); const cJSON *v;
-  cJSON_ArrayForEach(v, videos) { int sn = (int)js_num(v, "season", 0); int k = -1; for (int i = 0; i < D.nseasons; i++) if (D.seasons[i].n == sn) { k = i; break; }
+  int hasPosSeason = 0;
+  cJSON_ArrayForEach(v, videos) if (js_num(v, "season", 0) > 0) { hasPosSeason = 1; break; }
+  cJSON_ArrayForEach(v, videos) {
+    const cJSON *seNode = cJSON_GetObjectItemCaseSensitive(v, "season");
+    int sn = cJSON_IsNumber(seNode) ? (int)seNode->valuedouble : (hasPosSeason ? 0 : 1); /* season-less anime -> Season 1 */
+    int k = -1; for (int i = 0; i < D.nseasons; i++) if (D.seasons[i].n == sn) { k = i; break; }
     if (k < 0) { if (D.nseasons >= MAXSEASON) continue; k = D.nseasons++; D.seasons[k].n = sn; D.seasons[k].eps = NULL; D.seasons[k].neps = 0; }
     Season *s = &D.seasons[k]; s->eps = realloc(s->eps, (s->neps + 1) * sizeof *s->eps); s->eps[s->neps++] = v; }
   /* seasons in order, specials (0) last */
@@ -193,8 +199,12 @@ static Item meta_item(void) { Item it; memset(&it, 0, sizeof it); if (D.meta) sb
 static void toggle_watched_all(void) {
   if (!D.meta) { toast(T("Could not load title"), 2000, NULL); return; }
   int on = !watched_now(); Item it = meta_item(); cJSON *l = lib_get(ID()); if (!l) l = lib_new_item(&it);
-  if (is_series()) { const cJSON *vs = js_arr(D.meta, "videos"); const char *ids[2048]; int n = 0; const cJSON *v;
-    cJSON_ArrayForEach(v, vs) { if (!js_num(v, "season", 0)) continue; if (on && unreleased(v)) continue; if (n < 2048) ids[n++] = js_str(v, "id", ""); } /* only what has aired */
+  if (is_series()) { const cJSON *vs = js_arr(D.meta, "videos"); const char *ids[4096]; int n = 0, hasPos = 0; const cJSON *v;
+    cJSON_ArrayForEach(v, vs) if (js_num(v, "season", 0) > 0) { hasPos = 1; break; }
+    cJSON_ArrayForEach(v, vs) {
+      const cJSON *seNode = cJSON_GetObjectItemCaseSensitive(v, "season");
+      int sn = cJSON_IsNumber(seNode) ? (int)seNode->valuedouble : (hasPos ? 0 : 1);
+      if (sn <= 0) continue; if (on && unreleased(v)) continue; if (n < 4096) ids[n++] = js_str(v, "id", ""); } /* only what has aired */
     if (!n) return; lib_set_eps_watched(l, vs, ids, n, on); }
   else lib_set_movie_watched(l, on);
   app_refresh_boards(); detail_refresh_watched();
@@ -416,8 +426,9 @@ static void enter(const void *pp) {
 static void leave(void) { streams_close(1); faces_cancel(); }
 static void ep_label(const char *vid, char *out, size_t cap) {
   if (!is_series()) { char rt[32] = ""; int mn = sb_runtime_min(js_str(D.meta, "runtime", "")); if (mn) sb_fmt_runtime(mn, rt, sizeof rt); const char *y = js_str(D.meta, "releaseInfo", js_str(D.meta, "year", "")); snprintf(out, cap, "%s%s%s", y, *y && *rt ? "  " : "", rt); return; }
-  const char *c = strrchr(vid, ':'); out[0] = 0;
-  if (c) { const char *p = c - 1; while (p > vid && *p != ':') p--; if (*p == ':') snprintf(out, cap, "S%d · E%d", atoi(p + 1), atoi(c + 1)); }
+  int se = -1, ep = -1, vr = sb_parse_video_id(ID(), vid, &se, &ep); out[0] = 0;
+  if (vr == 1) snprintf(out, cap, "S%d · E%d", se, ep);
+  else if (vr == 2) snprintf(out, cap, "E%d", ep);
   for (int i = 0; i < D.neps; i++) if (!strcmp(js_str(D.eps[i], "id", ""), vid)) { const char *n = js_str(D.eps[i], "name", js_str(D.eps[i], "title", "")); if (*n) { size_t l = strlen(out); snprintf(out + l, cap - l, "%s%s", l ? "  ·  " : "", n); } break; }
 }
 void detail_open_streams(const char *vid) { if (revpanel_page_k() > 0) revpanel_page_close(); /* (the reviews risen: they let down first, the list is the page's) */ char lbl[400]; ep_label(vid, lbl, sizeof lbl); streams_show(D.p.it.type, ID(), vid, mname(), lbl); }
@@ -454,18 +465,24 @@ static int key_in(int k) {
     else if (k == K_UP) { if (D.nppl) { D.zone = 3; D.pRingEnter = 1; timer_start(&D.pRingPop, 0.2f); paint(); return 1; } topnav_focus(); return 1; } /* Up: the people, then the top tabs */
     else if (k == K_OK) { if (D.btnIdx < D.nbtn && D.btn[D.btnIdx].kind == B_PLAY && best_on()) { if (!D.playHold) { D.playHold = 1; D.holdSwell = 0; D.playHoldAt = app_now(); } } /* Play: a tap plays, a hold opens all the streams (on release or when full) */
       else { fpill_press(&D.pill); if (D.btnIdx < D.nbtn) btn_act(D.btn[D.btnIdx].kind); } }
-    else if (k == K_DOWN) { if (is_series()) { if (D.nseasons) D.zone = 1; else nudge_btn(K_DOWN); } else { char im[32]; if (imdb_of(im, sizeof im)[0]) { Item it = meta_item(); sound_focus(); D.pageZone = 0; revpanel_show_page(&it); } else nudge_btn(K_DOWN); return 1; } } /* (best stream on: Play holds the streams, Down brings the reviews up) */ /* film: Down re-opens the streams sheet */
+    else if (k == K_DOWN || k == K_CH_DOWN) {
+      if (is_series()) { if (k == K_CH_DOWN && D.neps) { flush_season(); D.zone = 2; } else if (D.nseasons) D.zone = 1; else nudge_btn(K_DOWN); }
+      else { char im[32]; if (imdb_of(im, sizeof im)[0]) { Item it = meta_item(); sound_focus(); D.pageZone = 0; revpanel_show_page(&it); } else nudge_btn(K_DOWN); return 1; }
+    } /* (best stream on: Play holds the streams, Down brings the reviews up) */
+    else if (k == K_CH_UP) { if (D.nppl) { D.zone = 3; D.pRingEnter = 1; timer_start(&D.pRingPop, 0.2f); paint(); return 1; } topnav_focus(); return 1; }
     else if (k == K_BACK) return 0;
     if ((k == K_LEFT || k == K_RIGHT) && D.btnIdx == b0) nudge_btn(k);
     paint(); return 1; }
   if (D.zone == 3) { int p0 = D.pIdx;
     if (k == K_RIGHT) D.pIdx = D.pIdx + 1 < D.nppl ? D.pIdx + 1 : D.pIdx; else if (k == K_LEFT) D.pIdx = D.pIdx > 0 ? D.pIdx - 1 : 0;
-    else if (k == K_DOWN) D.zone = 0; else if (k == K_UP) { topnav_focus(); return 1; } else if (k == K_OK) { ppl_open(); return 1; } else if (k == K_BACK) return 0;
+    else if (k == K_DOWN || k == K_CH_DOWN) D.zone = 0; else if (k == K_UP || k == K_CH_UP) { topnav_focus(); return 1; } else if (k == K_OK) { ppl_open(); return 1; } else if (k == K_BACK) return 0;
     if ((k == K_LEFT || k == K_RIGHT) && D.pIdx == p0) nudge_start(&D.nudge, k); /* (a move: the ring travels, swelling a little on the way: drawn from its glide) */
     paint(); return 1; }
   if (D.zone == 1) {
     if (k == K_RIGHT) { if (D.seasonIdx < D.nseasons - 1) { D.seasonIdx++; queue_season(); } else nudge_start(&D.nudge, k); }
     else if (k == K_LEFT) { if (D.seasonIdx > 0) { D.seasonIdx--; queue_season(); } else nudge_start(&D.nudge, k); }
+    else if (k == K_CH_DOWN) { if (D.seasonIdx < D.nseasons - 1) { D.seasonIdx = D.seasonIdx + 4 < D.nseasons ? D.seasonIdx + 4 : D.nseasons - 1; queue_season(); } else if (D.neps) { flush_season(); D.zone = 2; } else nudge_start(&D.nudge, K_DOWN); }
+    else if (k == K_CH_UP) { if (D.seasonIdx > 0) { D.seasonIdx = D.seasonIdx > 4 ? D.seasonIdx - 4 : 0; queue_season(); } else { flush_season(); D.zone = 0; } }
     else if (k == K_UP) { flush_season(); D.zone = 0; }
     else if (k == K_DOWN || k == K_OK) { flush_season(); if (D.neps) D.zone = 2; else if (k == K_DOWN) nudge_start(&D.nudge, K_DOWN); }
     else if (k == K_BACK) return 0;
@@ -473,13 +490,15 @@ static int key_in(int k) {
   int e0 = D.epIdx;
   if (k == K_RIGHT) D.epIdx = D.epIdx + 1 < D.neps ? D.epIdx + 1 : D.epIdx;
   else if (k == K_LEFT) D.epIdx = D.epIdx > 0 ? D.epIdx - 1 : 0;
+  else if (k == K_CH_DOWN) D.epIdx = D.epIdx + 8 < D.neps ? D.epIdx + 8 : (D.neps ? D.neps - 1 : 0);
+  else if (k == K_CH_UP) { if (D.epIdx > 0) D.epIdx = D.epIdx > 8 ? D.epIdx - 8 : 0; else D.zone = 1; }
   else if (k == K_UP) D.zone = 1;
   else if (k == K_OK) { if (D.epIdx < D.neps) { const char *v = js_str(D.eps[D.epIdx], "id", ""); if (unreleased(D.eps[D.epIdx])) { not_aired(v); return 1; } if (best_on()) { if (!D.epHold) { D.epHold = 1; D.epSwell = 0; D.epHoldAt = app_now(); snprintf(D.epVid, sizeof D.epVid, "%s", v); } } else detail_open_streams(v); return 1; } } /* best stream on: a tap plays it, a hold opens its streams */
   else if ((k == K_YELLOW || k == K_BLUE) && D.epIdx < D.neps) { const Item *fi = focused(); if (fi) { Item it = *fi; sound_play(SND_TOGGLE); lib_toggle_watched(&it, js_arr(D.meta, "videos")); app_refresh_boards(); detail_refresh_watched();
       toast(T(lib_is_marked_watched(&it) ? "Marked as watched" : "Marked as unwatched"), 1800, NULL); } return 1; } /* the yellow or blue key: this episode watched, or not */
   else if (k == K_DOWN && D.epIdx < D.neps) { char im[32]; if (imdb_of(im, sizeof im)[0]) { const Item *fi = focused(); if (fi) { Item it = *fi; sound_focus(); D.pageZone = 2; revpanel_show_page(&it); return 1; } } } /* Down: this episode's reviews, risen into the page as a film's */
   else if (k == K_BACK) { D.zone = 1; paint(); return 1; }
-  if (((k == K_LEFT || k == K_RIGHT) && D.epIdx == e0) || k == K_DOWN) nudge_start(&D.nudge, k);
+  if (((k == K_LEFT || k == K_RIGHT || k == K_CH_DOWN) && D.epIdx == e0) || k == K_DOWN) nudge_start(&D.nudge, k == K_CH_DOWN ? K_RIGHT : k);
   paint(); return 1;
 }
 static void tick(float dt) {

@@ -42,6 +42,7 @@ void sb_addon_key(const cJSON *addon, char *out, size_t cap);  /* its manifest i
 /* ---- catalogs ---- */
 int  sb_home_defs(CatalogDef *out, int max);
 int  sb_disc_defs(CatalogDef *out, int max);
+int  sb_anime_defs(CatalogDef *out, int max);   /* the anime tab: only anime catalogs */
 /* cached copy first (cb with cached=1), then the fresh one if it differs; the list is malloc'd for the callback owner */
 void sb_catalog(const CatalogDef *def, void (*cb)(ItemList *list, int cached, void *ud), void *ud);
 void sb_catalog_url(const char *url, const char *type, int n, void (*cb)(ItemList *list, int cached, void *ud), void *ud);
@@ -62,6 +63,8 @@ const char *sb_bg_small(const Item *it, char *buf, size_t cap);
 const char *sb_bg_mid(const Item *it, char *buf, size_t cap);
 const char *sb_logo_of(const Item *it, char *buf, size_t cap);
 int  sb_is_imdb(const char *id);
+/* 0 = non-episodic video id, 1 = season + episode (*outSeason >= 0, *outEp >= 0), 2 = episode only (*outSeason = -1, *outEp >= 0, e.g. kitsu:43806:7) */
+int  sb_parse_video_id(const char *itemId, const char *vid, int *outSeason, int *outEp);
 void sb_meta_line(const cJSON *m, char *out, size_t cap);
 int  sb_runtime_min(const char *s);
 void sb_fmt_runtime(int mn, char *out, size_t cap);

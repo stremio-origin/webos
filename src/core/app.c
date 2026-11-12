@@ -72,7 +72,7 @@ static int rtlHeld; /* a picture drawn left to right and mirrored as a whole (th
 int app_rtl(void) { return rtlHeld ? 0 : i18n_rtl(); }
 void app_rtl_hold(int on) { rtlHeld = on; }
 int app_mirror_key(int k) { if (!i18n_rtl()) return k; return k == K_LEFT ? K_RIGHT : k == K_RIGHT ? K_LEFT : k; }
-int app_is_board(Scr s) { return s == SCR_HOME || s == SCR_DISC || s == SCR_LIB; }
+int app_is_board(Scr s) { return s == SCR_HOME || s == SCR_DISC || s == SCR_LIB || s == SCR_ANIME; }
 static int xinLib; /* the Library's entrance runs 0.42 s on the page's main curve; the others 0.3 s ease-out */
 float app_screen_alpha(void) { return xin.on ? ease_apply(EASE_CSS_EASEOUT, timer_x(&xin)) : 1; } /* an even ease-out: the front-loaded curves read as a pop */
 static int scr_origin(float *x, float *y) { if (screens[SCR] && screens[SCR]->origin && screens[SCR]->origin(x, y)) return 1; *x = SB_W / 2; *y = SB_H / 2; return 0; }
@@ -309,17 +309,22 @@ static void clock_draw(void) { float W = text_width("00:00", 38, 600, -0.6f); cl
 
 /* ---- the top bar: centred tabs, the corner icons, one pill that glides to the focused tab ---- */
 TopNav topNav = { .idx = NAV_HOME };
-static const char *chipLabel(int i) { return i == NAV_DISC ? T("Discover") : i == NAV_HOME ? T("Home") : T("Library"); }
+static Scr lastTab = SCR_HOME; /* the board/tab from which Detail or Similar was opened */
+static Scr curTabScr(void) { return (SCR == SCR_DETAIL || SCR == SCR_SIM) ? lastTab : SCR; }
+static const char *chipLabel(int i) { return i == NAV_DISC ? T("Discover") : i == NAV_HOME ? T("Home") : i == NAV_ANIME ? T("Anime") : T("Library"); }
 static int chipCur(int i) {
-  Scr t = i == NAV_SEARCH ? SCR_SEARCH : i == NAV_SET ? SCR_SET : i == NAV_DISC ? SCR_DISC : i == NAV_HOME ? SCR_HOME : SCR_LIB;
-  return t == SCR || (t == SCR_HOME && (SCR == SCR_DETAIL || SCR == SCR_SIM));
+  Scr t = i == NAV_SEARCH ? SCR_SEARCH : i == NAV_SET ? SCR_SET : i == NAV_DISC ? SCR_DISC : i == NAV_HOME ? SCR_HOME : i == NAV_ANIME ? SCR_ANIME : SCR_LIB;
+  return t == curTabScr();
 }
 static int chipFocused(int i) { return topNav.active && topNav.idx == i && !update_pill_focused(); } /* the update notice holds the highlight */
 static void topnav_layout(void) {
-  float w[3], tot = 0;
-  for (int i = 0; i < 3; i++) { int f = chipFocused(NAV_DISC + i) || chipCur(NAV_DISC + i); w[i] = text_width(chipLabel(NAV_DISC + i), 32, f ? 700 : 400, 0) + 80; tot += w[i] + 18; }
+  /* four chips: Discover, Home, Library, Anime */
+  static const int order[NAV_TABS] = { NAV_DISC, NAV_HOME, NAV_LIB, NAV_ANIME };
+  float w[NAV_TABS], tot = 0;
+  for (int i = 0; i < NAV_TABS; i++) { int c = order[i]; int f = chipFocused(c) || chipCur(c); w[i] = text_width(chipLabel(c), 32, f ? 700 : 400, 0) + 80; tot += w[i] + 18; }
   float x = SB_W / 2 - (tot - 18) / 2;
-  for (int i = 0; i < 3; i++) { int ci = app_rtl() ? NAV_DISC + 2 - i : NAV_DISC + i; topNav.chipX[ci] = x; topNav.chipW[ci] = w[ci - NAV_DISC]; x += w[ci - NAV_DISC] + 18; }
+  for (int i = 0; i < NAV_TABS; i++) { int ci = app_rtl() ? order[NAV_TABS - 1 - i] : order[i]; int wi = app_rtl() ? w[NAV_TABS - 1 - i] : w[i];
+    topNav.chipX[ci] = x; topNav.chipW[ci] = wi; x += wi + 18; }
   topNav.chipX[NAV_SET] = app_rtl() ? SB_W - 40 - 76 : 40; topNav.chipW[NAV_SET] = 76;
   topNav.chipX[NAV_SEARCH] = app_rtl() ? SB_W - 128 - 76 : 128; topNav.chipW[NAV_SEARCH] = 76;
   topNav.laidOut = 1;
@@ -338,12 +343,12 @@ static void topnav_paint(void) {
     tween_to(&topNav.cornerF[i], f, 0.2f, EASE_CSS_EASE); tween_to(&topNav.cornerS[i], f, 0.3f, EASE_OUT); tween_to(&topNav.dotK[i], f, 0.24f, EASE_STD); }
   tween_to(&topNav.setRot, chipFocused(NAV_SET) ? 90 : 0, 0.5f, EASE_OUT);
 }
-static Scr chipScr(int i) { return i == NAV_SEARCH ? SCR_SEARCH : i == NAV_SET ? SCR_SET : i == NAV_DISC ? SCR_DISC : i == NAV_HOME ? SCR_HOME : SCR_LIB; }
+static Scr chipScr(int i) { return i == NAV_SEARCH ? SCR_SEARCH : i == NAV_SET ? SCR_SET : i == NAV_DISC ? SCR_DISC : i == NAV_HOME ? SCR_HOME : i == NAV_ANIME ? SCR_ANIME : SCR_LIB; }
 void topnav_focus(void) { topNav.active = 1; topnav_paint(); }
 void topnav_switch(int i) {
-  i = i < 0 ? 0 : i > 4 ? 4 : i;
+  i = i < 0 ? 0 : i > NAV_ANIME ? NAV_ANIME : i;
   if (i == topNav.idx && (app_is_board(SCR) || SCR == SCR_SEARCH || SCR == SCR_SET)) return;
-  { Scr c0 = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; int cs = -1; for (int j = 0; j < 5; j++) if (chipScr(j) == c0) cs = j;
+  { Scr c0 = curTabScr(); int cs = -1; for (int j = 0; j <= NAV_ANIME; j++) if (chipScr(j) == c0) cs = j;
     if (i == NAV_SEARCH || i == NAV_SET) { navf.kind = NAV_ZOOM; navf.x = topNav.chipX[i] + topNav.chipW[i] / 2; navf.y = 50; } else nav_slide(i >= cs ? 1 : -1); }
   topNav.idx = i; nback = 0; topNav.active = 1;
   app_go(chipScr(i), NULL, 1); topNav.active = 1; topnav_paint();
@@ -351,9 +356,10 @@ void topnav_switch(int i) {
 static void topnav_flush(int drop) { if (topNav.want < 0) return; int w = topNav.want; topNav.want = -1; if (drop) return; topNav.idx = -1; topnav_switch(w); }
 static void topnav_enter_content(void) {
   topNav.active = 0; Scr t = chipScr(topNav.idx);
-  extern void board_from_bar(void), lib_from_bar(void);
-  if (SCR == SCR_HOME || SCR == SCR_DISC) board_from_bar();   /* a board: its first row (Discover: its spotlight) */
-  else if (SCR == SCR_LIB) lib_from_bar();                    /* the Library: its categories */
+  extern int board_from_bar(void); extern void lib_from_bar(void);
+  if (SCR == SCR_HOME || SCR == SCR_DISC || SCR == SCR_ANIME) {
+    if (!board_from_bar()) { topNav.active = 1; nudge_start(&topNav.nudge, K_DOWN); topnav_paint(); return; }
+  } else if (SCR == SCR_LIB) lib_from_bar();                  /* the Library: its categories */
   else if (t != SCR_SEARCH && t != SCR_SET && screens[SCR] && screens[SCR]->key) screens[SCR]->key(K_DOWN); /* Search and Settings keep their own top highlight */
   topnav_paint();
 }
@@ -364,19 +370,19 @@ static int topnav_key(int k) {
   if (update_pill_key(k, topNav.idx == NAV_SET)) { topnav_paint(); return 1; }
   topnav_paint();
   if (k == K_LEFT || k == K_RIGHT) {
-    int i = topNav.idx + (k == K_RIGHT ? 1 : -1); if (i < 0) i = 0; if (i > 4) i = 4;
+    int i = topNav.idx + (k == K_RIGHT ? 1 : -1); if (i < 0) i = 0; if (i > NAV_ANIME) i = NAV_ANIME;
     if (i == topNav.idx) { nudge_start(&topNav.nudge, k); return 1; } /* the end of the bar */
     Scr t = chipScr(i);
     if ((t == SCR_SEARCH || t == SCR_SET) && SCR != t) { topnav_flush(1); topNav.idx = i; topnav_paint(); return 1; }
     topNav.idx = i; topnav_paint(); topNav.want = i; topNav.swAt = NOW + 0.15;
-  } else if (k == K_DOWN || k == K_OK) {
+  } else if (k == K_DOWN || k == K_CH_DOWN || k == K_OK) {
     topnav_flush(0); Scr tg = chipScr(topNav.idx);
     if ((tg == SCR_SEARCH || tg == SCR_SET) && SCR != tg) {
       if (k == K_OK) { topNav.active = 1; app_go(tg, NULL, 1); topnav_enter_content(); return 1; }
       /* Down from a corner icon: into the page you are on */
-      Scr cur = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; for (int j = 2; j < 5; j++) if (chipScr(j) == cur) topNav.idx = j; }
+      Scr cur = curTabScr(); for (int j = NAV_DISC; j <= NAV_ANIME; j++) if (chipScr(j) == cur) topNav.idx = j; }
     topnav_enter_content();
-  } else if (k == K_UP) topnav_nudge();
+  } else if (k == K_UP || k == K_CH_UP) topnav_nudge();
   return 1;
 }
 void topnav_tick(float dt) {
@@ -388,8 +394,8 @@ void topnav_tick(float dt) {
 /* Search steps aside for a notice out of the Settings icon; when a long one would push it onto the tabs it fades away */
 static float search_fade(float sh) {
   if (sh == 0) return 1; float sx = topNav.chipX[NAV_SEARCH] + sh, room;
-  if (!app_rtl()) { float l = SB_W; for (int j = NAV_DISC; j <= NAV_LIB; j++) if (topNav.chipX[j] < l) l = topNav.chipX[j]; room = l - 16 - (sx + 76); }
-  else { float r = 0; for (int j = NAV_DISC; j <= NAV_LIB; j++) if (topNav.chipX[j] + topNav.chipW[j] > r) r = topNav.chipX[j] + topNav.chipW[j]; room = sx - 16 - r; }
+  if (!app_rtl()) { float l = SB_W; for (int j = NAV_DISC; j <= NAV_ANIME; j++) if (topNav.chipX[j] < l) l = topNav.chipX[j]; room = l - 16 - (sx + 76); }
+  else { float r = 0; for (int j = NAV_DISC; j <= NAV_ANIME; j++) if (topNav.chipX[j] + topNav.chipW[j] > r) r = topNav.chipX[j] + topNav.chipW[j]; room = sx - 16 - r; }
   return room >= 0 ? 1 : clampf(1 + room / 40, 0, 1);
 }
 /* liquid glass, drawn (no blur read back: the bar sits over moving backdrops and trailers): a tinted see-through
@@ -457,7 +463,7 @@ static void corner_draw(int i, const char *icon, uint32_t dot, float rot) {
   if (sf < 0.999f) gfx_opacity_pop();
 }
 static void chip_focus(int i, int b) { (void)b; if (!topNav.active || topNav.idx != i) { topnav_flush(1); if (!topNav.active) { topNav.active = 1; } topNav.idx = i; topnav_paint(); } }
-static void chip_act(int i, int b) { (void)b; Scr tg = chipScr(i); Scr cur = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; int ci = -1; for (int j = 2; j < 5; j++) if (chipScr(j) == cur) ci = j;
+static void chip_act(int i, int b) { (void)b; Scr tg = chipScr(i); Scr cur = curTabScr(); int ci = -1; for (int j = NAV_DISC; j <= NAV_ANIME; j++) if (chipScr(j) == cur) ci = j;
   if (app_overlay) { app_overlay->key(K_BACK); app_overlay = NULL; }
   topnav_flush(1); topNav.active = 1; topNav.idx = i;
   if (tg == SCR_SEARCH || tg == SCR_SET) topnav_key(K_OK); /* opens it, the highlight inside */
@@ -467,22 +473,26 @@ void topnav_draw(void) {
   if (!topNav.laidOut) topnav_paint();
   int signin = SCR == SCR_LOGIN; float pg = revpanel_page_k(); /* the reviews risen into the title page: the bar goes up and away for its buttons */
   if (pg >= 0.999f) return;
-  if (!signin && pg < 0.3f) for (int i = 0; i < 5; i++) { float h = i < 2 ? 76 : 66; hit_add_nav(topNav.chipX[i] + (i == NAV_SEARCH ? update_search_shift(topNav.chipX[NAV_SEARCH], topNav.chipX[NAV_SET]) : 0), 50 - h / 2, topNav.chipW[i], h, chip_focus, chip_act, i, 0); }
+  if (!signin && pg < 0.3f) for (int i = 0; i <= NAV_ANIME; i++) {
+    float sh = i == NAV_SEARCH ? update_search_shift(topNav.chipX[NAV_SEARCH], topNav.chipX[NAV_SET]) : 0;
+    if (i == NAV_SEARCH && search_fade(sh) < 0.05f) continue; /* faded out: no ghost click target over the tabs */
+    float h = i < 2 ? 76 : 66; hit_add_nav(topNav.chipX[i] + sh, 50 - h / 2, topNav.chipW[i], h, chip_focus, chip_act, i, 0); }
   static float barOut, barV; { float want = btr_melt() > 0.04f ? 1.0f : 0.0f, w = 11.0f, dt = DT > 0.05f ? 0.05f : DT; barV += (w * w * (want - barOut) - 2 * w * barV) * dt; barOut += barV * dt; if (fabsf(want - barOut) < 0.002f && fabsf(barV) < 0.01f) { barOut = want; barV = 0; } } /* its own motion: a spring that starts softly, travels and settles (half a second), turning back smoothly from wherever it is */
   float mt = barOut < 0 ? 0 : barOut > 1 ? 1 : barOut, ma = mt < 0.15f ? 0 : mt > 0.75f ? 1 : (mt - 0.15f) / 0.6f, rv = ease_apply(EASE_CSS_EASE, app_reveal_x(0, 0.4f)) * (1 - ma * ma * (3 - 2 * ma)); rv *= 1 - pg; if (rv < 1) gfx_opacity_push(rv); /* the background trailer: the bar rises out of the screen, fading across the middle of its way, and comes back as it goes */ float lift = -70 * pg - 140 * mt; if (lift < 0) gfx_offset_push(0, lift);
   float nx = nudge_x(&topNav.nudge), ny = nudge_y(&topNav.nudge);
   if (!signin) {
-    /* the tabs' capsule: one piece of glass behind the three, brighter while the bar has the focus */
+    /* the tabs' capsule: one piece of glass behind the four, brighter while the bar has the focus */
     { static Tween lit; tween_to(&lit, topNav.active ? 1 : 0, 0.3f, EASE_CSS_EASE); tween_tick(&lit, DT);
-      float cx0 = topNav.chipX[NAV_DISC] - 8, cx1 = topNav.chipX[NAV_LIB] + topNav.chipW[NAV_LIB] + 8;
+      int cFirst = app_rtl() ? NAV_ANIME : NAV_DISC, cLast = app_rtl() ? NAV_DISC : NAV_ANIME;
+      float cx0 = topNav.chipX[cFirst] - 8, cx1 = topNav.chipX[cLast] + topNav.chipW[cLast] + 8;
       { static float lean; float want = topNav.active && topNav.idx >= NAV_DISC ? ((topNav.px.v + topNav.pw.v / 2 - cx0) / (cx1 - cx0) - 0.5f) * 0.12f : 0; lean += (want - lean) * fminf(1, DT * 0.8f); /* the light leans a little towards the focused tab, slowly */
         lgSpotLean = lean; }
       { float gx = cx0, gy = 50 - 39, gw = cx1 - cx0, gh = 78; if (topNav.active && topNav.idx >= NAV_DISC) lg_squish(&gx, &gy, &gw, &gh, nx, ny); /* the focus pushed against the end: the capsule bulges with it */
         lg_glass(gx, gy, gw, gh, gh / 2, ACC, 0.85f + 0.3f * lit.v); }
       /* the current tab, when the focus is elsewhere: a softer piece of glass inside it */
-      static Tween mk[3]; /* (only while the focus is out of the bar: moving to Search or Settings, nothing is left lit on the tabs) */
-      for (int i = NAV_DISC; i <= NAV_LIB; i++) { tween_to(&mk[i - NAV_DISC], chipCur(i) && !topNav.active ? 1 : 0, 0.2f, EASE_CSS_EASE); tween_tick(&mk[i - NAV_DISC], DT); }
-      for (int i = NAV_DISC; i <= NAV_LIB; i++) { float a = mk[i - NAV_DISC].v; if (a > 0.01f) { gfx_opacity_push(a); gfx_rrect(topNav.chipX[i], 50 - 30, topNav.chipW[i], 60, 30, WHITE_A(20)); gfx_ring(topNav.chipX[i], 50 - 30, topNav.chipW[i], 60, 30, 1, WHITE_A(46)); gfx_opacity_pop(); } } }
+      static Tween mk[NAV_TABS]; /* (only while the focus is out of the bar: moving to Search or Settings, nothing is left lit on the tabs) */
+      for (int i = NAV_DISC; i <= NAV_ANIME; i++) { tween_to(&mk[i - NAV_DISC], chipCur(i) && !topNav.active ? 1 : 0, 0.2f, EASE_CSS_EASE); tween_tick(&mk[i - NAV_DISC], DT); }
+      for (int i = NAV_DISC; i <= NAV_ANIME; i++) { float a = mk[i - NAV_DISC].v; if (a > 0.01f) { gfx_opacity_push(a); gfx_rrect(topNav.chipX[i], 50 - 30, topNav.chipW[i], 60, 30, WHITE_A(20)); gfx_ring(topNav.chipX[i], 50 - 30, topNav.chipW[i], 60, 30, 1, WHITE_A(46)); gfx_opacity_pop(); } } }
     /* the focus: liquid accent glass that stretches as it glides and settles back round (its speed, smoothed) */
     float pa = topNav.pill.v; if (pa > 0.001f) { static float lastX, sv, dir; float x = topNav.px.v, w = topNav.pw.v, h = 62, r = 31; float x0 = lastX; lglass_stretch(&sv, &lastX, x, DT); if (fabsf(x - x0) > 0.01f) dir = x > x0 ? 1 : -1; /* 0..1, and which way */
       float sw = w * (1 + 0.22f * sv), sh = h * (1 - 0.10f * sv), px = x + w / 2 - sw / 2, py = 50 - sh / 2;
@@ -493,10 +503,10 @@ void topnav_draw(void) {
       gfx_rrect_v(px, py, sw, sh, sh / 2, WHITE_A(40), WHITE_A(0)); gfx_clip_push(px, py, sw, sh); gfx_alpha_tex(gfx_radial_tex(), px + sw * 0.15f, py - sh * 0.6f, sw * 0.7f, sh, WHITE_A(55)); gfx_clip_pop();
       gfx_ring(px, py, sw, sh, sh / 2, 1.2f, WHITE_A(70)); (void)r; /* a fine bright edge: no glint sliding across a moving pill */
       gfx_offset_pop(); gfx_opacity_pop(); }
-    for (int i = NAV_DISC; i <= NAV_LIB; i++) {
+    for (int i = NAV_DISC; i <= NAV_ANIME; i++) {
       int cur = chipCur(i), f = chipFocused(i); float x = topNav.chipX[i], w = topNav.chipW[i];
       if (f) gfx_offset_push(nx, ny);
-      { static Tween em[3]; Tween *e = &em[i - NAV_DISC]; tween_to(e, f || (cur && !topNav.active) ? 1 : 0, 0.22f, EASE_CSS_EASE); tween_tick(e, DT); /* bold while focused, or the page shown with the focus elsewhere: crossfaded both ways */
+      { static Tween em[NAV_TABS]; Tween *e = &em[i - NAV_DISC]; tween_to(e, f || (cur && !topNav.active) ? 1 : 0, 0.22f, EASE_CSS_EASE); tween_tick(e, DT); /* bold while focused, or the page shown with the focus elsewhere: crossfaded both ways */
         float ty = 50 - text_line_height(32) / 2.0f, k = e->v;
         if (k < 0.999f) text_draw(chipLabel(i), x + w / 2, ty, 32, 400, WHITE_A((int)(184 * (1 - k))), 0, 0, ALIGN_CENTER);
         if (k > 0.001f) text_draw(chipLabel(i), x + w / 2, ty, 32, 700, WHITE_A((int)(255 * k)), 0, 0, ALIGN_CENTER); }
@@ -510,7 +520,7 @@ void topnav_draw(void) {
   if (rv < 1) gfx_opacity_pop();
   lglass_light(0); if (!welcome_is_open()) { float ck = (1 - ma * ma * (3 - 2 * ma)) * (1 - pg); if (ck < 1) gfx_opacity_push(ck); if (lift < 0) gfx_offset_push(0, lift); clock_draw(); if (lift < 0) gfx_offset_pop(); if (ck < 1) gfx_opacity_pop(); } /* the clock: never faded in with the page (it stays where it is through signing in, the start screen and the guide); away only with the bar for a trailer or the reviews */
 }
-void app_clock_top(void) { if (splash_signed_in() || welcome_is_open()) { lglass_light(0); clock_draw(); } } /* over the start screen and the guide: the same clock, in its place
+void app_clock_top(void) { if (splash_signed_in() || welcome_is_open()) { lglass_light(0); clock_draw(); } } /* over the start screen and the guide: the same clock, in its place */
 
 /* ---- the backdrop: two layers, the new one fades in over the old (never a dip to black) ---- */
 #define BGW 1280
@@ -699,14 +709,15 @@ void app_go(Scr s, const void *params, int noStack) {
   Scr old = SCR;
   if ((s == SCR_SET || s == SCR_SEARCH) && old != SCR_SET && old != SCR_SEARCH && old != SCR_LOGIN) { colorFrom = old; colorFromSet = 1; } /* where Settings / Search were opened from */
   xoutT.on = 0; if (old != s && app_splash_done && navf.kind == NAV_BACKZ && screens[old] && screens[old]->out) { xoutScr = old; timer_start(&xoutT, XOUT_DUR); }
-  int shared = (old == SCR_HOME || old == SCR_DISC) && (s == SCR_HOME || s == SCR_DISC);
-  /* every switch is a hand-over (no screen pops in), signing out to the sign-in page too; Home and Discover share one
+  int shared = (old == SCR_HOME || old == SCR_DISC || old == SCR_ANIME) && (s == SCR_HOME || s == SCR_DISC || s == SCR_ANIME);
+  /* every switch is a hand-over (no screen pops in), signing out to the sign-in page too; Home, Discover and Anime share one
      layer and hand over on their own; signing in restarts behind the start screen */
   int xf = app_splash_done && old != s && old != SCR_LOGIN && !shared;
-  { int tab = (old == SCR_HOME || old == SCR_DISC || old == SCR_LIB) && (s == SCR_HOME || s == SCR_DISC || s == SCR_LIB);
+  { int tab = (old == SCR_HOME || old == SCR_DISC || old == SCR_LIB || old == SCR_ANIME) && (s == SCR_HOME || s == SCR_DISC || s == SCR_LIB || s == SCR_ANIME);
     if (old != s && app_splash_done && !tab) sx_begin(0); } /* page to page, the same logo, poster or words move across (never between the tabs) */
   if (screens[old] && screens[old]->leave && old != s) screens[old]->leave();
   SCR = s;
+  if (app_is_board(s)) lastTab = s;
   if (s == SCR_HOME || s == SCR_LIB) sb_sync_soon(0);
   if (s != SCR_DETAIL) accent_scope(NULL, NULL, NULL); /* the title page sets its own cover colour */
   bg_set_mode(s == SCR_DETAIL);
@@ -719,11 +730,11 @@ void app_go(Scr s, const void *params, int noStack) {
   topnav_paint();
 }
 void app_back(void) {
-  if (topNav.want >= 0) { topnav_flush(1); Scr cur = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; for (int j = 0; j < 5; j++) if (chipScr(j) == cur) topNav.idx = j; topnav_paint(); return; } /* Back while the pill travels: it returns */
+  if (topNav.want >= 0) { topnav_flush(1); Scr cur = curTabScr(); for (int j = 0; j <= NAV_ANIME; j++) if (chipScr(j) == cur) topNav.idx = j; topnav_paint(); return; } /* Back while the pill travels: it returns */
   if (app_overlay) { app_overlay->key(K_BACK); return; }
   if (SCR == SCR_LOGIN) { if (screens[SCR] && screens[SCR]->key) screens[SCR]->key(K_BACK); return; }
   if (screens[SCR] && screens[SCR]->key && screens[SCR]->key(K_BACK)) return; /* the screen stepped back inside itself */
-  int ci = -1; for (int j = 0; j < 5; j++) if (chipScr(j) == SCR) ci = j;
+  int ci = -1; for (int j = 0; j <= NAV_ANIME; j++) if (chipScr(j) == SCR) ci = j;
   if (topNav.active) { if (SCR != SCR_HOME) { nav_slide(NAV_HOME >= ci ? 1 : -1); topNav.idx = NAV_HOME; app_go(SCR_HOME, NULL, 1); topNav.active = 0; topnav_paint(); } else exit_ask(); return; }
   if (nback) { Scr prev = backStack[--nback]; navf.kind = NAV_BACKZ; navf.x = backX[nback]; navf.y = backY[nback]; app_go(prev, NULL, 1); return; }
   if (ci >= 0) { topnav_focus(); return; } /* inside a tab (Home, Discover, Library, Search, Settings): Back goes up to the tab bar first; from there, Home, then the exit question */
@@ -774,7 +785,7 @@ static void ptr_show(void) { PTR.arrowHid = 0; if (PTR.on) return; PTR.on = 1; P
 static void ptr_hide(void) { if (!PTR.on) return; PTR.on = 0; PTR.hasHv = 0; }
 static int ptr_tremor(double now) { if (!PTR.arrowHid) return 0; if (now - PTR.arrowAt < PTR_ARROW_WIN) return 1;
   if (!PTR.anchor || now - PTR.tremAt > PTR_ARROW_PAUSE) { PTR.anchor = 1; PTR.ax = PTR.x; PTR.ay = PTR.y; } PTR.tremAt = now; float dx = PTR.x - PTR.ax, dy = PTR.y - PTR.ay; return dx * dx + dy * dy < PTR_ARROW_DIST * PTR_ARROW_DIST; }
-static void ptr_nav_back(void) { if (topNav.want >= 0) return; Scr cur = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; for (int j = 2; j < 5; j++) if (chipScr(j) == cur && topNav.idx != j) { topNav.idx = j; topnav_paint(); } }
+static void ptr_nav_back(void) { if (topNav.want >= 0) return; Scr cur = curTabScr(); for (int j = NAV_DISC; j <= NAV_ANIME; j++) if (chipScr(j) == cur && topNav.idx != j) { topNav.idx = j; topnav_paint(); } }
 static void ptr_keep(const Hit *h) { PTR.hv = *h; PTR.hasHv = 1; PTR.hx = h->x + h->w / 2; PTR.hy = h->y + h->h / 2; }
 /* the brake: the element the pointer last focused moved (a slide, a scroll) or went away -> note when */
 static void ptr_settle(double now) { if (!PTR.hasHv) return; const Hit *h = hit_at(PTR.hx, PTR.hy); int found = 0; float cx = PTR.hx, cy = PTR.hy;
@@ -808,7 +819,7 @@ void app_pointer_button(int down, float x, float y) {
   const Hit *d = hit_at(x, y); if (d && hit_same(d, &PTR.act)) PTR.act.act(PTR.act.a, PTR.act.b); /* released on it: its own action */
 }
 /* the wheel = the Up/Down arrows (Left/Right for a sideways wheel), one per notch; it leaves the pointer out */
-void app_pointer_wheel(float dx, float dy) { double now = NOW; if (saver_on()) return; if (now - PTR.wheelAt < PTR_WHEEL || (!dx && !dy)) return; PTR.wheelAt = now; idle_touch(); int k = dy > 0 ? K_UP : dy < 0 ? K_DOWN : dx > 0 ? K_RIGHT : K_LEFT; key_core(app_mirror_key(k), 1, 0); key_core(k, 0, 0); }
+void app_pointer_wheel(float dx, float dy) { double now = NOW; if (saver_on()) return; if (now - PTR.wheelAt < PTR_WHEEL || (!dx && !dy)) return; PTR.wheelAt = now; idle_touch(); int k = dy > 0 ? K_UP : dy < 0 ? K_DOWN : dx > 0 ? K_RIGHT : K_LEFT; key_core(k, 1, 0); key_core(k, 0, 0); }
 void app_pointer_system(int show) { if (!show) { ptr_hide(); return; } if (PTR.arrowHid) return; ptr_show(); }
 void app_key(int k, int down, int repeat) {
   if (k == K_CURSOR_SHOW || k == K_CURSOR_HIDE) { if (down) app_pointer_system(k == K_CURSOR_SHOW); return; } /* a notice from the TV, not a key */
@@ -841,11 +852,11 @@ static void key_core(int k, int down, int repeat) {
      picked up): not input that stops the background trailer */
   if (k != K_CURSOR_SHOW && k != K_CURSOR_HIDE) { char why[32]; snprintf(why, sizeof why, "key %d", k); curKey = k; idle_touch_by(why); }
   k = app_mirror_key(k); /* mirrored layout: Left moves forward (every screen sees the logical direction) */
-  if (k >= K_LEFT && k <= K_DOWN) { /* an arrow: a tap when the focus moved (a screen's own sound, e.g. a filter, wins) */
+  if ((k >= K_LEFT && k <= K_DOWN) || k == K_CH_UP || k == K_CH_DOWN) { /* an arrow or channel page: a tap when the focus moved */
     FocusSig f0, f1; focus_sig(&f0); double t0 = NOW; key_dispatch(k, repeat); focus_sig(&f1);
     /* the glows lean the way it went: a tab sweeps them across, a step only leans them (held keys, less) */
     if (f1.nav && f1.navIdx != f0.navIdx) orbs_pulse(f1.navIdx > f0.navIdx ? ORB_TAB_R : ORB_TAB_L, 0.8f);
-    else orbs_pulse(k == K_LEFT ? ORB_LEFT : k == K_RIGHT ? ORB_RIGHT : k == K_UP ? ORB_UP : ORB_DOWN, repeat ? 0.15f : memcmp(&f0, &f1, sizeof f0) ? 0.35f : 0.2f);
+    else orbs_pulse(k == K_LEFT ? ORB_LEFT : k == K_RIGHT ? ORB_RIGHT : (k == K_UP || k == K_CH_UP) ? ORB_UP : ORB_DOWN, repeat ? 0.15f : memcmp(&f0, &f1, sizeof f0) ? 0.35f : 0.2f);
     if (sound_last() < t0 - 1e-6 && memcmp(&f0, &f1, sizeof f0)) sound_play(f1.nav && f1.navIdx != f0.navIdx ? SND_TAB : SND_FOCUS);
     else if (sound_last() < t0 - 1e-6 && !f1.known) sound_play(SND_FOCUS); /* a sheet that cannot say where its focus is: every move */
     return; }
@@ -861,7 +872,7 @@ static void key_dispatch(int k, int repeat) {
   if (k == K_EXIT) { app_quit(); return; }
   if ((k == K_RED || k == K_GREEN) && SCR != SCR_LOGIN) { if (k == K_RED && update_notice_key()) { sound_play(SND_TAB); return; } /* a notice out: red takes you to what it is about */
     int t = k == K_RED ? NAV_SET : NAV_SEARCH; sound_play(SND_TAB);
-    if (SCR == chipScr(t) && colorFromSet) { Scr p = colorFrom; colorFromSet = 0; int ci = -1; for (int j = 0; j < 5; j++) if (chipScr(j) == p) ci = j; /* pressed on its own page: back where it was opened from */
+    if (SCR == chipScr(t) && colorFromSet) { Scr p = colorFrom; colorFromSet = 0; int ci = -1; for (int j = 0; j <= NAV_ANIME; j++) if (chipScr(j) == p) ci = j; /* pressed on its own page: back where it was opened from */
       topnav_flush(1); navf.kind = NAV_BACKZ; navf.x = topNav.chipX[t] + topNav.chipW[t] / 2; navf.y = 50; topNav.idx = ci >= 0 ? ci : NAV_HOME;
       app_go(p, NULL, 1); topNav.active = 0; topnav_paint(); return; } topnav_flush(1); if (chipScr(t) != SCR) { topNav.idx = -1; topnav_switch(t); } topNav.idx = t; topnav_enter_content(); return; } /* the remote's colour keys: red Settings, green Search */
   if (topNav.active) { topnav_key(k); return; }
@@ -870,7 +881,7 @@ static void key_dispatch(int k, int repeat) {
   if (screens[SCR] && screens[SCR]->key) screens[SCR]->key(k);
 }
 void app_text(const char *utf8) { idle_touch(); if (app_overlay && app_overlay->text) app_overlay->text(utf8); else if (screens[SCR] && screens[SCR]->text) screens[SCR]->text(utf8); }
-void app_refresh_boards(void) { extern void board_invalidate(void); extern void board_refresh_quiet(void); board_invalidate(); if (app_is_board(SCR)) board_refresh_quiet(); } /* in place: no row replays its entrance */
+void app_refresh_boards(void) { extern void board_invalidate_home(void); extern void board_refresh_quiet(void); board_invalidate_home(); if (SCR == SCR_HOME) board_refresh_quiet(); } /* in place: only Home carries Continue Watching */
 void app_init(void) {
   vig_tex(0); vig_tex(1); /* both shadings made at start: the first title page would make its own mid-zoom */
   topNav.want = -1; NOW = SDL_GetTicks() / 1000.0; lastIn = NOW; lastNav = NOW; bgMode = 0; tween_set(&toastA, 0);

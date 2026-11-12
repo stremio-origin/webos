@@ -242,12 +242,16 @@ int main(int argc, char **argv) {
   cache_prune_start(400);
 #endif
   snprintf(p, sizeof p, "%s/cache", store_data_dir()); img_init(p); img_set_draw_scale(gfx_scale());
+#ifdef SB_WEBOS
+  if (memMb > 0) img_set_budget_mb(memMb < 1200 ? 40 : memMb < 2500 ? 80 : 128); /* ~2 GB TVs share RAM with compositor + 4K media pipeline: 80 MB (~400 posters) stays clear of OOM while keeping tab warm-up active */
+#else
   if (memMb > 0) img_set_budget_mb(memMb < 1200 ? 40 : memMb < 3000 ? 128 : 192); /* pictures under the RAM the TV has (the shared atlas, backdrop and text add ~20 MB) */
+#endif
   i18n_init(plat_asset_dir(), getenv("SB_LANG") ? getenv("SB_LANG") : store_get("uiLang", "auto")); /* SB_LANG=ar: development */
   if (!text_init(plat_asset_dir(), gfx_scale())) return 1;
   text_set_rtl(i18n_rtl()); icon_init(plat_asset_dir()); sb_init();
   app_init(); player_init();
-  app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen);
+  app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen); app_register(SCR_ANIME, &animeScreen);
   app_register(SCR_DETAIL, &detailScreen); app_register(SCR_SIM, &simScreen); app_register(SCR_SEARCH, &searchScreen); app_register(SCR_SET, &setScreen); app_card_menu_hook = cwmenu_show;
   if (sb_signed_in() || getenv("SB_SKIP_LOGIN")) { app_go(SCR_HOME, NULL, 1); splash_start(1, 0); } /* SB_SKIP_LOGIN: the default rows without an account (development) */
   else { app_splash_done = 1; app_go(SCR_LOGIN, NULL, 1); }
@@ -327,9 +331,9 @@ int main(int argc, char **argv) {
         if (app_idle() < 0.5f) { hzState = 0; SDL_GL_SetSwapInterval(0); } /* a key: measured again at the next quiet moment */
         else if (hzN == 60) { hzState = 2; SDL_GL_SetSwapInterval(0);
           for (int i = 1; i < hzN; i++) { float x = hzIv[i]; int j = i - 1; while (j >= 0 && hzIv[j] > x) { hzIv[j + 1] = hzIv[j]; j--; } hzIv[j + 1] = x; }
-          float med = hzIv[hzN / 4], best = 1e9f; /* (the quicker quarter: a frame that waits on the app is not the screen) */ static const int R[] = { 48, 50, 60 }; int hz = 0;
-          for (int i = 0; i < 3; i++) { float d = fabsf(1000.0f / R[i] - med); if (d < best && d < 0.6f) { best = d; hz = R[i]; } }
-          fprintf(stderr, "[pace] frames reach the screen every %.1f ms (%.1f to %.1f)\n", med, hzIv[hzN / 10], hzIv[hzN - 1 - hzN / 10]); if (hz) pace_set_hz(hz); else if (++hzTries < 30) { hzState = 0; hzNext = SDL_GetTicks() + 20000; } } } /* (no rate matched: something was still busy; again in 10 s) */
+          float med = hzIv[hzN / 4], best = 1e9f; /* (the quicker quarter: a frame that waits on the app is not the screen) */ static const int R[] = { 48, 50, 60, 120 }; int hz = 0;
+          for (int i = 0; i < 4; i++) { float d = fabsf(1000.0f / R[i] - med); if (d < best && d < 0.6f) { best = d; hz = R[i]; } }
+          fprintf(stderr, "[pace] frames reach the screen every %.1f ms (%.1f to %.1f)\n", med, hzIv[hzN / 10], hzIv[hzN - 1 - hzN / 10]); if (hz) pace_set_hz(hz > 60 ? 60 : hz); else if (++hzTries < 30) { hzState = 0; hzNext = SDL_GetTicks() + 20000; } } } /* (no rate matched: something was still busy; again in 20 s) */
       hzDone:;
 #endif
     }
@@ -365,9 +369,9 @@ int main(int argc, char **argv) {
         if (lvl != gLvl) { fprintf(stderr, "[mem] guard %d -> %d: app %d MB, TV free %d MB of %d%s\n", gLvl, lvl, rss, fr, tot, film ? " (a film plays)" : ""); gLvl = lvl; } } }
     { /* every 30 s a line of where the memory is (the TV ends an app that takes too much: the shared log then says what grew) */
       static Uint32 memAt; if (SDL_GetTicks() - memAt >= 30000 || !memAt) { memAt = SDL_GetTicks(); int rss, swp; plat_mem_self(&rss, &swp); long tb, pb; int tn; gfx_mem(&tb, &tn, &pb);
-        static const char *SN[] = { "sign-in", "home", "discover", "library", "title", "similar", "search", "settings" };
+        static const char *SN[] = { "sign-in", "home", "discover", "library", "anime", "title", "similar", "search", "settings" };
         fprintf(stderr, "[mem] app %d MB (swap %d) · TV free %d MB · pictures %d of %d MB · textures %ld MB in %d (kept for reuse %ld MB) · %s%s%s\n", rss, swp, plat_mem_free_mb(), img_used_mb(), img_budget_mb(),
-          tb >> 20, tn, pb >> 20, (unsigned)SCR < 8 ? SN[SCR] : "?", player_open() ? " · player" : "", asssubs_on() ? " · styled subtitles" : ""); } }
+          tb >> 20, tn, pb >> 20, (unsigned)SCR < SCR_N ? SN[SCR] : "?", player_open() ? " · player" : "", asssubs_on() ? " · styled subtitles" : ""); } }
     if (shot && frame == shotAt) { screenshot(shot, dw, dh); if (getenv("SB_SHOT_EXIT")) app_quit(); }
   }
   fprintf(stderr, "[exit] after %d frames\n", frame);

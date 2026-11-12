@@ -296,9 +296,25 @@ int video_init(const char *ignored) {
   fprintf(stderr, "[video] ready as %s (%s)\n", name, acb ? "ACB plane" : "exported window");
   return 1;
 }
+static int json_escape(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  for (const unsigned char *s = (const unsigned char *)src; s && *s; s++) {
+    unsigned char c = *s;
+    if (c == '"' || c == '\\') { if (o + 2 >= cap) { dst[o] = 0; return 0; } dst[o++] = '\\'; dst[o++] = (char)c; }
+    else if (c == '\n') { if (o + 2 >= cap) { dst[o] = 0; return 0; } dst[o++] = '\\'; dst[o++] = 'n'; }
+    else if (c == '\r') { if (o + 2 >= cap) { dst[o] = 0; return 0; } dst[o++] = '\\'; dst[o++] = 'r'; }
+    else if (c == '\t') { if (o + 2 >= cap) { dst[o] = 0; return 0; } dst[o++] = '\\'; dst[o++] = 't'; }
+    else if (c < 0x20) { if (o + 6 >= cap) { dst[o] = 0; return 0; } o += (size_t)snprintf(dst + o, cap - o, "\\u%04x", c); }
+    else { if (o + 1 >= cap) { dst[o] = 0; return 0; } dst[o++] = (char)c; }
+  }
+  if (o < cap) dst[o] = 0;
+  return 1;
+}
 static void stop_session(void) {
-  pthread_mutex_lock(&mu); char mid[64]; snprintf(mid, sizeof mid, "%s", S.mediaId); session++; memset(&S, 0, sizeof S); S.st = VID_IDLE; S.curTxt = -1; pthread_mutex_unlock(&mu);
+  pthread_mutex_lock(&mu);
+  char mid[64]; snprintf(mid, sizeof mid, "%s", S.mediaId); session++; memset(&S, 0, sizeof S); S.st = VID_IDLE; S.curTxt = -1;
   seekTarget = -1; seekRefusedTries = 0; seekRetryAt = 0; seekWait = 0; hold = 0; lastCT = -1;
+  pthread_mutex_unlock(&mu);
   if (mid[0]) { char b[128]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", mid); call("unload", b, NULL, NULL); }
 }
 void video_unload(void) { resume.on = 0; timed.on = 0; url[0] = 0; stop_session(); }
@@ -306,8 +322,9 @@ static void start_load(void) {
   if (!ready && !video_init(NULL)) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "no media service"); pthread_mutex_unlock(&mu); return; }
   stop_session(); txtPending = -2; pthread_mutex_lock(&mu); S.st = VID_LOADING; S.curTxt = -1; if (timed.on) { S.pos = timed.off; S.dur = timed.dur; } pthread_mutex_unlock(&mu); unsigned mine = session;
   cropSX = -1; noCrop = 0;
-  char payload[8192 + 512]; const char *win = expWin[0] ? expWin : "window_id_dummy";
-  int n = snprintf(payload, sizeof payload, "{\"payload\":{\"option\":{\"useSeekableRanges\":true,\"appId\":\"%s\",\"bufferControl\":{\"userBufferCtrl\":false},\"windowId\":\"%s\"}},\"uri\":\"%s\",\"type\":\"media\"}", SB_APP_ID, win, url);
+  char escUrl[16384], payload[16384 + 512]; const char *win = expWin[0] ? expWin : "window_id_dummy";
+  if (!json_escape(url, escUrl, sizeof escUrl)) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "address too long"); pthread_mutex_unlock(&mu); return; }
+  int n = snprintf(payload, sizeof payload, "{\"payload\":{\"option\":{\"useSeekableRanges\":true,\"appId\":\"%s\",\"bufferControl\":{\"userBufferCtrl\":false},\"windowId\":\"%s\"}},\"uri\":\"%s\",\"type\":\"media\"}", SB_APP_ID, win, escUrl);
   if (n >= (int)sizeof payload) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "address too long"); pthread_mutex_unlock(&mu); return; }
   if (expWin[0]) apply_plane(); /* the exported window gets its frame and place before the load */
   if (!call("load", payload, on_load, (void *)(uintptr_t)mine)) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "no media service"); pthread_mutex_unlock(&mu); }
@@ -330,13 +347,13 @@ void video_set_volume(int pct, int easeMs) {
 void video_pause(void) { pthread_mutex_lock(&mu); S.pausedByUs = 1; S.st = VID_PAUSED; pthread_mutex_unlock(&mu); simple("pause"); }
 /* presses add up: the shown position moves at once, the pipeline gets one seek 350 ms after the last (four
    seeks in under a second were followed by a dead pipeline) */
-void video_seek(double sec) { if (sec < 0) sec = 0; pthread_mutex_lock(&mu); S.pos = sec; posAt = SDL_GetTicks() / 1000.0; hold_on(); pthread_mutex_unlock(&mu); seekTarget = sec; seekAt = SDL_GetTicks() + 350; }
+void video_seek(double sec) { if (sec < 0) sec = 0; pthread_mutex_lock(&mu); S.pos = sec; posAt = SDL_GetTicks() / 1000.0; hold_on(); seekTarget = sec; seekAt = SDL_GetTicks() + 350; pthread_mutex_unlock(&mu); }
 static void seek_now(double sec) {
   if (timed.on) { /* the stream starts again from there, with the tracks it had */
     pthread_mutex_lock(&mu); int aud = S.curAud, txt = S.curTxt; pthread_mutex_unlock(&mu);
     timed.off = sec; snprintf(url, sizeof url, "%s?t=%.3f", timed.base, sec); fprintf(stderr, "[video] the stream again from %.0f s\n", sec);
     resume.on = 1; resume.at = 0; resume.aud = aud; resume.txt = txt; start_load(); return; }
-  seekWait = 1; seekWaitAt = SDL_GetTicks(); char mid[64]; pthread_mutex_lock(&mu); snprintf(mid, sizeof mid, "%s", S.mediaId); pthread_mutex_unlock(&mu); if (!mid[0]) return; char b[160]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", mid, (int)(sec * 1000)); call("seek", b, NULL, NULL); }
+  char mid[64]; pthread_mutex_lock(&mu); seekWait = 1; seekWaitAt = SDL_GetTicks(); snprintf(mid, sizeof mid, "%s", S.mediaId); pthread_mutex_unlock(&mu); if (!mid[0]) return; char b[160]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", mid, (int)(sec * 1000)); call("seek", b, NULL, NULL); }
 /* the TV reports the time only now and then (on some sets every few seconds): between reports it runs on with the
    clock while playing, and stands where it was when paused (a paused frame asked again lands on the right second), while
    buffering and from a seek until the picture moves again (a set that reports rarely: let go after 10 s of play) */
@@ -347,16 +364,16 @@ double video_time(void) { pthread_mutex_lock(&mu); double p = pos_now(); pthread
 double video_duration(void) { pthread_mutex_lock(&mu); double d = S.dur; pthread_mutex_unlock(&mu); return d; }
 double video_buffered_end(void) { pthread_mutex_lock(&mu); double b = S.bufEnd; pthread_mutex_unlock(&mu); return b; }
 VidState video_state(void) { pthread_mutex_lock(&mu); VidState s = S.st; pthread_mutex_unlock(&mu); return s; }
-const char *video_error(void) { return S.err; }
+const char *video_error(void) { static char errCopy[160]; pthread_mutex_lock(&mu); snprintf(errCopy, sizeof errCopy, "%s", S.err); pthread_mutex_unlock(&mu); return errCopy; }
 int video_live(void) { pthread_mutex_lock(&mu); int l = S.live; pthread_mutex_unlock(&mu); return l; }
-int video_settling(void) { return seekTarget >= 0 || (seekWait && SDL_GetTicks() - seekWaitAt < 8000); }
-int video_width(void) { return S.w; }
-int video_height(void) { return S.h; }
+int video_settling(void) { pthread_mutex_lock(&mu); int s = seekTarget >= 0 || (seekWait && SDL_GetTicks() - seekWaitAt < 8000); pthread_mutex_unlock(&mu); return s; }
+int video_width(void) { pthread_mutex_lock(&mu); int w = S.w; pthread_mutex_unlock(&mu); return w; }
+int video_height(void) { pthread_mutex_lock(&mu); int h = S.h; pthread_mutex_unlock(&mu); return h; }
 double video_fps(void) { pthread_mutex_lock(&mu); double f = S.fps; pthread_mutex_unlock(&mu); return f; }
 int video_hdr(char *out, int cap) { pthread_mutex_lock(&mu); snprintf(out, (size_t)cap, "%s", S.hdr); pthread_mutex_unlock(&mu); return out[0] != 0; }
-int video_audio_unsupported(void) { return S.audioUnsup; }
+int video_audio_unsupported(void) { pthread_mutex_lock(&mu); int u = S.audioUnsup; pthread_mutex_unlock(&mu); return u; }
 int video_audio_tracks(VidTrack *out, int max) { pthread_mutex_lock(&mu); int n = S.naud < max ? S.naud : max; memcpy(out, S.aud, n * sizeof *out); pthread_mutex_unlock(&mu); return n; }
-int video_audio_current(void) { return S.curAud; }
+int video_audio_current(void) { pthread_mutex_lock(&mu); int a = S.curAud; pthread_mutex_unlock(&mu); return a; }
 void video_select_audio(int idx) {
   char mid[64]; pthread_mutex_lock(&mu); snprintf(mid, sizeof mid, "%s", S.mediaId); if (idx != S.curAud) S.audioUnsup = 0; S.curAud = idx; pthread_mutex_unlock(&mu); if (!mid[0]) return;
   char b[192]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"audio\",\"index\":%d}", mid, idx); call("selectTrack", b, NULL, NULL);
@@ -408,6 +425,11 @@ void video_pump(void) {
   if (resume.on && loaded) { /* tracks first, then the position: a track change restarts the decode */
     resume.on = 0; if (resume.aud > 0) video_select_audio(resume.aud); if (resume.txt >= 0) video_select_text(resume.txt); if (resume.at > 1) { seek_now(resume.at); }
   }
-  if (seekTarget >= 0 && SDL_TICKS_PASSED(SDL_GetTicks(), seekAt)) { double t = seekTarget; seekTarget = -1; seek_now(t); }
-  if (seekRetryAt && SDL_TICKS_PASSED(SDL_GetTicks(), seekRetryAt)) { seekRetryAt = 0; double t = video_time(); fprintf(stderr, "[video] seek refused: again (%d)\n", seekRefusedTries); seek_now(t); }
+  double doSeek = -1, doRetry = -1; int retryNum = 0; Uint32 nowTicks = SDL_GetTicks();
+  pthread_mutex_lock(&mu);
+  if (seekTarget >= 0 && SDL_TICKS_PASSED(nowTicks, seekAt)) { doSeek = seekTarget; seekTarget = -1; }
+  if (seekRetryAt && SDL_TICKS_PASSED(nowTicks, seekRetryAt)) { seekRetryAt = 0; doRetry = pos_now(); retryNum = seekRefusedTries; }
+  pthread_mutex_unlock(&mu);
+  if (doSeek >= 0) seek_now(doSeek);
+  if (doRetry >= 0) { fprintf(stderr, "[video] seek refused: again (%d)\n", retryNum); seek_now(doRetry); }
 }
