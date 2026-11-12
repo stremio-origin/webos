@@ -5,10 +5,11 @@
 #include "core/stremio.h"
 typedef struct { double s, e; char *t; } Cue;
 int  subs_parse(const char *txt, Cue **out);   /* returns the count; free with subs_free */
-int  subs_parse_body(const unsigned char *body, size_t len, Cue **out); /* a raw gzip body is unpacked first; UTF-16 / Windows-1252 become UTF-8 */
+int  subs_parse_body(const unsigned char *body, size_t len, const char *lang, Cue **out); /* a raw gzip body is unpacked first; UTF-16 / Windows-1252 become UTF-8
+     (lang, the subtitle's language when known: a Central European one not in Unicode is read as Windows-1250) */
 /* a subtitle file fetched and read on a thread of its own; the answer comes through subs_pump() on the main thread.
    status: HTTP status (0 = network failure); cues are the callback's (free with subs_free), n = 0 when nothing was readable */
-void subs_load(const char *url, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud);
+void subs_load(const char *url, const char *lang, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud); /* lang: as subs_parse_body's */
 void subs_pump(void);                          /* every frame while the player is open */
 void subs_free(Cue *c, int n);
 /* languages: one canonical code per language whatever the source uses (639-2 B/T, 639-1, BCP-47) */

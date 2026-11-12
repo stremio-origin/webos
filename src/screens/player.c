@@ -294,7 +294,7 @@ static void on_sub_cues(int status_, Cue *cues, int n, void *ud) {
   if (!P.open || (unsigned)(uintptr_t)ud != SL.tok || strncmp(P.curSub, "ext:", 4)) { subs_free(cues, n); return; } /* another choice since */
   if (n > 0) { subs_free(P.cues, P.ncues); P.cues = cues; P.ncues = n; SL.wait = 0; fprintf(stderr, "[subs] external: %d lines read in %.1f s\n", n, now_() - SL.at); refresh_tray(4); return; }
   subs_free(cues, n);
-  if (status_ <= 0 && !SL.retry) { SL.retry = 1; fprintf(stderr, "[subs] external: no answer, asking once more\n"); subs_load(P.curSub + 4, on_sub_cues, (void *)(uintptr_t)SL.tok); return; } /* one network hiccup */
+  if (status_ <= 0 && !SL.retry) { SL.retry = 1; fprintf(stderr, "[subs] external: no answer, asking once more\n"); subs_load(P.curSub + 4, P.pick.lang, on_sub_cues, (void *)(uintptr_t)SL.tok); return; } /* one network hiccup */
   fprintf(stderr, "[subs] external: failed (HTTP %d, %s)\n", status_, status_ >= 200 && status_ < 300 ? "nothing readable in it" : "no file");
   toast(T("Couldn’t load these subtitles"), 3000, NULL);
   snprintf(P.curSub, sizeof P.curSub, "off"); SL.wait = 0; refresh_tray(4); /* the tray tells the truth: nothing is on */
@@ -305,7 +305,7 @@ static int sub_is(int list, const SubEntry *e) { return list && P.pick.list == l
 static int sub_row(int list, const SubEntry *l, int n) { for (int i = 0; i < n; i++) if (sub_is(list, &l[i])) return i; return -1; }
 static void set_ext_sub(int list, const SubEntry *e) {
   const char *u = e->url; sync_stop(0); snprintf(P.curSub, sizeof P.curSub, "ext:%s", u); P.pick.list = list; snprintf(P.pick.addon, sizeof P.pick.addon, "%s", e->addon); snprintf(P.pick.lang, sizeof P.pick.lang, "%s", e->lang); subs_free(P.cues, P.ncues); P.cues = NULL; P.ncues = 0; video_select_text(-1); if (mkv) mkv_select(mkv, -1);
-  sub_begin(); fprintf(stderr, "[subs] chose external %s\n", u); subs_load(u, on_sub_cues, (void *)(uintptr_t)SL.tok); refresh_tray(4);
+  sub_begin(); fprintf(stderr, "[subs] chose external %s\n", u); subs_load(u, e->lang, on_sub_cues, (void *)(uintptr_t)SL.tok); refresh_tray(4);
 }
 static void set_emb_sub(int n) {
   sync_stop(0); snprintf(P.curSub, sizeof P.curSub, "emb:%d", n); subs_free(P.cues, P.ncues); P.cues = NULL; P.ncues = 0; sub_begin();
