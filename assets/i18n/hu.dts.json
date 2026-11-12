@@ -1,0 +1,11 @@
+{
+"DTS sound": "DTS hang",
+"Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV": "Az Automatikus kideríti, mit játszik le ez a TV. Ha bizonytalan vagy, válaszd az Átalakítást. A Ki a TV-re bízza",
+"Convert": "Átalakítás",
+"Default audio language, DTS, interface sounds": "Alapértelmezett hangnyelv, DTS, kezelőfelület hangjai",
+"Converting the sound for this TV…": "A hang átalakítása ehhez a TV-hez…",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (átalakítva)",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (átalakítva)",
+"Playing the {t} track: this TV can’t play DTS": "Ez a hangsáv szól: {t}. Ez a TV nem tudja lejátszani a DTS-t",
+"Playing the {t} track: this TV can’t play TrueHD": "Ez a hangsáv szól: {t}. Ez a TV nem tudja lejátszani a TrueHD-t"
+}

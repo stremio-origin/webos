@@ -18,11 +18,12 @@ static void index_build(void) {
   idx = calloc(idxCap, sizeof *idx); const cJSON *it;
   cJSON_ArrayForEach(it, dict) if (it->string) { unsigned i = hash_str(it->string) & (idxCap - 1); while (idx[i] && strcmp(idx[i]->string, it->string)) i = (i + 1) & (idxCap - 1); idx[i] = it; }
 }
-static const char *codes[] = { "en", "ar", "fr", "es", "de", "it", "pt", "ru", "tr", "pl", "nl" };
-static const char *names[] = { "English", "العربية", "Français", "Español", "Deutsch", "Italiano", "Português", "Русский", "Türkçe", "Polski", "Nederlands" };
+static const char *codes[] = { "en", "ar", "fr", "es", "de", "it", "pt", "ru", "tr", "pl", "nl", "hu" };
+static const char *names[] = { "English", "العربية", "Français", "Español", "Deutsch", "Italiano", "Português", "Русский", "Türkçe", "Polski", "Nederlands", "Magyar" };
+#define NCODES (int)(sizeof codes / sizeof codes[0])
 
 static char *read_all(const char *p) { FILE *f = fopen(p, "rb"); if (!f) return NULL; fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); char *b = malloc(n + 1); size_t g = fread(b, 1, n, f); b[g] = 0; fclose(f); return b; }
-static int known(const char *c) { for (int i = 0; i < 11; i++) if (!strcmp(codes[i], c)) return 1; return 0; }
+static int known(const char *c) { for (int i = 0; i < NCODES; i++) if (!strcmp(codes[i], c)) return 1; return 0; }
 /* the TV's own language, two letters: its settings service (asked once, the answer kept for the next start),
    else the last answer it gave, else the environment */
 static char tvLang[8];
@@ -40,7 +41,7 @@ static void first_run_defaults(void) {
   static int done; if (done) return; done = 1;
   if (store_get("subsLang", NULL) && store_get("defaultAudioTrack", NULL)) return;
   static const char *M[][2] = { { "en", "eng" }, { "ar", "ara" }, { "fr", "fre" }, { "es", "spa" }, { "de", "ger" }, { "it", "ita" }, { "pt", "por" }, { "ru", "rus" }, { "tr", "tur" }, { "pl", "pol" },
-    { "nl", "dut" }, { "sv", "swe" }, { "he", "heb" }, { "hi", "hin" }, { "ja", "jpn" }, { "ko", "kor" }, { "zh", "chi" } };
+    { "nl", "dut" }, { "hu", "hun" }, { "sv", "swe" }, { "he", "heb" }, { "hi", "hin" }, { "ja", "jpn" }, { "ko", "kor" }, { "zh", "chi" } };
   const char *tv = i18n_tv_lang(), *c = NULL; for (size_t i = 0; i < sizeof M / sizeof M[0]; i++) if (!strcmp(M[i][0], tv)) c = M[i][1];
   if (!c) return;
   if (!store_get("subsLang", NULL)) store_set("subsLang", c);
@@ -102,6 +103,6 @@ static void subst(char *out, size_t cap, const char *s, const char *k1, const ch
 }
 const char *T1(const char *en, const char *k1, const char *v1) { char *b = bufs[bi++ & 7]; subst(b, 1024, T(en), k1, v1 ? v1 : "", NULL, NULL); return b; }
 const char *T2(const char *en, const char *k1, const char *v1, const char *k2, const char *v2) { char *b = bufs[bi++ & 7]; subst(b, 1024, T(en), k1, v1 ? v1 : "", k2, v2 ? v2 : ""); return b; }
-const char *i18n_lang_name(const char *code) { for (int i = 0; i < 11; i++) if (!strcmp(codes[i], code)) return names[i]; return code; }
-int i18n_lang_count(void) { return 11; }
-const char *i18n_lang_code(int i) { return i >= 0 && i < 11 ? codes[i] : "en"; }
+const char *i18n_lang_name(const char *code) { for (int i = 0; i < NCODES; i++) if (!strcmp(codes[i], code)) return names[i]; return code; }
+int i18n_lang_count(void) { return NCODES; }
+const char *i18n_lang_code(int i) { return i >= 0 && i < NCODES ? codes[i] : "en"; }

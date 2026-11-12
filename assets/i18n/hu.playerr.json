@@ -1,0 +1,20 @@
+{
+"Not enough peers yet": "Még nincs elég peer",
+"OK: try the next stream  ·  Back: close": "OK: következő stream  ·  Vissza: bezárás",
+"The TV couldn’t open the video": "A TV nem tudta megnyitni a videót",
+"The connection to the stream dropped": "Megszakadt a kapcsolat a streammel",
+"The file isn’t in this torrent pack": "A fájl nincs ebben a torrentcsomagban",
+"The stream’s server can’t find this file": "A stream szervere nem találja ezt a fájlt",
+"The stream’s server didn’t answer": "A stream szervere nem válaszolt",
+"The stream’s server didn’t send the video": "A stream szervere nem küldte el a videót",
+"The stream’s server has a problem": "A stream szerverén hiba van",
+"The stream’s server is busy: try again in a moment": "A stream szervere túlterhelt: próbáld újra egy kicsit később",
+"The stream’s server refused it: check your debrid account": "A stream szervere elutasította: ellenőrizd a debrid fiókodat",
+"This TV can’t play 4K video": "Ez a TV nem tud 4K videót lejátszani",
+"This TV can’t play AV1 video": "Ez a TV nem tud AV1 videót lejátszani",
+"This TV can’t play Dolby Vision video": "Ez a TV nem tud Dolby Vision videót lejátszani",
+"This TV can’t play HEVC 10-bit video": "Ez a TV nem tud HEVC 10 bites videót lejátszani",
+"This TV can’t play this video’s sound (DTS or TrueHD)": "Ez a TV nem tudja lejátszani ennek a videónak a hangját (DTS vagy TrueHD)",
+"This TV can’t show HDR video": "Ez a TV nem tud HDR videót megjeleníteni",
+"The video format isn’t supported by this TV": "Ez a TV nem támogatja a videó formátumát"
+}

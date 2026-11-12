@@ -1,0 +1,8 @@
+{
+"Getting the file list…": "Fájllista lekérése…",
+"Slow source: {r} for a {v} video": "Lassú forrás: {r}, a videóhoz {v} kell",
+"Few peers ({n}) · {r}": "Kevés peer ({n}) · {r}",
+"Low storage: streaming from memory": "Kevés tárhely: streamelés a memóriából",
+"Low storage: small buffer": "Kevés tárhely: kis puffer",
+"Waiting for the next pieces…": "Várakozás a következő darabokra…"
+}
