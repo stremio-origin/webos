@@ -1,3 +1,4 @@
+#include "core/episodeart.h"
 /* The reviews (see revpanel.h). Two ways in: from a card (hold OK, Reviews) it grows out of the card as a glass
    panel and folds back on Back; from the title page (Down, or its Reviews button) it rises into the page itself under
    the page's buttons, which stay at the top. Left: the picture with its tag (or the series / seasons switch), the
@@ -176,7 +177,7 @@ static void layout(void) {
     char d[64], rt[32] = ""; date_of(js_str(v, "released", js_str(v, "firstAired", NULL)), d, sizeof d); int mn = sb_runtime_min(js_str(v, "runtime", "")); if (mn) sb_fmt_runtime(mn, rt, sizeof rt);
     snprintf(R.info, sizeof R.info, "%s%s%s", rt, rt[0] && d[0] ? "  \xc2\xb7  " : "", d);
     snprintf(R.syn, sizeof R.syn, "%s", js_str(v, "overview", js_str(v, "description", "")));
-    const char *th = js_str(v, "thumbnail", NULL); if (th && *th) snprintf(R.still, sizeof R.still, "%s", th); else if (sb_is_imdb(R.it.id)) snprintf(R.still, sizeof R.still, "https://episodes.metahub.space/%s/%d/%d/w780.jpg", R.it.id, R.season, R.episode); else R.still[0] = 0; }
+    const char *th = js_str(v, "thumbnail", NULL); if (th && *th) snprintf(R.still, sizeof R.still, "%s", th); else if (sb_is_imdb(R.it.id)) snprintf(R.still, sizeof R.still, "https://episodes.metahub.space/%s/%d/%d/w780.jpg", R.it.id, R.season, R.episode); else R.still[0] = 0; episode_art_upgrade_tmdb(R.still, sizeof R.still, 780); }
   else { snprintf(R.chip[0], sizeof R.chip[0], "%s", T(!strcmp(R.it.type, "series") ? "Series" : "Movie"));
     for (int i = 0; i < R.ns; i++) { snprintf(s, sizeof s, "%d", R.seasonList[i]); snprintf(R.chip[i + 1], sizeof R.chip[i + 1], "%s", T1("Season {n}", "n", s)); }
     snprintf(R.tag, sizeof R.tag, "%s", R.chip[R.sel]); text_upper(R.tag, sizeof R.tag);
