@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "ui/img.h"
+#include "ui/resample.h"
 #include <SDL2/SDL.h>
 #include "ui/gfx.h"
 #include "core/net.h"
@@ -22,18 +23,10 @@
 #include "stb_image_write.h"
 #include "src/webp/decode.h"
 
-/* area-average resample of the part (cx, cy, cw, ch) of the source to nw x nh (the pictures only ever
-   shrink: posters arrive at 500x750 for a 264x396 card; a smaller source repeats pixels) */
-static unsigned char *resample(const unsigned char *src, int w, int h, float cx, float cy, float cw, float ch, int nw, int nh) {
-  unsigned char *out = malloc((size_t)nw * nh * 4); if (!out) return NULL;
-  for (int y = 0; y < nh; y++) { int y0 = (int)(cy + y * ch / nh), y1 = (int)(cy + (y + 1) * ch / nh); if (y1 <= y0) y1 = y0 + 1; if (y0 >= h) y0 = h - 1; if (y1 > h) y1 = h;
-    for (int x = 0; x < nw; x++) { int x0 = (int)(cx + x * cw / nw), x1 = (int)(cx + (x + 1) * cw / nw); if (x1 <= x0) x1 = x0 + 1; if (x0 >= w) x0 = w - 1; if (x1 > w) x1 = w;
-      unsigned r = 0, g = 0, b = 0, a = 0, n = 0;
-      for (int yy = y0; yy < y1; yy++) { const unsigned char *p = src + ((size_t)yy * w + x0) * 4; for (int xx = x0; xx < x1; xx++, p += 4) { r += p[0]; g += p[1]; b += p[2]; a += p[3]; n++; } }
-      unsigned char *o = out + ((size_t)y * nw + x) * 4; if (!n) n = 1; o[0] = (unsigned char)(r / n); o[1] = (unsigned char)(g / n); o[2] = (unsigned char)(b / n); o[3] = (unsigned char)(a / n); } }
-  return out;
+/* Resampling is kept in its own testable module without SDL/GL dependencies. */
+static unsigned char *downscale(const unsigned char *src, int w, int h, int nw, int nh) {
+  return sb_resample_rgba(src, w, h, 0, 0, (float)w, (float)h, nw, nh);
 }
-static unsigned char *downscale(const unsigned char *src, int w, int h, int nw, int nh) { return resample(src, w, h, 0, 0, (float)w, (float)h, nw, nh); }
 /* rounded corners into the alpha (1 px of smoothing, the colour is kept so filtering leaves no dark rim) */
 static void round_corners(unsigned char *px, int w, int h, float r) {
   if (r <= 0) return; if (r > w / 2.0f) r = w / 2.0f; if (r > h / 2.0f) r = h / 2.0f;
@@ -100,11 +93,11 @@ static void small_save(const Img *im, const unsigned char *px, int w, int h) {
   if (opaque) { unsigned char *rgb = malloc((size_t)w * h * 3); for (long i = 0, n = (long)w * h; i < n; i++) { rgb[i * 3] = px[i * 4]; rgb[i * 3 + 1] = px[i * 4 + 1]; rgb[i * 3 + 2] = px[i * 4 + 2]; }
     ok = stbi_write_jpg_to_func(wbuf_put, &b, w, h, 3, rgb, 90); free(rgb); }
   else ok = stbi_write_png_to_func(wbuf_put, &b, w, h, 4, px, w * 4);
-  if (ok && b.n) { char key[2400]; snprintf(key, sizeof key, "sm:%dx%d:%s", im->w, im->h, im->url); cache_write(key, b.b, b.n); }
+  if (ok && b.n) { char key[2400]; snprintf(key, sizeof key, "%s%d:%d:%s", im->fit >= 0 ? "sm-bilinear2:" : "sm:", im->w, im->h, im->url); cache_write(key, b.b, b.n); }
   free(b.b);
 }
 static int small_load(Img *im) {
-  char key[2400]; snprintf(key, sizeof key, "sm:%dx%d:%s", im->w, im->h, im->url);
+  char key[2400]; snprintf(key, sizeof key, "%s%d:%d:%s", im->fit >= 0 ? "sm-bilinear2:" : "sm:", im->w, im->h, im->url);
   size_t len = 0; unsigned char *data = cache_read(key, 14 * 86400, &len); if (!data) return 0;
   int w, h, ch; unsigned char *px = stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4); free(data);
   if (!px) return 0;
@@ -139,7 +132,7 @@ static void decode_part(Img *im, unsigned char *data, size_t len, int fromNet, c
   if (im->fit >= 0) { /* the exact box: crop (or stretch), scale, round the corners */
     float cx = 0, cy = 0, cw = (float)w, ch = (float)h, ba = (float)im->w / im->h, ta = (float)w / h;
     if (im->fit > 0) { if (ta > ba) { cw = h * ba; cx = (w - cw) / 2; } else if (ta < ba) { ch = w / ba; cy = im->fit == 2 ? 0 : (h - ch) / 2; } }
-    unsigned char *out = resample(px, w, h, cx, cy, cw, ch, im->w, im->h);
+    unsigned char *out = sb_resample_rgba(px, w, h, cx, cy, cw, ch, im->w, im->h);
     free(px); if (!out) { im->state = 3; return; }
     small_save(im, out, im->w, im->h); /* before the corners: they are put back on load */
     round_corners(out, im->w, im->h, im->radius);
