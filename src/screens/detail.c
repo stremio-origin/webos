@@ -11,6 +11,7 @@
 #include "core/json.h"
 #include "core/best.h"
 #include "core/tmdb.h"
+#include "core/episodeart.h"
 #include "core/trailer.h"
 #include "ui/shared.h"
 #include "ui/gfx.h"
@@ -307,8 +308,8 @@ static void ep_make(EpRec *r, int i) {
   r->epNum = (int)js_num(v, "episode", js_num(v, "number", i + 1)); int season = (int)js_num(v, "season", -1);
   r->src[0] = 0; const char *th = js_str(v, "thumbnail", NULL);
   if (th && *th) snprintf(r->src, sizeof r->src, "%s", th); else if (sb_is_imdb(ID()) && season >= 0) snprintf(r->src, sizeof r->src, "https://episodes.metahub.space/%s/%d/%d/w780.jpg", ID(), season, r->epNum);
-  /* stills at the size they are drawn: TMDB serves 400 px */
-  { char *src = r->src, *p = strstr(src, "image.tmdb.org/t/p/"); if (p) { p += 19; char *e = strchr(p, '/'); if (e) { char rest[512]; snprintf(rest, sizeof rest, "%s", e); snprintf(p, sizeof r->src - (p - src), "w400%s", rest); } } }
+  /* The 589 px episode card must not enlarge a 300/400 px TMDB thumbnail. */
+  episode_art_upgrade_tmdb(r->src, sizeof r->src, 780);
   r->tag[0] = 0; r->tagW = 0;
   if (r->unrel) { if (r->rel[0]) snprintf(r->tag, sizeof r->tag, "%s", T1("Upcoming · {d}", "d", r->rel)); else snprintf(r->tag, sizeof r->tag, "%s", T("Upcoming")); r->tagW = text_width(r->tag, 22, 600, 0.2f) + 50; } /* (sentence case, on dark glass: see draw_ep) */
   r->res = !strcmp(js_str(v, "id", ""), D.resVid);

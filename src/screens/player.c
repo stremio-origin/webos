@@ -1,3 +1,4 @@
+#include "core/episodeart.h"
 #include "screens/player.h"
 #include "screens/board.h"
 #include "core/app.h"
@@ -1217,8 +1218,8 @@ static void tray_data(void) {
       int up = 0; if (strlen(rel) >= 10) { struct tm tm; memset(&tm, 0, sizeof tm); if (sscanf(rel, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) == 3) { tm.tm_year -= 1900; tm.tm_mon--; up = timegm(&tm) > nowT; } }
       if (up) snprintf(x->sub, 120, "%s", T1("Upcoming · {d}", "d", ds)); else snprintf(x->sub, 120, "%s", ds);
       snprintf(x->ov, 300, "%s", js_str(e, "overview", js_str(e, "description", "")));
-      const char *th = js_str(e, "thumbnail", NULL); if (th && *th) snprintf(x->th, 512, "%s", th); else if (!strncmp(P.id, "tt", 2) && cJSON_GetObjectItem(e, "episode")) snprintf(x->th, 512, "https://episodes.metahub.space/%s/%d/%d/w300.jpg", P.id, P.tray.season, en);
-      { char *p = strstr(x->th, "image.tmdb.org/t/p/"); if (p) { p += 19; char *q = strchr(p, '/'); if (q) { char rest[512]; snprintf(rest, sizeof rest, "%s", q); snprintf(p, 512 - (p - x->th), "w300%s", rest); } } }
+      const char *th = js_str(e, "thumbnail", NULL); if (th && *th) snprintf(x->th, 512, "%s", th); else if (!strncmp(P.id, "tt", 2) && cJSON_GetObjectItem(e, "episode")) snprintf(x->th, 512, "https://episodes.metahub.space/%s/%d/%d/w780.jpg", P.id, P.tray.season, en);
+      episode_art_upgrade_tmdb(x->th, sizeof x->th, 500); /* player tray: ~336 px thumbnail */
       x->on = !strcmp(js_str(e, "id", ""), P.vid); }
   } else if (t.kind == 2 || t.kind == 5) {
     if (t.kind == 2) snprintf(P.tray.title, 300, "%s", T("Sources")); P.tray.ntabs = 0; P.tray.tab = 0;
