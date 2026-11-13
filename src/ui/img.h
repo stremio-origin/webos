@@ -10,6 +10,11 @@ int    img_init(const char *cacheDir);
 /* w,h = the size the picture is shown at (layout units); the decode scales to cover it. Returns the
    texture or 0. Also reports the texture's own aspect so the caller can cover-crop. */
 GLuint img_get(const char *url, int w, int h, float *aspect);
+/* An independent 1080p backdrop texture, so an earlier 720p request of the
+   same URL cannot silently limit its source resolution. */
+GLuint img_get_backdrop(const char *url, int w, int h, float *aspect);
+int    img_backdrop_failed(const char *url, int w, int h);
+void   img_urgent_backdrop(const char *url, int w, int h);
 /* the same picture made to fit the box exactly (fit 0: stretched to it, 1: cover-cropped at the
    centre, 2: cover-cropped from the top) with its corners rounded by `radius` (layout units), so it
    draws with the plain image program. A variant of its own; shares the download with img_get. */

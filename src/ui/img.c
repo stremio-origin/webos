@@ -225,18 +225,54 @@ GLuint img_get(const char *url, int w, int h, float *aspect) {
   if (aspect) *aspect = im->aspect > 0 ? im->aspect : (float)w / h;
   return im->tex;
 }
+/* 1080p backdrops need their own decode/cache key: another screen may
+   already have decoded the same URL for a 720p preview. A second immutable
+   texture avoids resizing an Img while workers are using it. The raw source
+   download remains cached by URL, and eviction still uses the same GPU budget. */
+static Img *backdrop_request(const char *url, int w, int h) {
+  if (w <= 1280 || h <= 720) return request(url, w, h);
+  char key[2300]; int n = snprintf(key, sizeof key, "bg1080:%s", url);
+  if (n <= 0 || (size_t)n >= sizeof key) return request(url, w, h);
+  return request_as(key, url, w, h, -1, 0);
+}
+GLuint img_get_backdrop(const char *url, int w, int h, float *aspect) {
+  if (!url || !*url) return 0;
+  Img *im = backdrop_request(url, w, h);
+  Img *shown = im;
+  if (!im->tex && w > 1280 && h > 720) {
+    Img *low = find(url, fnv(url));
+    if (low && low->tex) { low->lastUse = frameNo; shown = low; }
+  }
+  if (aspect) *aspect = shown->aspect > 0 ? shown->aspect : (float)w / h;
+  return shown->tex;
+}
+int img_backdrop_failed(const char *url, int w, int h) {
+  if (!url || !*url) return 0;
+  if (w <= 1280 || h <= 720) return img_failed(url);
+  char key[2300]; int n = snprintf(key, sizeof key, "bg1080:%s", url);
+  if (n <= 0 || (size_t)n >= sizeof key) return img_failed(url);
+  Img *im = find(key, fnv(key));
+  Img *low = find(url, fnv(url));
+  return im && im->state == 3 && !(low && low->tex);
+}
 void img_prefetch(const char *url, int w, int h) { if (url && *url && usedBytes < budgetBytes * 85 / 100) request(url, w, h); } /* looking ahead only while there is room: it never pushes out what is on screen */
 /* the address a plain picture on the screen was loaded from (the player shows the very logo the page showed) */
 const char *img_src_of(GLuint tex) { if (!tex) return NULL; for (int b = 0; b < BUCKETS; b++) for (Img *i = table[b]; i; i = i->next) if (i->tex == tex && i->fit < 0) return i->src; return NULL; }
 /* the picture the screen is waiting on (the backdrop of the focused title): out of the stacks into the slot taken
    next, so a fast scroll's posters, asked after it, never hold it back; the one it replaces goes back on top */
-void img_urgent(const char *url, int w, int h) {
-  if (!url || !*url) return; Img *im = request(url, w, h); im->urgent = 1; if (im->state != 0 || im == urg) return;
+static void img_urgent_mark(Img *im) {
+  if (!im) return; im->urgent = 1; if (im->state != 0 || im == urg) return;
   pthread_mutex_lock(&mu);
   int found = 0; for (int i = sn - 1; i >= 0 && !found; i--) if (stk[i] == im) { memmove(stk + i, stk + i + 1, (size_t)(sn - i - 1) * sizeof *stk); sn--; found = 1; }
   for (int i = psn - 1; i >= 0 && !found; i--) if (pstk[i] == im) { memmove(pstk + i, pstk + i + 1, (size_t)(psn - i - 1) * sizeof *pstk); psn--; found = 1; }
   if (found) { if (urg) { if (sn < 1024) stk[sn++] = urg; else pstk[psn++] = urg; } urg = im; } /* (a picture already taken by a worker is not in them: nothing to do) */
   pthread_mutex_unlock(&mu);
+}
+void img_urgent(const char *url, int w, int h) {
+  if (url && *url) img_urgent_mark(request(url, w, h));
+}
+void img_urgent_backdrop(const char *url, int w, int h) {
+  if (url && *url) img_urgent_mark(backdrop_request(url, w, h));
 }
 /* title art: decoded before the posters waiting in the queue, and kept */
 void img_prefetch_pri(const char *url, int w, int h) {

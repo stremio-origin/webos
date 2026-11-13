@@ -586,14 +586,14 @@ void bg_tick(float dt) {
     else { bgL[!bgTop].url[0] = 0; bgL[!bgTop].tex = 0; } /* the old one is dropped once the fade really ended */
     bgFadingIn = bgFadingOut = 0; }
   if (bgWaiting) {
-    float aspect; img_urgent(bgWant, bgWidth, bgHeight); GLuint tex = img_get(bgWant, bgWidth, bgHeight, &aspect); /* decoded before anything asked after it */
+    float aspect; img_urgent_backdrop(bgWant, bgWidth, bgHeight); GLuint tex = img_get_backdrop(bgWant, bgWidth, bgHeight, &aspect); /* decoded before anything asked after it */
     /* a crossfade running plays out first (cut short, its picture jumped in whole): the newest wanted follows it */
     if (tex) { if (NOW >= bgNotBefore && !(bgFade.on && bgFadingIn)) { bgWaiting = 0; bg_show(bgWant, tex, aspect); } }
-    else if (img_failed(bgWant)) { if (bgAlt[0] && strcmp(bgAlt, bgWant)) { snprintf(bgWant, sizeof bgWant, "%s", bgAlt); bgAlt[0] = 0; } else { bgWaiting = 0; bgCur[0] = 0; bg_fade_away(); } }
+    else if (img_backdrop_failed(bgWant, bgWidth, bgHeight)) { if (bgAlt[0] && strcmp(bgAlt, bgWant)) { snprintf(bgWant, sizeof bgWant, "%s", bgAlt); bgAlt[0] = 0; } else { bgWaiting = 0; bgCur[0] = 0; bg_fade_away(); } }
   }
   /* the shown pictures stay asked for (kept from eviction): the player opens on the same picture at the same size, and
      a change of shading bakes from it again */
-  for (int i = 0; i < 2; i++) if (bgL[i].url[0]) { GLuint t = img_get(bgL[i].url, bgWidth, bgHeight, &bgL[i].aspect); bgL[i].tex = t; }
+  for (int i = 0; i < 2; i++) if (bgL[i].url[0]) { GLuint t = img_get_backdrop(bgL[i].url, bgWidth, bgHeight, &bgL[i].aspect); bgL[i].tex = t; }
   if (!bgL[0].url[0] && !bgL[1].url[0]) for (int i = 0; i < 2; i++) if (bgL[i].baked.fbo) { gfx_target_free(&bgL[i].baked); bgL[i].bakedOk = 0; bgL[i].bakedUrl[0] = 0; } /* nothing shown: the memory goes back */
 }
 /* the shading as the page draws it: made ONCE per kind (and side) as a small alpha picture in the page colour

@@ -9,9 +9,11 @@ across the 1080p canvas. A 1080p source and bake can look sharper, especially
 on large panels, without raising the rendering resolution of the rest of the UI.
 
 The larger texture is **not a 4K user interface**. If the upstream image itself
-is limited to 1280 pixels (or a smaller cached source was already used), this
-change cannot invent higher-frequency image detail. Provider URL improvements
-and the separate size-aware image cache PR complement this feature.
+is limited to 1280 pixels, this change cannot invent higher-frequency image
+detail. This PR uses a dedicated 1080p backdrop texture cache key so artwork
+previously displayed in a 720p preview does not limit subsequent backdrops.
+Provider URL improvements and the separate size-aware image cache PR still
+complement this feature.
 
 ## Selection and compatibility
 
@@ -29,21 +31,24 @@ not a GPU speed guarantee; the runtime has safety checks as well.
 
 ## Runtime safeguards
 
-1. Existing image loading and banded GPU uploads are retained; no synchronous
+1. A 1080p-specific cache key prevents reuse of a smaller source texture.
+   A 720p cached texture can remain visible while the 1080p variant uploads.
+   Existing source-download disk caching and LRU GPU eviction are retained.
+2. Existing image loading and banded GPU uploads are retained; no synchronous
    full-resolution image decoding is added to the render thread.
-2. Two 1920×1080 RGBA baked textures consume about 15.8 MiB versus about
+3. Two 1920×1080 RGBA baked textures consume about 15.8 MiB versus about
    7.0 MiB for the existing two 1280×720 textures. Source images also cost
    memory, and the existing image memory budget / eviction still applies.
-3. If MemAvailable goes below 256 MiB or the app RSS exceeds 25% of Linux
+4. If MemAvailable goes below 256 MiB or the app RSS exceeds 25% of Linux
    MemTotal, the next frame releases *both* larger baked targets and returns to
    720p for the rest of the app session.
-4. If a 1080p framebuffer cannot be created, the app retries the original
+5. If a 1080p framebuffer cannot be created, the app retries the original
    720p size before falling back to the existing direct drawing path.
-5. If a backdrop is visible and static, and frame times are worse than 40 ms
+6. If a backdrop is visible and static, and frame times are worse than 40 ms
    for a sustained period (90 slow-frame strikes, reduced by recovered fast
    frames), the app also downgrades for the rest of the session. Trailer/video
    playback, transitions and empty backdrops are excluded from this check.
-6. No repeated up/down toggling is allowed. Fades and backdrop shading remain
+7. No repeated up/down toggling is allowed. Fades and backdrop shading remain
    unchanged, with the stored bake invalidated on downgrade.
 
 For an A/B performance comparison, set `SB_BG_720=1` in the app's environment
@@ -59,6 +64,6 @@ to force the old quality, regardless of the automatic decision.
   transition continuity, memory use, and responsiveness during rapid navigation
   and video playback. Compare `SB_BG_720=1` against automatic mode.
 
-This PR intentionally does **not** change TMDB/CDN URLs, the GPU texture cache,
-or other page textures. They are addressed separately and are compatible with
+This PR intentionally does **not** change TMDB/CDN URLs or other page
+textures. The additional backdrop-specific cache key is isolated to this path. They are addressed separately and are compatible with
 this policy-based resolution choice.
