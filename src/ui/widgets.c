@@ -225,7 +225,7 @@ void card_prep(CardPrep *cp, const Item *it, int wide, const char *artOverride) 
   cp->lg = i18n_gen(); cp->lbl[0] = cp->left[0] = 0; cp->leftW = 0;
   if (artOverride) { Item *tmp = malloc(sizeof *tmp); if (tmp) { *tmp = *it; snprintf(tmp->poster, sizeof tmp->poster, "%s", artOverride); sb_poster_of(tmp, cp->art, sizeof cp->art); free(tmp); } else cp->art[0] = 0;
     snprintf(cp->pre, sizeof cp->pre, "%s", artOverride); } /* the card shows the address as a poster; the fetch ahead asks for it as given */
-  else { if (wide) sb_bg_small(it, cp->art, sizeof cp->art); else sb_poster_of(it, cp->art, sizeof cp->art); snprintf(cp->pre, sizeof cp->pre, "%s", cp->art); }
+  else { if (wide) sb_bg_mid(it, cp->art, sizeof cp->art); else sb_poster_of(it, cp->art, sizeof cp->art); snprintf(cp->pre, sizeof cp->pre, "%s", cp->art); }
   if (!wide) return;
   const char *c = strrchr(it->videoId, ':'); int ep = 0, se = 0;
   if (c) { ep = atoi(c + 1); const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') se = atoi(p + 1); }
