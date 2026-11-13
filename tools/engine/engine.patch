@@ -14,30 +14,33 @@ diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
 index 8a04890..2c0d5b9 100644
 --- a/cmake/Dependencies.cmake
 +++ b/cmake/Dependencies.cmake
-@@ -73,6 +73,8 @@ function(nuvio_engine_add_libtorrent)
+@@ -73,6 +73,9 @@ function(nuvio_engine_add_libtorrent)
          "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-top-priority-first.patch"
          "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-metadata-pipeline.patch"
          "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-urgent-hedge.patch"
 +        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-drop-piece.patch"
 +        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-forget-all.patch"
++        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-reject-piece-iteration.patch"
      )
      set(
          nuvio_libtorrent_patch_files
-@@ -88,6 +90,8 @@ function(nuvio_engine_add_libtorrent)
+@@ -88,6 +91,9 @@ function(nuvio_engine_add_libtorrent)
          "src/piece_picker.cpp"
          "src/ut_metadata.cpp"
          "src/torrent.cpp"
 +        "src/torrent_handle.cpp"
 +        "src/torrent_handle.cpp"
++        "src/peer_connection.cpp"
      )
      set(
          nuvio_libtorrent_patch_sentinels
-@@ -103,6 +107,8 @@ function(nuvio_engine_add_libtorrent)
+@@ -103,6 +109,9 @@ function(nuvio_engine_add_libtorrent)
          "nuvio_top"
          "nuvio_metadata_pipeline"
          "nuvio_hedge_blocks"
 +        "nuvio_drop_piece"
 +        "nuvio_forget_all"
++        "Backport c56ad9f4"
      )
      list(LENGTH nuvio_libtorrent_patches nuvio_libtorrent_patch_count)
      math(EXPR nuvio_libtorrent_last_patch "${nuvio_libtorrent_patch_count} - 1")
@@ -2894,3 +2897,137 @@ index 0000000..225dd16
 +    std::cout << "PASS\n";
 +    return 0;
 +}
+
+diff --git a/cmake/patches/libtorrent-2.0.12-reject-piece-iteration.patch b/cmake/patches/libtorrent-2.0.12-reject-piece-iteration.patch
+new file mode 100644
+--- /dev/null
++++ b/cmake/patches/libtorrent-2.0.12-reject-piece-iteration.patch
+@@ -0,0 +1,128 @@
++# Backport of libtorrent c56ad9f4ca941d2116bc9b366720b168204ff15e
++# https://github.com/arvidn/libtorrent/commit/c56ad9f4ca941d2116bc9b366720b168204ff15e
++# Includes the upstream regression test for two pending requests to a rejected piece.
++
++diff --git a/src/peer_connection.cpp b/src/peer_connection.cpp
++--- a/src/peer_connection.cpp
+++++ b/src/peer_connection.cpp
++@@ -2647,5 +2647,10 @@
++-		for (auto i = m_requests.begin(), end(m_requests.end()); i != end; ++i)
++-		{
++-			peer_request const& r = *i;
++-			if (r.piece != index) continue;
++-			write_reject_request(r);
+++		// Backport c56ad9f4: erasing invalidates the cached end iterator.
+++		for (auto i = m_requests.begin(); i != m_requests.end();)
+++		{
+++			peer_request const r = *i;
+++			if (r.piece != index)
+++			{
+++				++i;
+++				continue;
+++			}
+++
++@@ -2653 +2657,0 @@
++-
++@@ -2655,0 +2660,2 @@
+++
+++			write_reject_request(r);
++diff --git a/test/test_fast_extension.cpp b/test/test_fast_extension.cpp
++--- a/test/test_fast_extension.cpp
+++++ b/test/test_fast_extension.cpp
++@@ -52,0 +53,2 @@
+++#include "libtorrent/torrent.hpp"
+++#include "libtorrent/aux_/session_impl.hpp"
++@@ -214,0 +217,12 @@
+++
+++#ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
+++void send_interested(tcp::socket& s)
+++{
+++	log("==> interested");
+++	char msg[] = "\0\0\0\x01\x02";
+++	error_code ec;
+++	boost::asio::write(s, boost::asio::buffer(msg, 5)
+++		, boost::asio::transfer_all(), ec);
+++	if (ec) TEST_ERROR(ec.message());
+++}
+++#endif
++@@ -520,0 +535,24 @@
+++#ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
+++template <typename Fun>
+++void post_torrent(lt::session& ses, torrent_handle const& th, Fun fun)
+++{
+++	auto const tor = th.native_handle();
+++	post(ses.native_handle()->get_context(), [tor, fun]
+++	{
+++		fun(*tor);
+++	});
+++}
+++
+++bool wait_for_counter(lt::session& ses, char const* name, std::int64_t const value)
+++{
+++	for (int i = 0; i < 50; ++i)
+++	{
+++		auto const counters = get_counters(ses);
+++		auto const counter = counters.find(name);
+++		if (counter != counters.end() && counter->second >= value) return true;
+++		std::this_thread::sleep_for(lt::milliseconds(100));
+++	}
+++	return false;
+++}
+++#endif
+++
++@@ -594,0 +633,55 @@
+++#ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
+++TORRENT_TEST(reject_predictive_piece_requests)
+++{
+++	std::cout << "\n === test reject predictive piece requests ===\n" << std::endl;
+++
+++	info_hash_t ih;
+++	torrent_handle th;
+++	std::shared_ptr<lt::session> ses;
+++	io_context ios;
+++	tcp::socket s(ios);
+++	setup_peer(s, ios, ih, ses, true, false, false, torrent_flags_t{}, &th);
+++
+++	char recv_buffer[1000];
+++	do_handshake(s, ih, recv_buffer);
+++	print_session_log(*ses);
+++
+++	post_torrent(*ses, th, [](torrent& tor) { tor.predicted_have_piece(0_piece, 0); });
+++	get_counters(*ses);
+++
+++	send_interested(s);
+++	if (!wait_for_counter(*ses, "ses.num_outgoing_unchoke", 1))
+++	{
+++		TEST_ERROR("expected unchoke message");
+++		s.close();
+++		return;
+++	}
+++
+++	peer_request req;
+++	req.piece = 0_piece;
+++	req.start = 0;
+++	req.length = 0x4000;
+++	send_request(s, req);
+++	send_request(s, req);
+++
+++	if (!wait_for_counter(*ses, "peer.piece_requests", 2))
+++	{
+++		TEST_ERROR("expected two piece requests");
+++		s.close();
+++		return;
+++	}
+++
+++	post_torrent(*ses, th, [](torrent& tor) { tor.piece_failed(0_piece); });
+++	if (!wait_for_counter(*ses, "peer.piece_rejects", 2))
+++	{
+++		TEST_ERROR("expected two rejected requests");
+++		s.close();
+++		return;
+++	}
+++
+++	auto const counters = get_counters(*ses);
+++	TEST_EQUAL(counters.at("peer.num_peers_up_requests"), 0);
+++	s.close();
+++}
+++#endif
+++
