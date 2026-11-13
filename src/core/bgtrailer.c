@@ -47,7 +47,7 @@ static void on_meta(cJSON *m, void *ud) {
   if ((unsigned)(uintptr_t)ud != gen || st != S_META) return;
   char imdb[24], yt[128]; trailer_imdb_id(m, tid, imdb, sizeof imdb); trailer_yt_ids(m, yt, sizeof yt);
   if (!m || !idleOn || (!imdb[0] && !yt[0])) { st = S_OFF; return; }
-  st = S_FIND; tok = trailer_find_meta(m, tid, 1, on_found, (void *)(uintptr_t)gen);
+  st = S_FIND; tok = trailer_find_meta(m, tid, TRAILER_QUALITY_720P, on_found, (void *)(uintptr_t)gen);
 }
 static void try_start(const BgtView *v) {
   if (v->shedding) return;   /* the TV is struggling: no trailer for now */

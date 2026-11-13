@@ -84,7 +84,7 @@ static int is_yt_host(const char *url) {
 
 /* ---- jobs: one trailer_find each; they live while any request or timer still points at them ---- */
 typedef struct Job {
-  unsigned tok; int lq, cancelled, sent, refs; char imdb[24], key[200];
+  unsigned tok; TrailerQuality quality; int cancelled, sent, refs; char imdb[24], key[200];
   char yt[8][20]; int nyt;
   TrailerCb cb; void *ud;
   double deadline;
@@ -107,8 +107,8 @@ static void deliver(Job *j) {
   const char *url = js_str(o, "url", "");
   if (!*url) { j->cb(NULL, js_str(o, "err", "unavailable"), j->ud); cJSON_Delete(o); return; }
   Trailer *t = calloc(1, sizeof *t); const char *hls = js_str(o, "hls", "");
-  /* HLS when IMDb has it: its MP4s mark too few keyframes for the TV to seek; the background trailer keeps the 480p MP4 */
-  if (*hls && !j->lq) { cpy(t->url, sizeof t->url, hls); cpy(t->alt, sizeof t->alt, url); cpy(t->mime, sizeof t->mime, "application/x-mpegurl"); }
+  /* HLS for interactive playback (better seeking); background trailers use progressive MP4 to start quickly. */
+  if (*hls && j->quality == TRAILER_QUALITY_BEST) { cpy(t->url, sizeof t->url, hls); cpy(t->alt, sizeof t->alt, url); cpy(t->mime, sizeof t->mime, "application/x-mpegurl"); }
   else { cpy(t->url, sizeof t->url, url); cpy(t->mime, sizeof t->mime, "video/mp4"); }
   cpy(t->name, sizeof t->name, js_str(o, "name", "Trailer")); t->runtime = (int)js_num(o, "runtime", 0); cpy(t->source, sizeof t->source, js_str(o, "source", ""));
   const cJSON *s; cJSON_ArrayForEach(s, js_arr(o, "subs")) { if (t->nsubs >= TRAILER_MAX_SUBS) break; TrailerSub *d = &t->subs[t->nsubs++];
@@ -164,7 +164,7 @@ static void on_hls(int st, const unsigned char *body, size_t len, void *ud) {
 }
 static void reply(Job *j, cJSON *o) {
   if (j->sent) { cJSON_Delete(o); return; }
-  if (*js_str(o, "hls", "") && !j->lq) { HlsReq *r = malloc(sizeof *r); r->j = j; r->o = o; j->refs++;
+  if (*js_str(o, "hls", "") && j->quality == TRAILER_QUALITY_BEST) { HlsReq *r = malloc(sizeof *r); r->j = j; r->o = o; j->refs++;
     net_get_timeout(js_str(o, "hls", ""), 4000, on_hls, r); return; }
   send(j, o);
 }
@@ -175,11 +175,11 @@ typedef struct { char vid[20]; YtCb cb; void *ud; int k, order[NPIPED], n; } YtR
 static void on_innertube(int st, const unsigned char *body, size_t len, void *ud) {
   YtReq *r = ud; cJSON *j = st > 0 ? net_json(body) : NULL, *out = NULL;
   if (j) {
-    const char *lo = "", *hi = ""; const cJSON *f;
+    const char *lo = "", *hi = "", *mid = ""; const cJSON *f;
     cJSON_ArrayForEach(f, js_arr(js_obj(j, "streamingData"), "formats")) {
       const char *u = js_str(f, "url", ""); if (!*u || strncmp(js_str(f, "mimeType", ""), "video/mp4", 9)) continue;
       int itag = (int)js_num(f, "itag", 0);
-      if (itag == 22) hi = u; else if (itag == 18) lo = u; else if (!*lo) lo = u;
+      if (itag == 22) { hi = u; mid = u; } else if (itag == 18) lo = u; else if (!*lo) lo = u;
     }
     cJSON *subs = cJSON_CreateArray(); const cJSON *c;
     cJSON_ArrayForEach(c, js_arr(js_obj(js_obj(j, "captions"), "playerCaptionsTracklistRenderer"), "captionTracks")) {
@@ -192,7 +192,7 @@ static void on_innertube(int st, const unsigned char *body, size_t len, void *ud
       cJSON_AddItemToArray(subs, s);
     }
     if (*lo || *hi || cJSON_GetArraySize(subs)) {
-      out = cJSON_CreateObject(); cJSON_AddStringToObject(out, "lo", lo); cJSON_AddStringToObject(out, "hi", hi);
+      out = cJSON_CreateObject(); cJSON_AddStringToObject(out, "lo", lo); cJSON_AddStringToObject(out, "hi", hi); cJSON_AddStringToObject(out, "mid", mid);
       cJSON_AddNumberToObject(out, "len", js_numstr(js_obj(j, "videoDetails"), "lengthSeconds", 0)); /* to match it against IMDb's cuts */
       cJSON_AddItemToObject(out, "subs", subs);
     } else cJSON_Delete(subs);
@@ -209,14 +209,15 @@ static void yt_innertube(const char *vid, YtCb cb, void *ud) {
 static void piped_try(YtReq *r);
 static void on_piped(int st, const unsigned char *body, size_t len, void *ud) {
   YtReq *r = ud; int ii = r->order[r->k]; cJSON *j = st > 0 ? net_json(body) : NULL;
-  const char *lo = "", *hi = ""; const cJSON *v;
+  const char *lo = "", *hi = "", *mid = ""; int midQ = 0; const cJSON *v;
   cJSON_ArrayForEach(v, js_arr(j, "videoStreams")) {
     if (js_bool(v, "videoOnly", 0) || !*js_str(v, "url", "") || strncmp(js_str(v, "mimeType", ""), "video/mp4", 9)) continue;
     int q = atoi(js_str(v, "quality", "0"));
-    if (q >= 480) { if (!*hi) hi = js_str(v, "url", ""); } else if (!*lo) lo = js_str(v, "url", "");
+    if (q >= 480) { if (!*hi) hi = js_str(v, "url", ""); if (q <= 720 && q > midQ) { mid = js_str(v, "url", ""); midQ = q; } }
+    else if (!*lo) lo = js_str(v, "url", "");
   }
   if (*lo || *hi) {
-    cJSON *out = cJSON_CreateObject(); cJSON_AddStringToObject(out, "lo", lo); cJSON_AddStringToObject(out, "hi", hi); cJSON_AddItemToObject(out, "subs", cJSON_CreateArray());
+    cJSON *out = cJSON_CreateObject(); cJSON_AddStringToObject(out, "lo", lo); cJSON_AddStringToObject(out, "hi", hi); cJSON_AddStringToObject(out, "mid", mid); cJSON_AddItemToObject(out, "subs", cJSON_CreateArray());
     pipedGood = ii; pipedBad[ii] = 0; fprintf(stderr, "[yt] piped ok via %s\n", PIPED[ii]);
     net_json_free(j); r->cb(out, r->ud); free(r); return;
   }
@@ -239,15 +240,16 @@ static void yt_piped(const char *vid, YtCb cb, void *ud) {
   for (int i = 0; i < nc; i++) r->order[r->n++] = cool[i];
   piped_try(r);
 }
-/* one YouTube video: the low or high MP4 (cached 2 h; a dead one is left alone for 3 min) */
+/* one YouTube video: MP4 variants (cached 2 h; a dead one is left alone for 3 min) */
 typedef void (*YtUrlCb)(Job *j, const char *url, const char *err);
 typedef struct { Job *j; char vid[20]; YtUrlCb cb; } YtRes;
-static const char *yt_pick(const cJSON *c, int lq) {
-  const char *lo = js_str(c, "lo", ""), *hi = js_str(c, "hi", "");
-  return lq ? (*lo ? lo : hi) : (*hi ? hi : lo);
+static const char *yt_pick(const cJSON *c, TrailerQuality quality) {
+  const char *lo = js_str(c, "lo", ""), *hi = js_str(c, "hi", ""), *mid = js_str(c, "mid", "");
+  if (quality == TRAILER_QUALITY_720P) return *mid ? mid : *lo ? lo : hi;
+  return quality == TRAILER_QUALITY_LOW ? (*lo ? lo : hi) : (*hi ? hi : lo);
 }
 static void yt_res_done(YtRes *r, cJSON *res) {
-  if (res) { const char *u = yt_pick(res, r->j->lq); memo_put(ytCache, r->vid, res); r->cb(r->j, u, *u ? "" : "no format"); }
+  if (res) { const char *u = yt_pick(res, r->j->quality); memo_put(ytCache, r->vid, res); r->cb(r->j, u, *u ? "" : "no format"); }
   else { memo_put(ytFail, r->vid, cJSON_CreateTrue()); fprintf(stderr, "[yt] %s unresolved\n", r->vid); r->cb(r->j, "", "unavailable"); }
   job_unref(r->j); free(r);
 }
@@ -256,7 +258,7 @@ static void on_res_inner(cJSON *res, void *ud) { YtRes *r = ud; if (res) yt_res_
 static void yt_resolve(Job *j, const char *vid, YtUrlCb cb) {
   if (!valid_yt(vid)) { cb(j, "", "bad id"); return; }
   const cJSON *c = memo_get(ytCache, vid, 2 * 3600);
-  if (c) { const char *u = yt_pick(c, j->lq); cb(j, u, *u ? "" : "no format"); return; }
+  if (c) { const char *u = yt_pick(c, j->quality); cb(j, u, *u ? "" : "no format"); return; }
   if (memo_get(ytFail, vid, 180)) { cb(j, "", "unavailable"); return; } /* mirror outages recover: asked again after 3 min */
   YtRes *r = calloc(1, sizeof *r); r->j = j; j->refs++; cpy(r->vid, sizeof r->vid, vid); r->cb = cb;
   yt_innertube(vid, on_res_inner, r);
@@ -369,7 +371,9 @@ static void yt_captioned(Job *j) {
 /* ---- the answer ------------------------------------------------------------------------------------ */
 static void imdb_reply(Job *j, const cJSON *v, const cJSON *subs) {
   const char *lo = js_str(v, "lo", ""), *hi = js_str(v, "hi", ""), *full = js_str(v, "full", "");
-  const char *u = j->lq ? (*lo ? lo : *hi ? hi : full) : (*full ? full : *hi ? hi : lo);
+  const char *u = j->quality == TRAILER_QUALITY_BEST ? (*full ? full : *hi ? hi : lo)
+    : j->quality == TRAILER_QUALITY_720P ? (*hi ? hi : *lo ? lo : full)
+    : (*lo ? lo : *hi ? hi : full);
   cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "url", u); cJSON_AddStringToObject(o, "hls", js_str(v, "hls", ""));
   cJSON_AddStringToObject(o, "name", js_str(v, "name", "Trailer")); cJSON_AddNumberToObject(o, "runtime", js_num(v, "run", 0)); cJSON_AddStringToObject(o, "source", "imdb");
   cJSON_AddItemToObject(o, "subs", subs ? cJSON_Duplicate(subs, 1) : cJSON_CreateArray());
@@ -401,7 +405,7 @@ static void decide(Job *j) {
 }
 static void with_yt(Job *j) {
   j->got = 0;
-  if (j->nyt && !j->lq) yt_captioned(j); else { j->caps = cJSON_CreateArray(); j->capsFired = 1; j->got++; } /* no captions to match: no timer either */
+  if (j->nyt && j->quality == TRAILER_QUALITY_BEST) yt_captioned(j); else { j->caps = cJSON_CreateArray(); j->capsFired = 1; j->got++; } /* no captions to match: no timer either */
   imdb_trailers(j);
 }
 
@@ -435,9 +439,9 @@ static void cinemeta_yt(Job *j) {
 }
 
 /* ---- the API ----------------------------------------------------------------------------------------- */
-unsigned trailer_find(const char *imdbId, const char *ytIds, int lowQuality, TrailerCb cb, void *ud) {
-  Job *j = calloc(1, sizeof *j); j->tok = nextTok++; j->lq = !!lowQuality; j->cb = cb; j->ud = ud; j->refs = 1; j->next = jobs; jobs = j;
-  cpy(j->imdb, sizeof j->imdb, imdbId); snprintf(j->key, sizeof j->key, "%s|%s|%d", j->imdb, ytIds ? ytIds : "", j->lq);
+unsigned trailer_find(const char *imdbId, const char *ytIds, TrailerQuality quality, TrailerCb cb, void *ud) {
+  Job *j = calloc(1, sizeof *j); j->tok = nextTok++; j->quality = quality; j->cb = cb; j->ud = ud; j->refs = 1; j->next = jobs; jobs = j;
+  cpy(j->imdb, sizeof j->imdb, imdbId); snprintf(j->key, sizeof j->key, "%s|%s|%d", j->imdb, ytIds ? ytIds : "", j->quality);
   j->deadline = now_s() + 20; /* the TV can be busy (app start): slow beats failed, but never a hang on a dead upstream */
   const cJSON *tc = memo_get(trCache, j->key, 1800);
   if (tc) { j->sent = 1; j->out = cJSON_Duplicate(tc, 1); j->deliver = 1; j->refs++; }
@@ -449,7 +453,7 @@ unsigned trailer_find(const char *imdbId, const char *ytIds, int lowQuality, Tra
   unsigned tok = j->tok; job_unref(j); /* the start's own ref */
   return tok;
 }
-unsigned trailer_find_meta(const cJSON *meta, const char *id, int lowQuality, TrailerCb cb, void *ud) {
+unsigned trailer_find_meta(const cJSON *meta, const char *id, TrailerQuality quality, TrailerCb cb, void *ud) {
   /* an addon's trailer given as a plain video address (a stream with a url, not a YouTube id): played as it is */
   { const cJSON *ts = js_arr(meta, "trailerStreams"), *t; if (ts) cJSON_ArrayForEach(t, ts) { const char *u = js_str(t, "url", "");
       if (strncmp(u, "http://", 7) && strncmp(u, "https://", 8)) continue;
@@ -462,7 +466,7 @@ unsigned trailer_find_meta(const cJSON *meta, const char *id, int lowQuality, Tr
   if (!imdb[0] && !yt[0]) { /* nothing to look up: the answer still comes on a tick */
     Job *j = calloc(1, sizeof *j); j->tok = nextTok++; j->cb = cb; j->ud = ud; j->sent = 1; j->out = err_obj("unavailable"); j->deliver = 1; j->refs = 1; j->next = jobs; jobs = j;
     return j->tok; }
-  return trailer_find(imdb, yt, lowQuality, cb, ud);
+  return trailer_find(imdb, yt, quality, cb, ud);
 }
 void trailer_cancel(unsigned tok) { for (Job *j = jobs; j; j = j->next) if (j->tok == tok) j->cancelled = 1; }
 void trailer_tick(void) {
