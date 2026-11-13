@@ -11,7 +11,7 @@
 #define TRAILER_MAX_SUBS 12
 typedef struct { char url[1536], lang[8], name[64], kind[12]; } TrailerSub;  /* kind: "srt" (IMDb) or "timedtext" (YouTube) */
 typedef struct {
-  char url[2048];      /* what to load: the best HLS variant, or an MP4 (low quality: the 480p MP4) */
+  char url[2048];      /* best HLS variant or an MP4 at the requested quality */
   char alt[2048];      /* the MP4 to try when the HLS stream fails ("" = none) */
   char mime[32];       /* "application/x-mpegurl" or "video/mp4" */
   char name[128];      /* the clip's own name ("Official Trailer"); "Trailer" when unknown */
@@ -22,11 +22,14 @@ typedef struct {
 /* t is NULL on failure (err: "timeout", "unavailable", ...); it lives only for the call */
 typedef void (*TrailerCb)(const Trailer *t, const char *err, void *ud);
 
+/* Explicit quality policy: normal playback keeps its best HLS/MP4 path; background playback
+   uses a progressive MP4 without subtitle lookups to start smoothly on the TV. */
+typedef enum { TRAILER_QUALITY_BEST = 0, TRAILER_QUALITY_LOW = 1, TRAILER_QUALITY_720P = 2 } TrailerQuality;
 /* imdbId: "tt…" or NULL; ytIds: YouTube ids, comma separated, or NULL (then Cinemeta is asked for them).
-   lowQuality: the background trailer (480p MP4, no caption matching). Returns a token for trailer_cancel. */
-unsigned trailer_find(const char *imdbId, const char *ytIds, int lowQuality, TrailerCb cb, void *ud);
+   Quality 720p falls back to lower MP4 variants when unavailable. Returns a cancellation token. */
+unsigned trailer_find(const char *imdbId, const char *ytIds, TrailerQuality quality, TrailerCb cb, void *ud);
 /* the same from a title's metadata (meta may be NULL: then the id alone) */
-unsigned trailer_find_meta(const cJSON *meta, const char *id, int lowQuality, TrailerCb cb, void *ud);
+unsigned trailer_find_meta(const cJSON *meta, const char *id, TrailerQuality quality, TrailerCb cb, void *ud);
 void     trailer_cancel(unsigned tok);   /* its callback never runs */
 void     trailer_tick(void);             /* once a frame: deadlines and retries */
 

@@ -1560,7 +1560,7 @@ static void play_stream(const Stream *s, const char *vid, double startAt) {
   char info[700]; sb_stream_info(s, info, sizeof info); snprintf(P.sname, sizeof P.sname, "%s", info); snprintf(P.saddon, sizeof P.saddon, "%s", s->addon);
   if (!P.isTrailer && strcmp(P.type, "other")) sb_remember_stream(P.id, P.vid, s); /* the torrent itself, resolved again next time */
   if (!strncmp(P.url, "ytid:", 5)) { /* a YouTube video: found as the trailers are, behind the title art */
-    P.resolving = 1; set_status(""); p2pTok++; P.ytTok = trailer_find(NULL, P.url + 5, 0, on_yt, (void *)(uintptr_t)p2pTok); return; }
+    P.resolving = 1; set_status(""); p2pTok++; P.ytTok = trailer_find(NULL, P.url + 5, TRAILER_QUALITY_BEST, on_yt, (void *)(uintptr_t)p2pTok); return; }
   if (!strncmp(P.url, "p2p://", 6)) { /* the engine finds the peers and the file while the title art shows how it goes */
     P.resolving = 1; set_status(""); p2pTok++; p2p_resolve(P.url, on_p2p, (void *)(uintptr_t)p2pTok); return; } /* the loading line alone while it is quick; a reason once it is slow */
   start_video();

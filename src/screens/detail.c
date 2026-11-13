@@ -136,7 +136,7 @@ static void on_trailer(const Trailer *t, const char *err, void *ud) {
   player_trailer_subs(t->subs, t->nsubs);
   app_play(&s, "other", TR.id, TR.id, 0);
 }
-static void trailer_go(const cJSON *m) { TR.tok = trailer_find_meta(m, TR.id, 0, on_trailer, NULL); }
+static void trailer_go(const cJSON *m) { TR.tok = trailer_find_meta(m, TR.id, TRAILER_QUALITY_BEST, on_trailer, NULL); }
 static void on_trailer_meta(cJSON *m, void *ud) { if ((unsigned)(uintptr_t)ud != TR.tok + 1 || !TR.busy) return; trailer_go(m); }
 void detail_trailer(const char *type, const char *id, const char *name) {
   (void)name; if (TR.busy && TR.tok) trailer_cancel(TR.tok);
