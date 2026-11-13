@@ -1,4 +1,5 @@
 #include "core/stremio.h"
+#include "core/backdrop_quality.h"
 #include "core/net.h"
 #include "core/store.h"
 #include "core/json.h"
@@ -240,7 +241,7 @@ const char *sb_bg_small(const Item *it, char *buf, size_t cap) { bg_of(it, buf, 
   return buf; }
 const char *sb_bg_mid(const Item *it, char *buf, size_t cap) { bg_of(it, buf, cap);
   if (find_in(buf, "images.metahub.space/background/")) { const char *k[] = { "/background/small/", "/background/large/" }; for (int i = 0; i < 2; i++) replace_in(buf, cap, k[i], "/background/medium/"); }
-  else if (find_in(buf, "image.tmdb.org/t/p/")) replace_in(buf, cap, "/t/p/original/", "/t/p/w1280/");
+  else if (find_in(buf, "image.tmdb.org/t/p/")) backdrop_tmdb_upgrade(buf, cap);
   return buf; }
 const char *sb_logo_of(const Item *it, char *buf, size_t cap) { if (it->logo[0]) copy_str(buf, cap, it->logo); else if (sb_is_imdb(it->id)) snprintf(buf, cap, "https://images.metahub.space/logo/medium/%s/img", it->id); else buf[0] = 0; return buf; }
 /* "2h 10min", "130 min", "1 h 5 m" (a year or a year span is not a count of minutes) */
