@@ -1,4 +1,7 @@
 #include "core/app.h"
+#include "core/bgquality.h"
+#include "platform/plat.h"
+#include "platform/mem.h"
 #include "core/bgtrailer.h"
 #include "core/best.h"
 #include "core/keys.h"
@@ -513,8 +516,11 @@ void topnav_draw(void) {
 void app_clock_top(void) { if (splash_signed_in() || welcome_is_open()) { lglass_light(0); clock_draw(); } } /* over the start screen and the guide: the same clock, in its place
 
 /* ---- the backdrop: two layers, the new one fades in over the old (never a dip to black) ---- */
-#define BGW 1280
-#define BGH 720
+/* The backdrop alone may use the full 1080p UI surface on TVs with sufficient
+   RAM. Keep the rest of the renderer and the 720p fallback untouched. */
+static int bgWidth = SB_BG_LOW_W, bgHeight = SB_BG_LOW_H;
+static const char *bgDowngradeReason;
+static int bgSlowFrames;
 typedef struct { char url[512]; GLuint tex; float aspect; GfxTarget baked; char bakedUrl[512]; int mode, bakedMode, bakedRtl, bakedOk; } BgLayer; /* baked = the picture with its shading, made once per change */
 static BgLayer bgL[2]; static int bgTop;        /* bgL[bgTop] is above */
 static Timer1 bgFade; static int bgFadingIn, bgFadingOut;
@@ -551,21 +557,43 @@ static void bg_show(const char *u, GLuint tex, float aspect) {
   snprintf(bgCur, sizeof bgCur, "%s", u);
 }
 static int bgBakeBroken;                                  /* the driver cannot draw offscreen: draw it all every frame */
+/* A fallback changes both layers together so an old 1080p bake can never be
+   reused after we switch to 720p. Called on the GL thread, not in workers. */
+static void bg_downgrade(const char *why) {
+  if (bgWidth == SB_BG_LOW_W) return;
+  bgWidth = SB_BG_LOW_W; bgHeight = SB_BG_LOW_H;
+  for (int i = 0; i < 2; i++) {
+    if (bgL[i].baked.fbo) gfx_target_free(&bgL[i].baked);
+    bgL[i].bakedOk = 0; bgL[i].bakedUrl[0] = 0;
+  }
+  fprintf(stderr, "[bg] fallback to 720p (%s); stays at 720p until restart\n", why);
+}
+/* The existing memory guard calls this every few seconds, without blocking
+   the drawing thread. A pending downgrade is applied at the next bg_tick. */
+void bg_memory_pressure(int availableMb, int appRssMb, int totalMb) {
+  if (bgWidth == SB_BG_HIGH_W && bgquality_should_downgrade(availableMb, appRssMb, totalMb)) bgDowngradeReason = "memory pressure";
+}
 static int bg_baked_current(const BgLayer *l) { return !bgBakeBroken && l->bakedOk && !strcmp(l->bakedUrl, l->url) && l->bakedMode == l->mode && l->bakedRtl == app_rtl(); }
 void bg_tick(float dt) {
+  if (bgWidth == SB_BG_HIGH_W && bgL[bgTop].bakedOk && !bgFade.on &&
+      !player_open() && !btr_under()) {
+    bgSlowFrames = bgquality_slow_frames(bgSlowFrames, dt);
+    if (bgSlowFrames >= 90 && !bgDowngradeReason) bgDowngradeReason = "sustained frame times over 40 ms";
+  } else bgSlowFrames = 0;
+  if (bgDowngradeReason) { const char *why = bgDowngradeReason; bgDowngradeReason = NULL; bg_downgrade(why); }
   if (timer_tick(&bgFade, dt) >= 1 && !bgFade.on && (bgFadingIn || bgFadingOut)) {
     if (bgFadingOut) { bgL[0].url[0] = bgL[1].url[0] = 0; bgL[0].tex = bgL[1].tex = 0; }
     else { bgL[!bgTop].url[0] = 0; bgL[!bgTop].tex = 0; } /* the old one is dropped once the fade really ended */
     bgFadingIn = bgFadingOut = 0; }
   if (bgWaiting) {
-    float aspect; img_urgent(bgWant, BGW, BGH); GLuint tex = img_get(bgWant, BGW, BGH, &aspect); /* decoded before anything asked after it */
+    float aspect; img_urgent(bgWant, bgWidth, bgHeight); GLuint tex = img_get(bgWant, bgWidth, bgHeight, &aspect); /* decoded before anything asked after it */
     /* a crossfade running plays out first (cut short, its picture jumped in whole): the newest wanted follows it */
     if (tex) { if (NOW >= bgNotBefore && !(bgFade.on && bgFadingIn)) { bgWaiting = 0; bg_show(bgWant, tex, aspect); } }
     else if (img_failed(bgWant)) { if (bgAlt[0] && strcmp(bgAlt, bgWant)) { snprintf(bgWant, sizeof bgWant, "%s", bgAlt); bgAlt[0] = 0; } else { bgWaiting = 0; bgCur[0] = 0; bg_fade_away(); } }
   }
   /* the shown pictures stay asked for (kept from eviction): the player opens on the same picture at the same size, and
      a change of shading bakes from it again */
-  for (int i = 0; i < 2; i++) if (bgL[i].url[0]) { GLuint t = img_get(bgL[i].url, BGW, BGH, &bgL[i].aspect); bgL[i].tex = t; }
+  for (int i = 0; i < 2; i++) if (bgL[i].url[0]) { GLuint t = img_get(bgL[i].url, bgWidth, bgHeight, &bgL[i].aspect); bgL[i].tex = t; }
   if (!bgL[0].url[0] && !bgL[1].url[0]) for (int i = 0; i < 2; i++) if (bgL[i].baked.fbo) { gfx_target_free(&bgL[i].baked); bgL[i].bakedOk = 0; bgL[i].bakedUrl[0] = 0; } /* nothing shown: the memory goes back */
 }
 /* the shading as the page draws it: made ONCE per kind (and side) as a small alpha picture in the page colour
@@ -625,7 +653,16 @@ static int bg_bake(BgLayer *l) {
   if (bgBakeBroken) return 0;
   if (bg_baked_current(l)) return 1;
   if (!l->tex) return l->bakedOk && !strcmp(l->bakedUrl, l->url); /* the picture is reloading: the last bake of it stays */
-  if (!l->baked.fbo && !gfx_target_create(&l->baked, BGW, BGH)) { bgBakeBroken = 1; return 0; }
+  if (l->baked.fbo && (l->baked.w != bgWidth || l->baked.h != bgHeight)) {
+    gfx_target_free(&l->baked); l->bakedOk = 0;
+  }
+  if (!l->baked.fbo && !gfx_target_create(&l->baked, bgWidth, bgHeight)) {
+    if (bgWidth == SB_BG_HIGH_W) {
+      bg_downgrade("1080p framebuffer allocation failed");
+      /* Retry at the original safe size before disabling baked backgrounds. */
+      if (!gfx_target_create(&l->baked, bgWidth, bgHeight)) { bgBakeBroken = 1; return 0; }
+    } else { bgBakeBroken = 1; return 0; }
+  }
   gfx_target_begin(&l->baked, PAGE);
   bg_picture(l, 1); bg_shading(l->mode, 1);
   gfx_target_end();
@@ -871,7 +908,13 @@ static void key_dispatch(int k, int repeat) {
 }
 void app_text(const char *utf8) { idle_touch(); if (app_overlay && app_overlay->text) app_overlay->text(utf8); else if (screens[SCR] && screens[SCR]->text) screens[SCR]->text(utf8); }
 void app_refresh_boards(void) { extern void board_invalidate(void); extern void board_refresh_quiet(void); board_invalidate(); if (app_is_board(SCR)) board_refresh_quiet(); } /* in place: no row replays its entrance */
-void app_init(void) {
+void app_init(int drawableW, int drawableH) {
+  int total = plat_mem_total_mb(), freeMb = plat_mem_free_mb();
+  if (!getenv("SB_BG_720") && bgquality_choose(total, freeMb, drawableW, drawableH)) {
+    bgWidth = SB_BG_HIGH_W; bgHeight = SB_BG_HIGH_H;
+  }
+  fprintf(stderr, "[bg] backdrop %dx%d (surface %dx%d, TV RAM %d MB, available %d MB)\n",
+          bgWidth, bgHeight, drawableW, drawableH, total, freeMb);
   vig_tex(0); vig_tex(1); /* both shadings made at start: the first title page would make its own mid-zoom */
   topNav.want = -1; NOW = SDL_GetTicks() / 1000.0; lastIn = NOW; lastNav = NOW; bgMode = 0; tween_set(&toastA, 0);
   accent_apply(); accent_tick(0); sync_init(); btr_init(); castlink_start();

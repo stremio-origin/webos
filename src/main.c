@@ -246,7 +246,7 @@ int main(int argc, char **argv) {
   i18n_init(plat_asset_dir(), getenv("SB_LANG") ? getenv("SB_LANG") : store_get("uiLang", "auto")); /* SB_LANG=ar: development */
   if (!text_init(plat_asset_dir(), gfx_scale())) return 1;
   text_set_rtl(i18n_rtl()); icon_init(plat_asset_dir()); sb_init();
-  app_init(); player_init();
+  app_init(dw, dh); player_init();
   app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen);
   app_register(SCR_DETAIL, &detailScreen); app_register(SCR_SIM, &simScreen); app_register(SCR_SEARCH, &searchScreen); app_register(SCR_SET, &setScreen); app_card_menu_hook = cwmenu_show;
   if (sb_signed_in() || getenv("SB_SKIP_LOGIN")) { app_go(SCR_HOME, NULL, 1); splash_start(1, 0); } /* SB_SKIP_LOGIN: the default rows without an account (development) */
@@ -356,6 +356,7 @@ int main(int argc, char **argv) {
     { /* the memory guard, every 2 s: the TV ends an app that grows too big (it did at 340 MB of 641), so what can be made
          again goes before that: the pictures of the pages under a playing video, then more as the app or the TV gets tight */
       static Uint32 gAt; static int gLvl; if (SDL_GetTicks() - gAt >= 2000) { gAt = SDL_GetTicks(); int rss, swp; plat_mem_self(&rss, &swp); int fr = plat_mem_free_mb(), tot = plat_mem_total_mb();
+        bg_memory_pressure(fr, rss, tot); /* downgrade expensive backdrops before the regular image eviction */
         int lvl = 0; if (tot > 0 && rss > 0) { if (rss > tot * 30 / 100) lvl = 1; if (rss > tot * 40 / 100) lvl = 2; }
         if (fr >= 0 && fr < 60 && lvl < 1) lvl = 1; if (fr >= 0 && fr < 35) lvl = 2; /* (a 641 MB TV runs with 70-120 MB free on its own: only real shortage counts) */
         int film = player_open() && !player_page_under();

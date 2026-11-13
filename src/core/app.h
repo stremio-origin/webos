@@ -27,7 +27,7 @@ extern Scr SCR;
 extern Screen *screens[SCR_N];
 extern Screen *app_overlay;
 void app_overlay_keep(Screen *s);     /* an overlay that draws something of its own while closed (an action's chip): drawn and ticked from now on */           /* a sheet or menu over the screen (streams, the card menu): keys go there first */
-void app_init(void);
+void app_init(int drawableW, int drawableH);
 void app_register(Scr s, Screen *sc);
 void app_go(Scr s, const void *params, int noStack);
 void app_back(void);
@@ -100,6 +100,8 @@ void bg_set(const char *url, int delayMs, const char *alt);   /* crossfades to t
 void bg_clear(void);
 void bg_draw(void);
 void bg_tick(float dt);
+/* One-way 1080p -> 720p downgrade under memory pressure (main thread). */
+void bg_memory_pressure(int availableMb, int appRssMb, int totalMb);
 void bg_set_mode(int detail);                                  /* the shading: a title page shows more of the cover */
 const char *bg_current(void);
 void app_ambient_guide(int mode);                             /* the guide takes Settings' two glows for its page: 1 up, 2 fading out, 0 gone */
