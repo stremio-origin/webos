@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "ui/img.h"
+#include "ui/imgquality.h"
 #include <SDL2/SDL.h>
 #include "ui/gfx.h"
 #include "core/net.h"
@@ -60,6 +61,7 @@ typedef struct Img {
   unsigned lastUse;
   int fails; double failAt;                     /* failed loads so far, and when the last one failed: asked again, it tries once more after a wait */
   struct Img *next;
+  struct Img *qualityNext; /* resolution variants linked from the original URL entry */
 } Img;
 #define BUCKETS 1024
 static Img *table[BUCKETS];
@@ -204,7 +206,53 @@ static Img *request_as(const char *key, const char *src, int w, int h, int fit, 
   enqueue(im);
   return im;
 }
-static Img *request(const char *url, int w, int h) { return request_as(url, url, w, h, -1, 0); }
+/* A plain URL remains the base cache key. Higher resolutions use immutable
+   variants: never mutate dimensions while a worker may be decoding or uploading. */
+static Img *plain_request(const char *url, int w, int h, int *created) {
+  if (created) *created = 0;
+  Img *base = find(url, fnv(url));
+  if (!base) { if (created) *created = 1; return request_as(url, url, w, h, -1, 0); }
+  int tw = w, th = h;
+  if (drawScale < 1) { tw = (int)(w * drawScale + 0.999f); th = (int)(h * drawScale + 0.999f); }
+  if (tw < 1) tw = 1; if (th < 1) th = 1;
+  Img *best = NULL, *largest = base; int variants = 0;
+  for (Img *v = base; v; v = v->qualityNext) {
+    variants++;
+    if ((long)v->w * v->h > (long)largest->w * largest->h) largest = v;
+    if (img_quality_covers(v->w, v->h, tw, th) &&
+        (!best || (long)v->w * v->h < (long)best->w * best->h)) best = v;
+  }
+  if (!best && img_quality_room(usedBytes, budgetBytes, tw, th, variants)) {
+    /* Wait for the initial copy to arrive: the raw-download cache then supplies
+       the higher variant without duplicating a parallel network request. */
+    if (variants == 1 && !base->tex && base->state != 3) best = base;
+    else {
+      char key[2300]; int n = snprintf(key, sizeof key, "up:%dx%d|%s", tw, th, url);
+      if (n > 0 && (size_t)n < sizeof key) {
+        Img *im = request_as(key, url, w, h, -1, 0);
+        im->qualityNext = base->qualityNext;
+        base->qualityNext = im;
+        if (created) *created = 1;
+        return im;
+      }
+    }
+  }
+  /* Keep the best available copy if the TV is too low on GPU memory. */
+  best = best ? best : largest;
+  return request_as(best->url, best->src, best->w, best->h, -1, 0);
+}
+static Img *request(const char *url, int w, int h) { return plain_request(url, w, h, NULL); }
+static Img *plain_fallback(const char *url, Img *wanted) {
+  Img *base = find(url, fnv(url)); if (!base) return NULL;
+  Img *best = NULL;
+  for (Img *v = base; v; v = v->qualityNext) {
+    if (!v->tex || v == wanted) continue;
+    if (!best || (long)v->w * v->h > (long)best->w * best->h) best = v;
+  }
+  if (best) best->lastUse = frameNo; /* keep the visible image during upgrade */
+  return best;
+}
+
 /* cache keys are built for every label / picture in every frame: printf's float formatting was a tenth of the
    drawing thread's time on the TV */
 static char *key_int(char *p, long v) { char t[24]; int n = 0; unsigned long u = v < 0 ? (unsigned long)(-v) : (unsigned long)v; do { t[n++] = (char)('0' + u % 10); u /= 10; } while (u); if (v < 0) *p++ = '-'; while (n) *p++ = t[--n]; return p; }
@@ -222,8 +270,10 @@ int img_shaped_failed(const char *url, int w, int h, float radius, int fit) { ch
 GLuint img_get(const char *url, int w, int h, float *aspect) {
   if (!url || !*url) return 0;
   Img *im = request(url, w, h);
-  if (aspect) *aspect = im->aspect > 0 ? im->aspect : (float)w / h;
-  return im->tex;
+  /* Display the existing texture until a sharper one finishes its GPU upload. */
+  Img *display = im->tex ? im : plain_fallback(url, im);
+  if (aspect) *aspect = display && display->aspect > 0 ? display->aspect : (float)w / h;
+  return display ? display->tex : 0;
 }
 void img_prefetch(const char *url, int w, int h) { if (url && *url && usedBytes < budgetBytes * 85 / 100) request(url, w, h); } /* looking ahead only while there is room: it never pushes out what is on screen */
 /* the address a plain picture on the screen was loaded from (the player shows the very logo the page showed) */
@@ -240,9 +290,9 @@ void img_urgent(const char *url, int w, int h) {
 }
 /* title art: decoded before the posters waiting in the queue, and kept */
 void img_prefetch_pri(const char *url, int w, int h) {
-  if (!url || !*url) return; Img *im = find(url, fnv(url));
-  if (!im) { im = request(url, w, h); if (im->state == 0) { pthread_mutex_lock(&mu); /* move it from the back to the front */
-      if (sn && stk[sn - 1] == im) { sn--; qn--; } pthread_mutex_unlock(&mu); enqueue_at(im, 1); } }
+  if (!url || !*url) return; int created = 0; Img *im = plain_request(url, w, h, &created);
+  if (created && im->state == 0) { pthread_mutex_lock(&mu); /* move newly queued art to the front */
+      if (sn && stk[sn - 1] == im) { sn--; qn--; } pthread_mutex_unlock(&mu); enqueue_at(im, 1); }
   else im->lastUse = frameNo;
   /* the last 32 kept (a logo at its drawn size is ~360 KB: about 12 MB of the picture budget at most) */
   static Img *pinned[32]; static int pn; if (!im->pin) { if (pinned[pn]) pinned[pn]->pin = 0; pinned[pn] = im; pn = (pn + 1) % 32; im->pin = 1; }
@@ -259,8 +309,18 @@ int img_palette(const char *url, int w, int h, int alpha, Palette *out) {
       pthread_mutex_lock(&mu); if (sn < 1024) { q_push(im, 0); pthread_cond_signal(&cv); } pthread_mutex_unlock(&mu); } }
   return 0;
 }
-int img_failed(const char *url) { Img *im = find(url, fnv(url)); return im && im->state == 3; }
-int img_loaded(const char *url) { Img *im = find(url, fnv(url)); return im && im->tex; }
+int img_failed(const char *url) { /* an older usable resolution is not a failure */
+  if (!url || !*url) return 0;
+  Img *base = find(url, fnv(url)); if (!base) return 0;
+  for (Img *v = base; v; v = v->qualityNext) if (v->tex || v->state != 3) return 0;
+  return 1;
+}
+int img_loaded(const char *url) {
+  if (!url || !*url) return 0;
+  Img *base = find(url, fnv(url));
+  for (Img *v = base; v; v = v->qualityNext) if (v->tex) return 1;
+  return 0;
+}
 
 /* uploads a few finished decodes per frame (each upload is a copy into GPU memory) */
 /* uploads take about 3/4 MB a frame: the TV's driver rearranges every texel on the CPU as it uploads (a 1280x720

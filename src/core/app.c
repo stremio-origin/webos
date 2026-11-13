@@ -515,7 +515,7 @@ void app_clock_top(void) { if (splash_signed_in() || welcome_is_open()) { lglass
 /* ---- the backdrop: two layers, the new one fades in over the old (never a dip to black) ---- */
 #define BGW 1280
 #define BGH 720
-typedef struct { char url[512]; GLuint tex; float aspect; GfxTarget baked; char bakedUrl[512]; int mode, bakedMode, bakedRtl, bakedOk; } BgLayer; /* baked = the picture with its shading, made once per change */
+typedef struct { char url[512]; GLuint tex; float aspect; GfxTarget baked; char bakedUrl[512]; GLuint bakedSourceTex; int mode, bakedMode, bakedRtl, bakedOk; } BgLayer; /* baked = the picture with its shading, made once per change */
 static BgLayer bgL[2]; static int bgTop;        /* bgL[bgTop] is above */
 static Timer1 bgFade; static int bgFadingIn, bgFadingOut;
 static char bgCur[512], bgWant[512], bgAlt[512]; static double bgNotBefore; static int bgWaiting;
@@ -551,7 +551,7 @@ static void bg_show(const char *u, GLuint tex, float aspect) {
   snprintf(bgCur, sizeof bgCur, "%s", u);
 }
 static int bgBakeBroken;                                  /* the driver cannot draw offscreen: draw it all every frame */
-static int bg_baked_current(const BgLayer *l) { return !bgBakeBroken && l->bakedOk && !strcmp(l->bakedUrl, l->url) && l->bakedMode == l->mode && l->bakedRtl == app_rtl(); }
+static int bg_baked_current(const BgLayer *l) { return !bgBakeBroken && l->bakedOk && !strcmp(l->bakedUrl, l->url) && l->bakedSourceTex == l->tex && l->bakedMode == l->mode && l->bakedRtl == app_rtl(); }
 void bg_tick(float dt) {
   if (timer_tick(&bgFade, dt) >= 1 && !bgFade.on && (bgFadingIn || bgFadingOut)) {
     if (bgFadingOut) { bgL[0].url[0] = bgL[1].url[0] = 0; bgL[0].tex = bgL[1].tex = 0; }
@@ -629,7 +629,7 @@ static int bg_bake(BgLayer *l) {
   gfx_target_begin(&l->baked, PAGE);
   bg_picture(l, 1); bg_shading(l->mode, 1);
   gfx_target_end();
-  snprintf(l->bakedUrl, sizeof l->bakedUrl, "%s", l->url); l->bakedMode = l->mode; l->bakedRtl = app_rtl(); l->bakedOk = 1;
+  snprintf(l->bakedUrl, sizeof l->bakedUrl, "%s", l->url); l->bakedSourceTex = l->tex; l->bakedMode = l->mode; l->bakedRtl = app_rtl(); l->bakedOk = 1;
   return 1;
 }
 /* an opaque panel that holds still (the card menu, the streams sheet) says where it is, for the next frame: the
