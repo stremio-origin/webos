@@ -104,7 +104,10 @@ static SDL_Rect to_plane(int x, int y, int w, int h) {
   static int pw, ph; if (!pw) { const char *e = getenv("SB_PLANE"); if (!e || sscanf(e, "%dx%d", &pw, &ph) != 2 || pw <= 0 || ph <= 0) { pw = 1280; ph = 720; } fprintf(stderr, "[video] partial rectangles in a %dx%d video space\n", pw, ph); }
   SDL_Rect r = { x * pw / 1920, y * ph / 1080, w * pw / 1920, h * ph / 1080 }; return r;
 }
-static int screensaverHeld(void) { return S.mediaId[0] && S.playing && !S.pausedByUs && !S.ended && !S.error; }
+/* a stream is loaded, so the TV must not start its screensaver: the player is open, playing or paused.
+   ('playing' alone is not enough: the TV asks on its own timer, and a pause, a seek or a track change can
+   land on it; the answer was "let through" and the screen saver came over a film) */
+static int screensaverHeld(void) { return S.mediaId[0] != 0 && !S.error; }
 
 /* ---- the video plane on webOS 3/4 ---- */
 static void acb_callback(long h, long task, long event, long appState, long playState, int reply) { (void)h; (void)task; fprintf(stderr, "[video] acb event=%ld app=%ld play=%ld reply=%d\n", event, appState, playState, reply); }
@@ -226,13 +229,23 @@ static bool on_load(LSHandle *h, LSMessage *m, void *ctx) {
   return true;
 }
 /* the TV asks before its screen saver starts; the answer goes back with the request's own timestamp */
+/* the TV's payload is pretty-printed ("state": "Active"), so a literal "state":"Active" never matched and
+   the app answered nothing at all; skip the whitespace around the colon instead */
+static int ss_active(const char *p) {
+  const char *s = p ? strstr(p, "\"state\"") : NULL; if (!s) return 0;
+  s += 7; while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+  if (*s != ':') return 0; s++;
+  while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+  if (*s != '"') return 0; s++;
+  return !strncmp(s, "Active", 6);
+}
 static int ss_answer(const char *p, char *out, size_t cap) {
-  if (!p || !strstr(p, "\"state\":\"Active\"")) return 0;
+  if (!ss_active(p)) return 0;
   const char *t = strstr(p, "\"timestamp\":"); if (!t) return 0; t += 12; while (*t == ' ') t++;
   char ts[64]; int k = 0; while (*t && *t != ',' && *t != '}' && k < 63) ts[k++] = *t++; ts[k] = 0; /* sent back exactly as it came */
-  pthread_mutex_lock(&mu); int hold = screensaverHeld(); pthread_mutex_unlock(&mu);
+  pthread_mutex_lock(&mu); int hold = screensaverHeld(); int playing = S.playing, paused = S.pausedByUs, ended = S.ended, err = S.error; pthread_mutex_unlock(&mu);
   snprintf(out, cap, "{\"clientName\":\"%s\",\"ack\":%s,\"timestamp\":%s}", SB_APP_ID, hold ? "false" : "true", ts);
-  fprintf(stderr, "[video] screen saver asked: %s\n", hold ? "held (a film plays)" : "let through");
+  fprintf(stderr, "[video] screen saver asked: %s (playing=%d pausedByUs=%d ended=%d error=%d)\n", hold ? "held (a film plays)" : "let through", playing, paused, ended, err);
   return 1;
 }
 static int failed(const char *p) { const char *v = p ? strstr(p, "\"returnValue\"") : NULL; if (!v) return 0; v += 13; while (*v == ' ' || *v == ':') v++; return !strncmp(v, "false", 5); }
@@ -249,7 +262,8 @@ static bool on_screensaver(LSHandle *h, LSMessage *m, void *u) {
 }
 static void on_screensaver_app(const char *p, void *ud) { /* main thread, from plat_luna_pump */
   (void)ud; if (failed(p)) { log_payload("screen saver request refused:", p); return; }
-  char b[256]; if (ss_answer(p, b, sizeof b)) plat_luna_send(SS_RESPONSE, b);
+  if (p && strstr(p, "\"state\"")) fprintf(stderr, "[video] screen saver request: %.120s\n", p);
+  char b[256]; if (ss_answer(p, b, sizeof b)) plat_luna_send_own(SS_RESPONSE, b);
 }
 
 static void *loop_thread(void *u) { (void)u; gLoopRun(loop); return NULL; }
@@ -394,7 +408,7 @@ int video_set_crop(int sx, int sy, int sw, int sh, float dx, float dy, float dw,
 }
 void video_pump(void) {
   if (ssRefused == 1) { ssRefused = 2; char b[160]; snprintf(b, sizeof b, "{\"subscribe\":true,\"clientName\":\"%s\"}", SB_APP_ID);
-    fprintf(stderr, "[video] screen saver requests through the app's luna handle: %s\n", plat_luna_subscribe(SS_REGISTER, b, on_screensaver_app, NULL) ? "asked" : "not possible"); }
+    fprintf(stderr, "[video] screen saver requests through the app's own luna handle: %s\n", plat_luna_subscribe_own(SS_REGISTER, b, on_screensaver_app, NULL) ? "asked" : "not possible"); }
   int bind = 0, again = 0, died = 0; double pos = 0; int aud = 0, txt = -1, loaded = 0;
   pthread_mutex_lock(&mu);
   if (S.bindWanted & 1) bind = acb != 0; if (S.bindWanted & 2) again = 1; S.bindWanted = 0;

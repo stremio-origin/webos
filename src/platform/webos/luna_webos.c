@@ -89,13 +89,14 @@ static int setup(void) {
   SYM(L, lsRegister, "LSRegister"); SYM(L, lsAttach, "LSGmainAttach"); SYM(L, lsCallOne, "LSCallOneReply"); SYM(L, lsPayload, "LSMessageGetPayload");
   *(void **)(&lsCallCancel) = dlsym(L, "LSCallCancel"); *(void **)(&lsCall) = dlsym(L, "LSCall"); *(void **)(&lsErrInit) = dlsym(L, "LSErrorInit"); *(void **)(&lsErrFree) = dlsym(L, "LSErrorFree");
   SYM(G, gCtxNew, "g_main_context_new"); SYM(G, gLoopNew, "g_main_loop_new"); SYM(G, gCtxIter, "g_main_context_iteration");
-  /* the window's own registration (SDL) holds the app id: anonymous first (a rooted TV lets it call anything),
-     then a media-client name, which the developer-mode role allows (for com.webos.media only) */
+  /* the app's own name first: the role the installer writes gives it the app's permissions (tvpower among
+     them), which anonymous does not get and the media-client name does not allow outside com.webos.media.
+     Then anonymous (a rooted TV lets it call anything), then a media-client name */
   const char *app = getenv("APPID"); if (!app) app = "tv.stremioorigin.app"; const char *shortId = strrchr(app, '.') ? strrchr(app, '.') + 1 : app;
   char name[160]; snprintf(name, sizeof name, "com.webos.media.client.%s.sys%d", shortId, (int)getpid());
-  const char *tries[2] = { NULL, name }; LSErr e; memset(&e, 0, sizeof e);
-  for (int i = 0; i < 2 && !bus; i++) { err_reset(&e); LSHandle *h = NULL;
-    if (lsRegister(tries[i], &h, &e) && h) bus = h; else fprintf(stderr, "[luna] register %s refused: %d %s\n", tries[i] ? tries[i] : "(anonymous)", e.error_code, e.message ? e.message : "?"); }
+  const char *tries[3] = { app, NULL, name }; LSErr e; memset(&e, 0, sizeof e);
+  for (int i = 0; i < 3 && !bus; i++) { err_reset(&e); LSHandle *h = NULL;
+    if (lsRegister(tries[i], &h, &e) && h) { bus = h; fprintf(stderr, "[luna] registered as %s\n", tries[i] ? tries[i] : "(anonymous)"); } else fprintf(stderr, "[luna] register %s refused: %d %s\n", tries[i] ? tries[i] : "(anonymous)", e.error_code, e.message ? e.message : "?"); }
   if (!bus) { err_reset(&e); return 0; }
   ctx = gCtxNew(); void *loop = gLoopNew(ctx, 0); err_reset(&e);
   if (!lsAttach(bus, loop, &e)) { fprintf(stderr, "[luna] attach failed: %s\n", e.message ? e.message : "?"); err_reset(&e); bus = NULL; return 0; }
@@ -177,6 +178,27 @@ unsigned long plat_luna_subscribe(const char *uri, const char *payload, PlatLuna
   subs[i].on = 1; subs[i].viaHelper = 0;
   if (!lsCall(bus, uri, payload, on_sub, (void *)(uintptr_t)i, &tok, &e) || !tok) { fprintf(stderr, "[luna] %s failed: %s\n", uri, e.message ? e.message : "?"); err_reset(&e); subs[i].on = 0; pthread_mutex_unlock(&callMu); return 0; }
   err_reset(&e); subs[i].tok = tok; pthread_mutex_unlock(&callMu); return tok;
+}
+/* a subscription that must not go through the system helper library: libhelpers acknowledges the subscribe
+   call and then never delivers its events (measured on webOS 6.4 against the TV's screen-saver request), while
+   a plain subscription on the app's own handle receives them */
+unsigned long plat_luna_subscribe_own(const char *uri, const char *payload, PlatLunaCb cb, void *ud) {
+  int i = 0; while (i < SUBS && subs[i].on) i++; if (i == SUBS) return 0;
+  subs[i].cb = cb; subs[i].ud = ud; subs[i].gen++;
+  pthread_mutex_lock(&callMu);
+  if (!setup() || !lsCall) { pthread_mutex_unlock(&callMu); return 0; }
+  LSErr e; memset(&e, 0, sizeof e); if (lsErrInit) lsErrInit(&e); unsigned long tok = 0;
+  subs[i].on = 1; subs[i].viaHelper = 0;
+  if (!lsCall(bus, uri, payload, on_sub, (void *)(uintptr_t)i, &tok, &e) || !tok) { fprintf(stderr, "[luna] %s failed: %s\n", uri, e.message ? e.message : "?"); err_reset(&e); subs[i].on = 0; pthread_mutex_unlock(&callMu); return 0; }
+  err_reset(&e); subs[i].tok = tok; pthread_mutex_unlock(&callMu); return tok;
+}
+/* the answer to such a subscription, from the same handle the request came to */
+int plat_luna_send_own(const char *uri, const char *payload) {
+  pthread_mutex_lock(&callMu);
+  int ok = 0;
+  if (setup()) { LSErr e; memset(&e, 0, sizeof e); if (lsErrInit) lsErrInit(&e); unsigned long tok = 0;
+    ok = lsCallOne(bus, uri, payload, on_drop, NULL, &tok, &e); if (!ok) fprintf(stderr, "[luna] %s failed: %s\n", uri, e.message ? e.message : "?"); err_reset(&e); }
+  pthread_mutex_unlock(&callMu); return ok;
 }
 void plat_luna_cancel(unsigned long handle) {
   for (int i = 0; i < SUBS; i++) if (subs[i].on && subs[i].tok == handle) { subs[i].on = 0;
