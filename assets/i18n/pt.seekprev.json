@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Pré-visualizações na barra",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Imagens do filme sobre a barra enquanto avança. Desligado: não é criada nenhuma",
+ "Previews for torrents": "Pré-visualizações para torrents",
+ "Slower than debrid, up to 500 MB extra per stream.": "Mais lento do que o debrid, até 500 MB extra por stream.",
+ "Previews {n}%": "Pré-visualizações {n}%",
+ "Previews ready": "Pré-visualizações prontas",
+ "Uses more data, on mobile data too.": "Usa mais dados, também em dados móveis.",
+ "Getting the seek bar’s previews ready… {n}%": "A preparar as pré-visualizações da barra… {n}%",
+ "Play now": "Reproduzir já",
+ "Load previews before playing": "Carregar pré-visualizações antes de reproduzir",
+ "about {n} s left": "faltam cerca de {n} s",
+ "about {n} min left": "faltam cerca de {n} min",
+ "The film starts once this much of it has its previews; OK starts it at once": "O filme começa quando esta parte tiver pré-visualizações; OK começa de imediato"
+}

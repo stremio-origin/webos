@@ -101,7 +101,7 @@ static const struct { const char *t, *l, *b[MAXB], *ic[MAXB]; int pv, ctl; } TOU
     { "TMDB: titles and descriptions in your language, and its reviews", "Trakt: the rating, how people spread theirs, and their comments" },
     { "set_lang", "reviews" }, PV_YOURKEYS, 0 },
   { "Thank you", "Made by one person in free time. No ads and no tracking.",
-    { "Something wrong? Settings \xe2\x80\xba About \xe2\x80\xba Share logs", "Enjoying it? A coffee, or a star on GitHub" },
+    { "Something wrong? Settings \xe2\x80\xba About \xe2\x80\xba Share logs", "Enjoying it? Support it, or star it on GitHub" },
     { "g_bug", "g_heart" }, PV_THANKS, 0 },
 };
 #define NTOUR (int)(sizeof TOUR / sizeof TOUR[0])
@@ -110,7 +110,7 @@ typedef struct { char t[120], x[300]; const char *ic; char icn[24]; int nt, nx; 
 static struct {
   int open, closing, checked, tour, n, cur, step, from, fromStep, dir, pageSw, fromSignIn; Page p[MAXP];
   char ver[32], short_ver[16], stitle[96], smsg[400], url[400], urlShown[400], gh[300], ghShown[300];
-  News news[MAXN]; int nnews;
+  News news[MAXN]; int nnews; char note[300]; int nnote, nxMax; /* nxMax: lines a news text may take (3; fewer only for a list that cannot fit). note: a line under the news (whatsnew.json's "note"), soft; nnote its lines */
   double pageAt, stepAt, fromAt; Timer1 in, out, sw; Tween dot, focus, knob; Nudge nudge; unsigned lg;
   char speed[200]; double doneAt; int speedFail;
   int tipWant; Tween tipK; /* the thank-you's codes: which shows (0 the coffee, 1 GitHub); OK turns it over */
@@ -248,9 +248,9 @@ static void settings_page(float a, int focus, float usbOn, int about) {
   float px = 720, py = 150, pw = 1040, ph = 810;
   gfx_rrect(px, py, pw, ph, 24, RGBA(21, 19, 28, 150)); gfx_rrect_v(px, py, pw, ph, 24, WHITE_A(10), WHITE_A(0)); gfx_ring(px, py, pw, ph, 24, 1, WHITE_A(22));
   text_draw(T(about ? "About" : "Playback"), px + 54, py + 40, 38, 700, WHITE_A(255), -0.5f, 900, ALIGN_LEFT);
-  if (about) { static const char *AL[3] = { "Check for updates", "Share logs", "Support the project" }, *AD[3] = { "You have the latest version", "Share the code and describe the issue", "A coffee, or a star on GitHub" };
+  if (about) { static const char *AL[3] = { "Check for updates", "Share logs", "Support the project" }, *AD[3] = { "You have the latest version", "Share the code and describe the issue", "Support, or a star on GitHub" };
     float ry = py + 120; for (int i = 0; i < 3; i++) { int f = i == focus;
-      if (f) { float pk = ok_press(), d = 6 * pk; lit_box(px + 30, ry - 4, pw - 60, 112, 20, ACC | 0xff000000u, pk); gfx_ring_out(px + 30 + d, ry - 4 + d * 0.6f, pw - 60 - 2 * d, 112 - 1.2f * d, 20, 4, acc_a(0.3f)); }
+      if (f) { float pk = ok_press(); lit_box(px + 30, ry - 4, pw - 60, 112, 20, ACC | 0xff000000u, pk);  }
       text_draw(T(AL[i]), px + 54, ry + 16, 28, 600, f ? ACC_FG : ACC3 | 0xff000000u, -0.2f, 900, ALIGN_LEFT); text_draw(T(AD[i]), px + 54, ry + 54, 22, 400, f ? col_alpha(ACC_FG, 0.85f) : WHITE_A(199), 0, 900, ALIGN_LEFT); ry += 118; }
     gfx_opacity_pop(); return; }
   static const struct { const char *l, *d, *v; int sw; } R[6] = {
@@ -260,7 +260,7 @@ static void settings_page(float a, int focus, float usbOn, int about) {
     { "Cache torrents on USB", "USB drive \xc2\xb7 28 GB free. Faster seeks and less memory used", NULL, 2 } };
   float ry = py + 120;
   for (int i = 0; i < 6; i++) { float L = px + 54, Rx = px + pw - 54; int f = i == focus;
-    if (f) { float pk = ok_press(), d = 6 * pk; lit_box(px + 30, ry - 4, pw - 60, 112, 20, ACC | 0xff000000u, pk); gfx_ring_out(px + 30 + d, ry - 4 + d * 0.6f, pw - 60 - 2 * d, 112 - 1.2f * d, 20, 4, acc_a(0.3f)); }
+    if (f) { float pk = ok_press(); lit_box(px + 30, ry - 4, pw - 60, 112, 20, ACC | 0xff000000u, pk);  }
     text_draw(T(R[i].l), L, ry + 16, 28, 600, f ? ACC_FG : WHITE_A(255), -0.2f, 700, ALIGN_LEFT); text_draw(T(R[i].d), L, ry + 16 + 38, 22, 400, f ? col_alpha(ACC_FG, 0.85f) : WHITE_A(199), 0, 760, ALIGN_LEFT);
     if (R[i].v) { text_draw(" \xe2\x80\xba", Rx, ry + 36, 26, 600, WHITE_A(115), 0, 0, ALIGN_RIGHT); text_draw(T(R[i].v), Rx - 22, ry + 36, 26, 600, ACC3 | 0xff000000u, 0, 0, ALIGN_RIGHT); }
     else { float on = R[i].sw == 1 ? 1 : R[i].sw == 2 ? usbOn : best_on() ? 1 : 0; uint32_t tr = f ? col_mix(WHITE_A(82), WHITE_A(255), on) : col_mix(WHITE_A(51), ACC | 0xff000000u, on);
@@ -540,7 +540,7 @@ static void subs_tray(float open, float tab, int col, float row) {
   gfx_rrect(x, y, W0, H, 28, RGBA(18, 16, 28, 214)); gfx_rrect_v(x, y, W0, H, 28, WHITE_A(20), WHITE_A(5)); gfx_ring(x, y, W0, H, 28, 1, WHITE_A(31));
   const char *TB[2] = { T("Subtitles"), T("Addons") }; float tbw[2], tbx[2], tx = x + 31; for (int i = 0; i < 2; i++) { tbw[i] = 48 + text_width(TB[i], 24, 700, 0); tbx[i] = tx; tx += tbw[i] + 10; }
   float cy = y + 23, bh = 20 + L24, px = tbx[0] + (tbx[1] - tbx[0]) * tab, pw = tbw[0] + (tbw[1] - tbw[0]) * tab, tf = col < 0 ? 1 : 0;
-  lit_box(px, cy, pw, bh, 24, col_mix(WHITE_A(26), ACC | 0xff000000u, tf), tf > 0.5f ? ok_press() : 0); if (tf) gfx_ring_out(px, cy, pw, bh, 24, 4, acc_a(0.38f));
+  lit_box(px, cy, pw, bh, 24, col_mix(WHITE_A(26), ACC | 0xff000000u, tf), tf > 0.5f ? ok_press() : 0); 
   for (int i = 0; i < 2; i++) { float u = 1 - fabsf(i - tab); u = u < 0 ? 0 : u; text_draw(TB[i], tbx[i] + tbw[i] / 2, cy + 10, 24, 700, col_mix(WHITE_A(191), tf ? ACC_FG : WHITE_A(255), u), 0, 0, ALIGN_CENTER); }
   cy += bh + 18;
   const char *CT[4] = { tab < 0.5f ? T("In the file") : T("Language"), tab < 0.5f ? "OpenSubtitles" : T("English"), T("Style"), T("Delay") };
@@ -789,15 +789,15 @@ static void sc_thanks(int st, float t) { if (st == 0) logs_howto(t); else if (W.
 /* the version's page: its glass shown off over the brightest pictures (one flowing into the next under it), the bar's
    focus gliding along the tabs, and the two codes on a sheet of the same glass in the middle */
 static void sc_news(float t) {
-  static const int ART[3] = { 5, 1, 6 }; const float P = 6.0f; int n = (int)(t / P), a = ART[n % 3], b = ART[(n + 1) % 3]; float f = sstep(P - 1.2f, P, fmodf(t, P));
-  backdrop(a, 0.35f); { float asp; GLuint t2 = art(b, 0, &asp); if (t2 && f > 0.001f) { gfx_image(t2, 0, 0, SB_W, SB_H, 0, WHITE_A((int)(255 * f)), 0, 0, 1, 1); sgT2 = t2; sgMix = f; } }
-  gfx_rrect(0, 0, SB_W, SB_H, 0, BLACK_A(90)); sgDim = 90 / 255.0f; /* (a touch of the pages' dark: the words on the glass read) */
+  /* one steady background in the pages' own colours: the app's deep violet and its slow glows (they move by themselves,
+     never a cut). Before: three bright demo pictures in turn, and the codes' glass took the next one at once, mid-fade */
+  gfx_rect(0, 0, SB_W, SB_H, PAGE); if (sgOrb) gfx_image(sgOrb, 0, 0, SB_W, SB_H, 0, WHITE_A(255), 0, 0, 1, 1); sgT = sgOrb; sgShade = 0;
   float pt = fmodf(t, 12.0f), pill = pt < 8.0f ? 1 + glide(5.0f, pt) : 2 - glide(9.0f, pt); /* calm: on Home, now and then over to Library and back */
   topbar(1, pill, 0, 0, 0);
   if (!W.gh[0] || W.tour) return; /* (in the tour: the codes are the thanks page's, never twice) */
   float Q = 500, sw = support_w(Q), h = support_h(Q), pw = sw + 120, phh = h + 110, px = SB_W / 2 - pw / 2, py = 150 + (SB_H - 150) / 2 - phh / 2 + 14 * (1 - eo(0, 0.7f, t)), sel = W.tipK.v;
   wSoft = 0.4f; wglass(px, py, pw, phh, 56, 0.9f, 9); lglass_light(0); /* the sheet: the bar's glass, large, bending gently */
-  support_glass_picture(f > 0.5f && sgT2 ? sgT2 : sgT); support_draw(px + 60, py + 55, Q, sel, 0, W.url, W.urlShown, W.gh, W.ghShown);
+  support_glass_picture(sgT); /* (the same picture every frame: nothing to switch) */ support_draw(px + 60, py + 55, Q, sel, 0, W.url, W.urlShown, W.gh, W.ghShown);
 }
 static void scene(int pv, int st, float t) {
   switch (pv) { case PV_KEYS: sc_keys(st, t); break; case PV_HOLD: sc_hold(st, t); break; case PV_STREAMS: sc_streams(st, t); break; case PV_SUBS: sc_subs(st, t); break;
@@ -807,11 +807,16 @@ static void scene(int pv, int st, float t) {
 /* ==== the page ==== */
 static float colX(void) { return app_rtl() ? SB_W - MX : MX; }   /* the words' start edge */
 static float frameX(void) { return app_rtl() ? MX : SB_W - MX - FW; }
+static float words_h(const Page *p);
 static void measure(void) {
   if (W.lg == i18n_gen()) return; W.lg = i18n_gen();
   for (int i = 0; i < W.n; i++) { Page *p = &W.p[i]; p->nt = text_wrap_count(T(p->title), COLW, 2, TI_PX, 800, -1.4f); p->nl = p->lead[0] ? text_wrap_count(T(p->lead), COLW, 3, LE_PX, 500, 0) : 0;
     for (int b = 0; b < p->nb; b++) p->nbl[b] = text_wrap_count(T(p->b[b]), COLW - CHIP - 24 - (p->ctl && b == p->nb - 1 ? 90 : 0), 3, PO_PX, 700, -0.2f); }
-  for (int i = 0; i < W.nnews; i++) { W.news[i].nt = text_wrap_count(T(W.news[i].t), COLW - CHIP - 24, 2, NT_PX, 800, -0.5f); W.news[i].nx = W.news[i].x[0] ? text_wrap_count(T(W.news[i].x), COLW - CHIP - 24, 3, NX_PX, 500, 0) : 0; }
+  W.nnote = W.note[0] ? text_wrap_count(T(W.note), COLW, 3, NX_PX, 500, 0) : 0;
+  const Page *np = NULL; for (int i = 0; i < W.n; i++) if (W.p[i].pv == PV_NEWS) np = &W.p[i];
+  for (W.nxMax = 3; ; W.nxMax--) { /* the news texts get 3 lines; only a list too long for the screen even at 0.7 of its size gets 2 (the last resort) */
+    for (int i = 0; i < W.nnews; i++) { W.news[i].nt = text_wrap_count(T(W.news[i].t), COLW - CHIP - 24, 2, NT_PX, 800, -0.5f); W.news[i].nx = W.news[i].x[0] ? text_wrap_count(T(W.news[i].x), COLW - CHIP - 24, W.nxMax, NX_PX, 500, 0) : 0; }
+    if (W.nxMax == 2 || !np || words_h(np) * 0.7f <= (SB_H - 44) - 60) break; }
 }
 static void step_label(int i, char *o, size_t n) {
   if (W.p[i].pv == PV_NEWS) { snprintf(o, n, "%s", T1("Version {v}", "v", W.short_ver)); return; }
@@ -819,7 +824,7 @@ static void step_label(int i, char *o, size_t n) {
 }
 static float point_h(const Page *p, int b) { float h = fmaxf(CHIP, p->nbl[b] * PO_LH); return p->ctl && b == p->nb - 1 ? fmaxf(h, CTL_H - 24) + 24 : h + 12; }
 static float words_h(const Page *p) {
-  if (p->pv == PV_NEWS) { float h = text_line_height(STEP_PX) + 18 + p->nt * TI_LH + 36; for (int i = 0; i < W.nnews; i++) h += fmaxf(CHIP, W.news[i].nt * NT_LH + (W.news[i].nx ? 6 + W.news[i].nx * NX_LH : 0)) + NGAP; return h; }
+  if (p->pv == PV_NEWS) { float h = text_line_height(STEP_PX) + 18 + p->nt * TI_LH + 36; for (int i = 0; i < W.nnews; i++) h += fmaxf(CHIP, W.news[i].nt * NT_LH + (W.news[i].nx ? 6 + W.news[i].nx * NX_LH : 0)) + NGAP; if (W.nnote) h += 8 + W.nnote * NX_LH; return h; }
   float h = text_line_height(STEP_PX) + 18 + p->nt * TI_LH + (p->nl ? 20 + p->nl * LE_LH : 0) + 40;
   for (int b = 0; b < p->nb; b++) h += point_h(p, b) + PO_GAP; return h;
 }
@@ -832,23 +837,27 @@ static void ctl_switch(float x, float y, float h, float k, int rtl) {
 }
 static void words(int i, float a, float dx) {
   if (a <= 0.004f || i < 0 || i >= W.n) return;
-  const Page *p = &W.p[i]; int rtl = app_rtl(), al = rtl ? ALIGN_RIGHT : ALIGN_LEFT; float x = colX(), y = FY + FH / 2 - words_h(p) / 2, s = rtl ? -1 : 1;
-  if (y < 110) y = 110;
-  gfx_opacity_push(a); gfx_offset_push(dx, 0);
+  const Page *p = &W.p[i]; int rtl = app_rtl(), al = rtl ? ALIGN_RIGHT : ALIGN_LEFT; float wh = words_h(p), x = colX(), y = FY + FH / 2 - wh / 2, s = rtl ? -1 : 1, fit = 1;
+  if (p->pv == PV_NEWS) { const float top = 60, bot = SB_H - 44; /* What's new: the whole list between the screen's top and foot, whatever its length or language (8 items, the longest words) */
+    if (wh > bot - top) { fit = (bot - top) / wh; if (fit < 0.7f) fit = 0.7f; }
+    y = FY + FH / 2 - wh * fit / 2; if (y + wh * fit > bot) y = bot - wh * fit; if (y < top) y = top; }
+  else if (y < 110) y = 110;
+  gfx_opacity_push(a); gfx_offset_push(dx, 0); if (fit < 1) gfx_scale_push(fit, fit, x, y); /* (evenly smaller: the lines keep their places) */
   char lb[160]; step_label(i, lb, sizeof lb); text_draw(lb, x, y, STEP_PX, 800, ACC2 | 0xff000000u, 1.4f, COLW, al); y += text_line_height(STEP_PX) + 18;
   text_draw_wrapped(T(p->title), x, y, COLW, 2, TI_PX, 800, WHITE_A(255), -1.4f, al, TI_LH); y += p->nt * TI_LH;
   if (p->pv == PV_NEWS) { y += 36;
     for (int k = 0; k < W.nnews; k++) { float cx = rtl ? x - CHIP : x, h = fmaxf(CHIP, W.news[k].nt * NT_LH + (W.news[k].nx ? 6 + W.news[k].nx * NX_LH : 0));
       { float is = 40; icon_draw(W.news[k].ic, cx + (CHIP - is) / 2, y + 4 + NT_LH / 2 - is / 2, is, WHITE_A(228)); } /* the glyph alone, soft white, on its title's line (no tile, no ring) */
       float tx = x + s * (CHIP + 24); text_draw_wrapped(T(W.news[k].t), tx, y + 4, COLW - CHIP - 24, 2, NT_PX, 800, WHITE_A(255), -0.5f, al, NT_LH);
-      if (W.news[k].nx) text_draw_wrapped(T(W.news[k].x), tx, y + 4 + W.news[k].nt * NT_LH + 6, COLW - CHIP - 24, 3, NX_PX, 500, WHITE_A(210), 0, al, NX_LH);
-      y += h + NGAP; } }
+      if (W.news[k].nx) text_draw_wrapped(T(W.news[k].x), tx, y + 4 + W.news[k].nt * NT_LH + 6, COLW - CHIP - 24, W.nxMax, NX_PX, 500, WHITE_A(210), 0, al, NX_LH);
+      y += h + NGAP; }
+    if (W.nnote) text_draw_wrapped(T(W.note), x, y + 8, COLW, 3, NX_PX, 500, WHITE_A(170), 0, al, NX_LH); } /* the version's note, softer, under the news */
   else {
     if (p->nl) { y += 20; text_draw_wrapped(T(p->lead), x, y, COLW, 3, LE_PX, 500, WHITE_A(225), 0, al, LE_LH); y += p->nl * LE_LH; }
     y += 40;
     float fo = i == W.cur ? W.focus.v : 0; /* the point in focus: lit, its chip in the accent, a bar at its side */
     for (int b = 0; b < p->nb; b++) { float h = point_h(p, b), k = 1 - fabsf(b - fo); k = k < 0 ? 0 : k; int ctl = p->ctl && b == p->nb - 1; float L0 = rtl ? x - COLW : x;
-      if (ctl) { gfx_rrect(L0 - 16, y - 12, COLW + 32, h, 26, col_mix(WHITE_A(16), ACC | 0xff000000u, k)); if (k > 0.01f) gfx_ring_out(L0 - 16, y - 12, COLW + 32, h, 26, 4, acc_a(0.35f * k)); }
+      if (ctl) { gfx_rrect(L0 - 16, y - 12, COLW + 32, h, 26, col_mix(WHITE_A(16), ACC | 0xff000000u, k));  }
       else if (k > 0.01f) { gfx_rrect(L0 - 16, y - 6, COLW + 32, h, 22, WHITE_A((int)(18 * k))); gfx_rrect(rtl ? x + 8 : x - 22, y + 6, 6, h - 24, 3, col_alpha(ACC2, k)); }
       float ph = fmaxf(CHIP, p->nbl[b] * PO_LH), top = ctl ? y - 12 + (h - ph) / 2 : y, cy2 = top + (ph - CHIP) / 2, cx = rtl ? x - CHIP : x;
       uint32_t cbg = ctl ? col_mix(acc_a(0.22f), WHITE_A(60), k) : col_mix(acc_a(0.14f), ACC | 0xff000000u, k), cfg = ctl ? col_mix(ACC2 | 0xff000000u, ACC_FG | 0xff000000u, k) : col_mix(col_alpha(ACC2, 0.8f), ACC_FG | 0xff000000u, k);
@@ -863,7 +872,7 @@ static void words(int i, float a, float dx) {
       if (ctl) ctl_switch(rtl ? x - COLW : x + COLW, y - 12, h, k, rtl);
       y += h + PO_GAP; }
   }
-  gfx_offset_pop(); gfx_opacity_pop();
+  if (fit < 1) gfx_scale_pop(); gfx_offset_pop(); gfx_opacity_pop();
 }
 /* a page's picture (a point of it) into its target, at the moment t of its clock */
 static void picture(int slot, int i, int st, float t) {
@@ -873,7 +882,7 @@ static void picture(int slot, int i, int st, float t) {
   if (orbTOk < 0) orbTOk = gfx_target_create(&orbT[0], 384, 216) && gfx_target_create(&orbT[1], 384, 216);
   if (orbTOk > 0) { gfx_target_begin(&orbT[slot], PAGE | 0xff000000u); gfx_rrect_v(0, 0, SB_W, SB_H, 0, RGB(0x19, 0x15, 0x26), RGB(0x0b, 0x0a, 0x10)); orbs_draw(&orbs[slot], 1); gfx_target_end(); sgOrb = orbT[slot].tex; } else sgOrb = 0;
   gfx_target_begin(&pic[slot], PAGE | 0xff000000u);
-  { int m = i18n_rtl(); if (m) { app_rtl_hold(1); gfx_mirror_push(SB_W / 2); } /* right to left: the app's pages are mirrored, so their pictures are too */
+  { int m = i18n_rtl() && !gfx_mirrored(); if (m) { app_rtl_hold(1); gfx_mirror_push(SB_W / 2); } /* right to left: the app's pages are mirrored, so their pictures are too */
     sgT = sgT2 = 0; sgShade = sgPage = sgMix = sgDim = 0; camOn = 0; wPress = pressK[slot]; wKey = keyK[slot]; pressNow = 0; keyNow = 0; scene(W.p[i].pv, st, t); pressK[slot] = pressNow; keyK[slot] = keyNow; if (camOn) { gfx_scale_pop(); gfx_offset_pop(); camOn = 0; } if (m) { gfx_mirror_pop(); app_rtl_hold(0); } }
   gfx_target_end();
 }
@@ -895,7 +904,7 @@ static int at_keys(void);
 static int at_ctl(void) { const Page *p = &W.p[W.cur]; return p->ctl && W.step == p->nb - 1; }
 static void hints(float a) {
   int lastPage = W.cur == W.n - 1, last = lastPage && W.step >= W.p[W.cur].nb - 1, rtl = app_rtl(), ctl = at_ctl(), codes = at_codes(); uint32_t c = WHITE_A((int)(215 * a));
-  const char *ok = codes ? (W.tipWant ? T("Buy me a coffee") : T("Star on GitHub")) : at_keys() ? T("Show the code") : ctl && !best_on() ? (best_speed_busy() ? T("Measuring\xe2\x80\xa6") : T("Turn on")) : last ? T("Close") : T("Next");
+  const char *ok = codes ? (W.tipWant ? T("Support on Ko-fi") : T("Star on GitHub")) : at_keys() ? T("Show the code") : ctl && !best_on() ? (best_speed_busy() ? T("Measuring\xe2\x80\xa6") : T("Turn on")) : last ? T("Close") : T("Next");
   const char *nx = T("Next page"), *bk = lastPage ? T("Close") : T("Skip"); int showNx = !lastPage, showBk = !last || codes;
   float g = 44, wo = 38 + 10 + text_width(ok, 22, 600, 0), wn = showNx ? 38 + 10 + text_width(nx, 22, 600, 0) + g : 0, wb = showBk ? 38 + 10 + text_width(bk, 22, 600, 0) + g : 0;
   gfx_scale_push(1.25f, 1.25f, rtl ? MX : SB_W - MX, BOTY);
@@ -1040,7 +1049,7 @@ static int preload(void) {
 }
 static int load(void) {
   char p[1200]; snprintf(p, sizeof p, "%s/whatsnew.json", plat_asset_dir());
-  W.nnews = 0; W.url[0] = 0; W.smsg[0] = 0; snprintf(W.ver, sizeof W.ver, "%s", update_current());
+  W.nnews = 0; W.url[0] = 0; W.smsg[0] = 0; W.note[0] = 0; snprintf(W.ver, sizeof W.ver, "%s", update_current());
   FILE *f = fopen(p, "rb"); if (!f) return 0; fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
   char *b = malloc((size_t)n + 1); size_t got = fread(b, 1, (size_t)n, f); b[got] = 0; fclose(f);
   cJSON *j = cJSON_Parse(b); free(b); if (!j) return 0;
@@ -1050,6 +1059,7 @@ static int load(void) {
     else if (cJSON_IsObject(it)) { snprintf(nw->t, sizeof nw->t, "%s", js_str(it, "title", "")); snprintf(nw->x, sizeof nw->x, "%s", js_str(it, "text", "")); snprintf(nw->icn, sizeof nw->icn, "%s", js_str(it, "icon", "g_spark")); }
     nw->ic = icon_exists(nw->icn) ? nw->icn : "g_spark";
     if (nw->t[0]) W.nnews++; }
+  snprintf(W.note, sizeof W.note, "%s", js_str(j, "note", ""));
   const cJSON *s = js_obj(j, "support"); snprintf(W.url, sizeof W.url, "%s", js_str(s, "url", "")); snprintf(W.gh, sizeof W.gh, "%s", js_str(s, "github", ""));
   { const char *g = W.gh; if (!strncmp(g, "https://", 8)) g += 8; snprintf(W.ghShown, sizeof W.ghShown, "%s", g); }
   snprintf(W.stitle, sizeof W.stitle, "%s", js_str(s, "title", "")); snprintf(W.smsg, sizeof W.smsg, "%s", js_str(s, "message", ""));

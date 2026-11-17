@@ -1,4 +1,12 @@
 {
-"Looking for a matching subtitle…": "Illeszkedő felirat keresése…",
-"Subtitles synced {n} s": "Felirat szinkronizálva: {n} mp"
+  "Auto-sync": "Automatikus szinkron",
+  "Couldn’t sync": "Nem sikerült szinkronizálni",
+  "Looking for a matching subtitle…": "Illeszkedő felirat keresése…",
+  "Not sure: unchanged": "Nem biztos: változatlan",
+  "Nothing to sync against": "Nincs mihez szinkronizálni",
+  "Still reading the film’s subtitles: try again in a minute": "A film feliratainak olvasása még tart: próbáld újra egy perc múlva",
+  "Subtitles synced {n} s": "Felirat szinkronizálva: {n} mp",
+  "Synced": "Szinkronizálva",
+  "Syncing…": "Szinkronizálás…",
+  "speed fixed": "sebesség rögzítve"
 }

@@ -9,6 +9,8 @@
    switch between the show and that season; 0 = none); fx..fr: the box it grows out of (fw 0 = the middle) */
 void revpanel_show(const Item *it, int stackSeason, float fx, float fy, float fw, float fh, float fr);
 void revpanel_seasons(const int *list, int n); /* before revpanel_show on a series: the seasons its switch steps through */
+void revpanel_from_button(void); /* before revpanel_show: it grows out of a menu option (the box given) as that option's highlight */
+float revpanel_card_k(void);     /* 0..1: how far the panel (not the page one) is open: what it came from steps back */
 void revpanel_show_page(const Item *it); /* the title page's Down: it rises from the page's foot and Up from its top row lets it down */
 float revpanel_page_k(void);   /* 0..1: how far it has risen into the title page (0 not there) */
 int  revpanel_page_btns(void);

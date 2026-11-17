@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Превью на полосе перемотки",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Кадры из фильма над полосой во время перемотки. Выкл.: кадры не создаются",
+ "Previews for torrents": "Превью для торрентов",
+ "Slower than debrid, up to 500 MB extra per stream.": "Медленнее, чем debrid, до 500 МБ дополнительно на поток.",
+ "Previews {n}%": "Превью {n}%",
+ "Previews ready": "Превью готовы",
+ "Uses more data, on mobile data too.": "Расходует больше трафика, и мобильного тоже.",
+ "Getting the seek bar’s previews ready… {n}%": "Готовим превью для полосы перемотки… {n}%",
+ "Play now": "Смотреть сейчас",
+ "Load previews before playing": "Загружать превью перед просмотром",
+ "about {n} s left": "осталось около {n} с",
+ "about {n} min left": "осталось около {n} мин",
+ "The film starts once this much of it has its previews; OK starts it at once": "Фильм начнётся, когда для этой доли будут превью; OK запускает его сразу"
+}

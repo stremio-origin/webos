@@ -1,8 +1,14 @@
 /* The card menu (hold OK on any card or episode): a glass card as tall as its options, centred on its side, the
    accent highlight gliding under the focus. */
+#include "screens/streams.h"
+#include "core/traktwatch.h"
+#include "screens/livehub.h"
+#include "core/notify.h"
+#include "screens/board.h"
 #include "ui/sound.h"
 #include "ui/orbs.h"
 #include "screens/cwmenu.h"
+#include "core/live.h"
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,13 +34,14 @@
 #define CW 640.0f
 #define PX 36.0f
 #define IH 64.0f    /* an option, and 4 between them */
-enum { A_STREAMS, A_PLAY, A_RESTART, A_DETAILS, A_WATCHED, A_TRAILER, A_SIMILAR, A_REVIEWS, A_LIB };
+enum { A_STREAMS, A_PLAY, A_RESTART, A_DETAILS, A_WATCHED, A_TRAILER, A_SIMILAR, A_REVIEWS, A_LIB, A_DISMISS, A_PIN, A_FORGET, A_CHSTREAMS };
 static struct {
   int open, closing, idx, n; int acts[9]; char labels[9][96]; const char *icons[9]; Item it; char kind[32], sub[400];
   Tween x, op; /* the panel's slide and fade: an even ease-out (the quick-tween curve put it all in the first two frames) */ Tween out, grow; double openAt; SGlass glass; FPill pill; Nudge nudge; float h, titleLines;
   float from[5]; /* the card that was held, as it sat on screen: Reviews grows out of it */
+  Screen *under; /* the overlay it opened over (All channels): it has the keys again when the menu closes */
 } M;
-static void close(void) { if (!M.open) return; M.open = 0; M.closing = 1; app_occluder_drop(); if (app_overlay) app_overlay = NULL; tween_set(&M.out, M.op.v); tween_to(&M.out, 0, 0.18f, EASE_IN_OUT); tween_to(&M.x, 28, 0.2f, EASE_CSS_EASEOUT); }
+static void close(void) { if (!M.open) return; M.open = 0; M.closing = 1; app_occluder_drop(); if (app_overlay) app_overlay = M.under; M.under = NULL; tween_set(&M.out, M.op.v); tween_to(&M.out, 0, 0.18f, EASE_IN_OUT); tween_to(&M.x, 28, 0.2f, EASE_CSS_EASEOUT); }
 static void add(int a, const char *icon, const char *label) { if (M.n >= 9) return; M.acts[M.n] = a; M.icons[M.n] = icon; snprintf(M.labels[M.n], sizeof M.labels[M.n], "%s", label); M.n++; }
 static void on_meta_toggle(cJSON *m, void *ud) { (void)ud; Item it = M.it; lib_toggle_watched(&it, js_arr(m, "videos")); app_refresh_boards(); if (SCR == SCR_DETAIL) detail_refresh_watched(); }
 /* what an action did, said on the title's own card: a glass chip over it ("Added to Library", "Marked as watched");
@@ -129,6 +136,7 @@ static void fx_draw(void) {
     if (fold < 0.99f) { gfx_opacity_push(1 - fold); text_draw(FX.text, x + ch + 4, cy - text_line_height(24) / 2.0f, 24, 600, WHITE_A(245), 0.1f, cw - ch - 14, ALIGN_LEFT); gfx_opacity_pop(); }
     gfx_scale_pop(); gfx_opacity_pop(); }
 }
+static float items_y(void); static float card_x(void);
 static void act(int a) {
   Item it = M.it; fpill_press(&M.pill);
   switch (a) {
@@ -137,9 +145,14 @@ static void act(int a) {
     case A_RESTART: close(); app_play_from_start(&it); break;
     case A_DETAILS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
     case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
+    case A_DISMISS: sound_play(SND_TOGGLE); close(); if (it.cw) { notify_cw_dismiss(&it); tw_play_drop(it.id); } else notify_up_dismiss(&it); /* (Trakt's pause of it: deleted there too) */ app_refresh_boards(); break; /* (the card fades where it stood, the rest glide over) */
+    case A_PIN: { int on = !live_pinned(it.id); sound_play(SND_TOGGLE); live_pin(&it, on); fx_start(on ? 1 : 2, on ? "star" : "minus", T(on ? "Added to favorites" : "Removed from favorites")); close(); board_invalidate(); board_rebuild(); break; }
+    case A_FORGET: sound_play(SND_TOGGLE); live_forget(it.id); fx_start(2, "minus", T("Removed from Live now")); close(); board_invalidate(); board_rebuild(); break;
+    case A_CHSTREAMS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; snprintf(p.it.videoId, sizeof p.it.videoId, "%s", it.id); p.openStreams = 1; app_go(SCR_DETAIL, &p, 0); break; } /* every stream, to pick one */
     case A_TRAILER: close(); detail_trailer(it.type, it.id, it.name); break;
     case A_SIMILAR: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_SIM, &p, 0); break; }
-    case A_REVIEWS: close(); revpanel_show(&it, 0, M.from[0], M.from[1], M.from[2], M.from[3], M.from[4]); break;
+    case A_REVIEWS: { int i = 0; while (i < M.n && M.acts[i] != A_REVIEWS) i++; /* out of the Reviews option itself; the menu stays, under them, and has the keys again when they fold back into it */
+      float by = SB_H / 2 - M.h / 2 + items_y() + i * (IH + 4); revpanel_from_button(); revpanel_show(&it, 0, card_x() + PX, by, CW - 2 * PX, IH, 16); break; }
     case A_LIB: { int in = lib_has(it.id); sound_play(SND_TOGGLE); fx_start(in ? 2 : 1, in ? "minus" : "plus", T(in ? "Removed from Library" : "Added to Library")); sb_poster_of(&it, FX.poster, sizeof FX.poster); } lib_toggle(&it); close(); app_refresh_boards(); if (SCR == SCR_DETAIL) detail_paint_lib(); break;
   }
 }
@@ -165,27 +178,28 @@ static float card_x(void) { return app_rtl() ? 32 : SB_W - 32 - CW; }
 static void draw_menu(void);
 static void draw(void) { draw_menu(); fx_draw(); } /* (the action's chip outlives the menu) */
 static void draw_menu(void) {
-  float a = M.closing ? M.out.v : M.open ? M.op.v : 0; if (a <= 0.001f) return;
+  float rk = M.open ? revpanel_card_k() : 0; /* its reviews up: it steps back under them (fading, a touch smaller) and returns as they fold back into its option */
+  float a = (M.closing ? M.out.v : M.open ? M.op.v : 0) * (1 - rk); if (a <= 0.001f) return;
   int rtl = app_rtl(); float cx = card_x(), cy = SB_H / 2 - M.h / 2;
-  if (M.open) { hit_act(0, 0, SB_W, SB_H, outside_act, 0, 0); hit_shield(cx, cy, CW, M.h); }
+  if (M.open && rk <= 0.001f) { hit_act(0, 0, SB_W, SB_H, outside_act, 0, 0); hit_shield(cx, cy, CW, M.h); }
   /* the card grows into place as it slides in (0.94 to 1) and settles back a little as it leaves */
-  float sc = M.closing ? 0.98f + 0.02f * M.out.v : 0.96f + 0.04f * M.grow.v;
+  float sc = (M.closing ? 0.98f + 0.02f * M.out.v : 0.96f + 0.04f * M.grow.v) * (1 - 0.02f * rk);
   gfx_opacity_push(a); gfx_offset_push(M.x.v * (rtl ? -1 : 1), 0); gfx_scale_push(sc, sc, cx + CW / 2, SB_H / 2);
   if (M.glass.ok && M.glass.a.v >= 0.999f) gfx_shadow_under(cx, cy + 30, CW, M.h, 28, 80, BLACK_A(140), cx, cy, CW, M.h, 28); else gfx_shadow(cx, cy + 30, CW, M.h, 28, 80, BLACK_A(140)); /* (the card opaque: its middle needs no shadow) */
   sglass_draw(&M.glass, cx, cy, CW, M.h, 28); gfx_ring(cx, cy, CW, M.h, 28, 1, WHITE_A(18));
-  if (M.open && !M.closing && a >= 0.999f && fabsf(M.x.v) < 0.01f && sc >= 0.9999f && M.glass.ok && M.glass.a.v >= 0.999f) app_occluder(cx + 24, cy + 24, CW - 48, M.h - 48); /* still and opaque */
+  if (M.open && !M.closing && rk <= 0.001f && a >= 0.999f && fabsf(M.x.v) < 0.01f && sc >= 0.9999f && M.glass.ok && M.glass.a.v >= 0.999f) app_occluder(cx + 24, cy + 24, CW - 48, M.h - 48); /* still and opaque */
   float W = CW - 2 * PX, x0 = cx + PX, lx = rtl ? x0 + W : x0; int al = rtl ? ALIGN_RIGHT : ALIGN_LEFT;
   float y = cy + 40; text_draw(M.kind, lx, y + (30 - text_line_height(24)) / 2, 24, 600, WHITE_A(184), 0, W, al); y += 30 + 6;
   text_draw_wrapped(M.it.name, lx, y + (46 - text_line_height(38)) / 2, W, 2, 38, 700, WHITE_A(255), -0.5f, al, 46); y += M.titleLines * 46;
   if (M.sub[0]) { y += 4; text_draw(M.sub, lx, y, 24, 400, WHITE_A(199), 0, W, al); y += text_line_height(24); }
   y += 26;
-  gfx_offset_push(x0 + nudge_x(&M.nudge), y + nudge_y(&M.nudge)); if (M.open) fpill_halo(&M.pill, 16, 0.97f, acc_a(0.34f)); fpill_draw(&M.pill, 16, 0.97f); gfx_offset_pop();
+  gfx_offset_push(x0 + nudge_x(&M.nudge), y + nudge_y(&M.nudge)); fpill_draw(&M.pill, 16, 0.97f); gfx_offset_pop();
   float since = (float)(app_now() - M.openAt);
   for (int i = 0; i < M.n; i++) { int f = i == M.idx; float iy = y + i * (IH + 4), nx = f ? nudge_x(&M.nudge) : 0, ny = f ? nudge_y(&M.nudge) : 0;
     /* the options rise in one after another as the card opens */
     float d = i == 0 ? 0 : (i < 5 ? i : 4) * 0.025f, k = ease_quint((since - d) / 0.22f), ia = M.open ? k : 1, iy2 = M.open ? 10 * (1 - k) : 0;
     if (M.closing) { float o = 1 - M.out.v; iy2 = 6 * o * (1 + 0.1f * (M.n - 1 - i)); } /* leaving, they sink, the last ones furthest */
-    if (M.open) hit_add(x0, iy, W, IH, item_focus, item_act, i, 0);
+    if (M.open && rk <= 0.001f) hit_add(x0, iy, W, IH, item_focus, item_act, i, 0);
     if (ia < 1) gfx_opacity_push(ia);
     float ix = rtl ? x0 + W - 20 - 30 + nx : x0 + 20 + nx, ty = iy + iy2 + ny;
     icon_draw(M.icons[i], ix, ty + (IH - 30) / 2, 30, f ? ACC_FG : WHITE_A(176));
@@ -199,24 +213,36 @@ static Screen menu = { NULL, NULL, key, tick, draw, NULL, NULL, NULL };
    removed comes down from it, from the focused element */
 void cwmenu_fx_lib(int added, const Item *it) { app_overlay_keep(&menu); fx_start(added ? 1 : 2, added ? "plus" : "minus", T(added ? "Added to Library" : "Removed from Library")); if (it) sb_poster_of(it, FX.poster, sizeof FX.poster); }
 void cwmenu_show(const Item *it) {
+  if (it && !strcmp(it->type, "collection")) { app_card_shake(); return; } /* a collection has no menu (OK opens it): held, the card shakes softly, nothing more */
+  if (live_type(it->type) && strcmp(it->id, LIVE_ALL_ID) && hub_on()) { /* a channel held in All channels: its streams, to pick one (play and favourite have their keys there) */
+    streams_show(it->type, it->id, it->id, it->name, NULL); return; } /* (the sheet alone, over the hub: no title page for a channel) */
   float fx, fy, fw, fh, fr; int held = hold_trace_rect(&fx, &fy, &fw, &fh, &fr);
   if (it->ep) { revpanel_show(it, 0, held ? fx : 0, held ? fy : 0, held ? fw : 0, held ? fh : 0, held ? fr : 0); return; } /* an episode held: its reviews, with the menu's options among them */
   M.from[0] = held ? fx : 0; M.from[1] = held ? fy : 0; M.from[2] = held ? fw : 0; M.from[3] = held ? fh : 0; M.from[4] = held ? fr : 0;
   float cur = M.closing ? M.out.v : M.open ? M.op.v : 0;
-  M.it = *it; M.open = 1; M.closing = 0; M.idx = 0; M.n = 0; app_overlay = &menu;
+  if (!strcmp(it->id, LIVE_ALL_ID)) return; /* (the All channels card: nothing to choose) */
+  if (app_overlay != &menu) M.under = app_overlay; M.it = *it; M.open = 1; M.closing = 0; M.idx = 0; M.n = 0; app_overlay = &menu;
   snprintf(M.kind, sizeof M.kind, "%s", T(!strcmp(it->type, "series") ? "Series" : "Movie"));
   M.sub[0] = 0; const char *c = strrchr(it->videoId, ':');
   if (c) { const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') { char s[8], e[8]; snprintf(s, sizeof s, "%d", atoi(p + 1)); snprintf(e, sizeof e, "%d", atoi(c + 1)); snprintf(M.sub, sizeof M.sub, "%s", T2("Season {s} · Episode {e}", "s", s, "e", e)); if (it->epName[0]) { size_t l = strlen(M.sub); snprintf(M.sub + l, sizeof M.sub - l, "  ·  %s", it->epName); } } }
+  if (live_type(it->type)) { /* a channel: play it, pick its stream, keep it in Live now or not */
+    snprintf(M.kind, sizeof M.kind, "%s", T("Live"));
+    add(A_PLAY, "play", T("Play")); add(A_CHSTREAMS, "play", T("Streams"));
+    int pn = live_pinned(it->id); add(A_PIN, pn ? "minus" : "star", T(pn ? "Remove from favorites" : "Add to favorites"));
+    if (live_used()) { ItemList b; int in = 0; if (live_band(&b)) { for (int i = 0; i < b.n; i++) if (!strcmp(b.items[i].id, it->id)) in = 1; itemlist_clear(&b); } if (in) add(A_FORGET, "eyeOff", T("Remove from Live now")); }
+    goto laid; }
   if (it->ep) add(A_STREAMS, "play", T("Streams")); else add(A_PLAY, "play", T(it->cw ? "Resume" : "Play"));
   Uint32 tm0 = SDL_GetTicks(); CwInfo ci; if (lib_cw_info(it, &ci) && (!it->ep || !strcmp(ci.vid, it->videoId))) add(A_RESTART, "restart", T("Watch from the beginning"));
+  { int inL = lib_has(it->id); add(A_LIB, inL ? "minus" : "plus", T(inL ? "Remove from Library" : "Add to Library")); } /* (among the first) */
   if (!it->ep) add(A_DETAILS, "info", T("Details"));
-  int canMark = strcmp(it->type, "series") || strchr(it->videoId, ':');
+  int canMark = 1; /* (a film, an episode, or a whole show: every aired episode) */
   if (canMark) { int w = lib_is_marked_watched(it); add(A_WATCHED, w ? "eyeOff" : "eye", T(w ? "Mark as unwatched" : "Mark as watched")); }
   if (trailer_available(sb_meta_cached(it->type, it->id), it->id)) add(A_TRAILER, "trailer", T("Trailer"));
   if (!it->ep) add(A_SIMILAR, "similar", T("Watch something similar"));
   if (!it->ep && sb_is_imdb(it->id)) add(A_REVIEWS, "reviews", T("Reviews"));
-  int inL = lib_has(it->id); add(A_LIB, inL ? "minus" : "plus", T(inL ? "Remove from Library" : "Add to Library"));
+  if (it->cw || it->airAt > 0) add(A_DISMISS, "close", T("Dismiss")); /* always the last: out of Continue Watching (until it is watched or marked again, or a newer episode is out) or Upcoming (until the next episode is another) */
   if (getenv("SB_SLOWLOG")) fprintf(stderr, "[menu] options in %u ms\n", SDL_GetTicks() - tm0);
+laid:
   M.titleLines = (float)text_wrap_count(it->name, CW - 2 * PX, 2, 38, 700, -0.5f); if (M.titleLines < 1) M.titleLines = 1;
   M.h = items_y() + M.n * (IH + 4) + 30; /* as tall as its options */
   /* from closed: it slides in once with its glass baked (the card's own part of the page); reopened mid-close: it turns back */

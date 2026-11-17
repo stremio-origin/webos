@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Idősáv",
+ "Seek step, chapters, previews": "Ugrás mértéke, fejezetek, előnézetek",
+ "Best stream, next episode, picture size": "Legjobb stream, következő rész, képméret",
+ "Accent colour, screensaver, clock, trailers": "Kiemelőszín, képernyővédő, óra, előzetesek",
+ "Track what you watch": "Kövesd, mit nézel",
+ "Member since": "Tag ekkortól",
+ "Stremio account": "Stremio-fiók",
+ "{n} titles": "{n} cím",
+ "{n} installed": "{n} telepítve",
+ "Connected": "Csatlakoztatva",
+ "Not connected": "Nincs csatlakoztatva",
+ "Default": "Alapértelmezett",
+ "Font": "Betűtípus",
+ "Arabic font": "Arab betűtípus",
+ "For subtitles in Arabic": "Arab nyelvű feliratokhoz",
+ "Language, size, font, colour": "Nyelv, méret, betűtípus, szín",
+ "Subtitle font": "Felirat betűtípusa",
+ "Arabic subtitle font": "Arab felirat betűtípusa",
+ "Styled subtitles keep their own fonts, colours and background.": "A formázott feliratok megtartják saját betűtípusukat, színeiket és hátterüket.",
+ "Stats for nerds on": "Statisztika haladóknak be",
+ "Stats for nerds off": "Statisztika haladóknak ki"
+}

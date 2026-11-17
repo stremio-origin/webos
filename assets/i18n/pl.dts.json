@@ -2,5 +2,10 @@
 "DTS sound": "Dźwięk DTS",
 "Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV": "Auto sprawdza, co odtwarza ten telewizor. Konwertuj, jeśli nie masz pewności. Wył. zostawia to telewizorowi",
 "Convert": "Konwertuj",
-"Default audio language, DTS, interface sounds": "Domyślny język audio, DTS, dźwięki interfejsu"
+"Default audio language, DTS, interface sounds": "Domyślny język audio, DTS, dźwięki interfejsu",
+"Converting the sound for this TV…": "Konwertowanie dźwięku dla tego telewizora…",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (przekonwertowany)",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (przekonwertowany)",
+"Playing the {t} track: this TV can’t play DTS": "Odtwarzanie ścieżki {t}: ten telewizor nie może odtworzyć DTS",
+"Playing the {t} track: this TV can’t play TrueHD": "Odtwarzanie ścieżki {t}: ten telewizor nie może odtworzyć TrueHD"
 }

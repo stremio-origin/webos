@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Смуга перемотування",
+ "Seek step, chapters, previews": "Крок, розділи, прев’ю",
+ "Best stream, next episode, picture size": "Найкращий потік, наступний епізод, розмір зображення",
+ "Accent colour, screensaver, clock, trailers": "Акцентний колір, заставка, годинник, трейлери",
+ "Track what you watch": "Відстежуйте, що дивитеся",
+ "Member since": "Учасник з",
+ "Stremio account": "Обліковий запис Stremio",
+ "{n} titles": "{n} назв",
+ "{n} installed": "{n} встановлено",
+ "Connected": "Підключено",
+ "Not connected": "Не підключено",
+ "Default": "Типово",
+ "Font": "Шрифт",
+ "Arabic font": "Арабський шрифт",
+ "For subtitles in Arabic": "Для субтитрів арабською",
+ "Language, size, font, colour": "Мова, розмір, шрифт, колір",
+ "Subtitle font": "Шрифт субтитрів",
+ "Arabic subtitle font": "Арабський шрифт субтитрів",
+ "Styled subtitles keep their own fonts, colours and background.": "Стилізовані субтитри зберігають власні шрифти, кольори й тло.",
+ "Stats for nerds on": "Статистика для гіків увімкнена",
+ "Stats for nerds off": "Статистика для гіків вимкнена"
+}

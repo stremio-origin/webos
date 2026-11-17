@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Málo peerov ({n}) · {r}","Getting the file list…":"Načítavam zoznam súborov…","Low storage: small buffer":"Málo úložiska: malá vyrovnávacia pamäť","Low storage: streaming from memory":"Málo úložiska: streamovanie z pamäte","Slow source: {r} for a {v} video":"Pomalý zdroj: {r} pre video {v}","Waiting for the next pieces…":"Čakám na ďalšie časti…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Málo úložiska: pripojte USB disk"
+}

@@ -10,4 +10,5 @@ void board_rebuild(void);       /* the board on screen reloads its rows in place
 int  board_spot_up(void);
 int  board_sample(Item *out, int max, char *rowTitle, int cap); /* titles from Home's first poster rows (Discover's when Home has none) and the first one's title, for the guide's pictures */       /* Discover's spotlight has the focus (it moves on by itself: no background trailer) */
 void board_playing_mark(float x, float y, float h, float a); /* a poster's "its trailer plays" mark, at a (the melt) */
+int board_row_items(const char *id, const Item **items); /* the focused row's cards, when it lists id */
 #endif

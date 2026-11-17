@@ -36,6 +36,7 @@ void bgt_tick(const BgtView *v);    /* once a frame, from whatever screen is up 
 void bgt_key(void);                 /* any key or pointer action: it stops at once */
 void bgt_release_now(void);         /* the player is about to load: hidden and unloaded now, no fade */
 void bgt_playing(void);             /* the backend shows its first frame */
-void bgt_ended(void);               /* it ended or failed */
+void bgt_ended(void);               /* it ended (or failed for good) */
+void bgt_failed(void);              /* it failed: before it shows, the next lower MP4 is tried (1080p -> 720p -> 480p); else as ended */
 BgtState bgt_state(void);
 #endif

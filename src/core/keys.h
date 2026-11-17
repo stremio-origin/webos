@@ -8,6 +8,7 @@ enum {
   K_RED, K_GREEN, K_YELLOW, K_BLUE,
   K_CH_UP, K_CH_DOWN, K_EXIT,
   K_CURSOR_SHOW, K_CURSOR_HIDE,  /* the Magic Remote pointer appeared / went away */
-  K_CHAR                          /* typed text (login fields): the codepoint comes separately */
+  K_CHAR,                         /* typed text (login fields): the codepoint comes separately */
+  K_INFO                          /* the remote's Info key: Stats for nerds on and off, anywhere */
 };
 #endif

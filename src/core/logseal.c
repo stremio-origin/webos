@@ -180,8 +180,33 @@ static char *pass_tokens(const char *s) {
     b_put(&b, s + i, 1); i++; }
   return b_done(&b);
 }
+/* a user's own folder in a path (the Mac preview, a PC, a Linux box): its name goes, the rest stays.
+   /Users/<name>, /home/<name>, C:\Users\<name> (either slash) -> [user]; /private/tmp/<dir>, /private/var/folders/<a>/<b> -> [tmp] */
+static char *pass_paths(const char *s) {
+  static const struct { const char *pre; int segs; const char *rep; } P[] = { { "/USERS/", 1, "[user]" }, { "/HOME/", 1, "[user]" }, { ":\\USERS\\", 1, "[user]" }, { ":/USERS/", 1, "[user]" }, { "/PRIVATE/TMP/", 1, "[tmp]" }, { "/PRIVATE/VAR/FOLDERS/", 2, "[tmp]" }, { "/CONTAINERS/DATA/APPLICATION/", 1, "[app]" }, { "/CONTAINERS/BUNDLE/APPLICATION/", 1, "[app]" }, { "/CONTAINERS/SHARED/APPGROUP/", 1, "[app]" } }; /* (iOS: a per-install folder id) (in capitals: matched without case, and the binary never holds a path-looking "/Users/" or "/private/tmp/" the privacy gates flag; the text kept is the log's own) */
+  Buf b = { 0 }; size_t i = 0, n = strlen(s);
+  while (i < n) { int hit = 0;
+    for (size_t k = 0; k < sizeof P / sizeof P[0] && !hit; k++) { size_t pl = strlen(P[k].pre); if (strncasecmp(s + i, P[k].pre, pl)) continue;
+      size_t j = i + pl; for (int g = 0; g < P[k].segs; g++) { size_t a = j; int win = P[k].pre[0] == ':'; /* (a Windows folder name may hold spaces: up to the next separator) */ while (j < n && s[j] != '/' && s[j] != '\\' && (win || s[j] != ' ') && s[j] != '"' && s[j] != '\'' && s[j] != '\n') j++; if (j == a) break; if (g + 1 < P[k].segs && j < n && (s[j] == '/' || s[j] == '\\')) j++; }
+      if (j > i + pl) { b_put(&b, s + i, pl); b_str(&b, P[k].rep); i = j; hit = 1; } }
+    if (!hit) { b_put(&b, s + i, 1); i++; } }
+  return b_done(&b);
+}
+/* what was typed in Search, and the Trakt account's name, in lines kept by earlier builds ([search] "<words>" in N catalog(s), ... for "<words>"): the words go */
+static char *pass_search(const char *s) {
+  static const char *M[] = { "[search] \"", "collection(s) for \"" };
+  Buf b = { 0 }; size_t i = 0, n = strlen(s);
+  while (i < n) { int hit = 0;
+    for (size_t k = 0; k < 2 && !hit; k++) { size_t ml = strlen(M[k]); if (strncmp(s + i, M[k], ml)) continue;
+      const char *e = memchr(s + i + ml, '"', n - i - ml); const char *nl = memchr(s + i + ml, '\n', n - i - ml);
+      if (e && (!nl || e < nl)) { b_put(&b, s + i, ml); b_str(&b, "[query]"); i = (size_t)(e - s); hit = 1; } }
+    { static const char T[] = "[trakt] connected as "; size_t tl = sizeof T - 1; /* (and the Trakt account's name, in lines kept by earlier builds) */
+      if (!hit && !strncmp(s + i, T, tl)) { const char *nl = memchr(s + i + tl, '\n', n - i - tl); b_str(&b, "[trakt] connected, its name known"); i = nl ? (size_t)(nl - s) : n; hit = 1; } }
+    if (!hit) { b_put(&b, s + i, 1); i++; } }
+  return b_done(&b);
+}
 char *logscrub_share(const char *text) {
-  char *(*passes[])(const char *) = { pass_keys, pass_links, NULL, pass_ip, pass_hash, pass_tokens };
+  char *(*passes[])(const char *) = { pass_search, pass_paths, pass_keys, pass_links, NULL, pass_ip, pass_hash, pass_tokens };
   char *s = strdup(text);
   for (size_t p = 0; p < sizeof passes / sizeof passes[0]; p++) { char *t = passes[p] ? passes[p](s) : pass_email(s, "[email]"); free(s); s = t; }
   return s;
@@ -227,9 +252,18 @@ char *logseal_seal(const char *code, const unsigned char devPub[65], const char 
   memcpy(km, pre, (size_t)pl); memcpy(km + pl, eph, 65); memcpy(km + pl + 65, shared, 32); sbc_sha256(km, kl, key); free(km);
   memset(priv, 0, sizeof priv); memset(shared, 0, sizeof shared);
   size_t gl; unsigned char *gz = gzip_of(text, len, &gl); if (!gz) return NULL;
-  if (gl > 40000) { /* the page holds ~64 KB: keep the newest part */
-    size_t keep = (size_t)((double)len * 40000 / gl), from = len - keep; while (from < len && ((unsigned char)text[from] & 0xc0) == 0x80) from++;
-    free(gz); gz = gzip_of(text + from, len - from, &gl); if (!gz) return NULL; }
+  if (gl > 40000) { /* the page holds ~64 KB: the header (version, build, device: it was cut off with the old lines)
+                       and the newest whole lines, smaller again until it fits */
+    static const char cut[] = "[older lines left out: the page holds about 64 KB]\n"; const size_t cl = sizeof cut - 1;
+    const char *he = strstr(text, "\n== app ==\n"); size_t hl = he && (size_t)(he - text) < 4096 ? (size_t)(he - text) + 11 : 0;
+    size_t keep = (size_t)((double)len * 38000 / gl);
+    for (int t = 0; t < 8 && gl > 40000; t++, keep = keep * 4 / 5) {
+      size_t from = len > keep ? len - keep : 0; if (from < hl) from = hl;
+      while (from > 0 && from < len && text[from - 1] != '\n') from++;
+      size_t nl = hl + cl + (len - from); char *t2 = malloc(nl + 1); if (!t2) { free(gz); return NULL; }
+      memcpy(t2, text, hl); memcpy(t2 + hl, cut, cl); memcpy(t2 + hl + cl, text + from, len - from);
+      free(gz); gz = gzip_of(t2, nl, &gl); free(t2); if (!gz) return NULL; }
+    if (gl > 40000) { free(gz); return NULL; } }
   size_t n = 4 + 65 + 12 + 16 + gl; unsigned char *out = malloc(n);
   memcpy(out, "SBL3", 4); memcpy(out + 4, eph, 65);
   if (!rnd(out + 69, 12)) { free(gz); free(out); return NULL; }

@@ -1,4 +1,5 @@
 #!/bin/bash
+# The formatting is rough and I'm not going to bother. Pull requests that fix it are welcome; complaints without one help neither me nor the end user.
 # Builds Stremio Origin (native) for one target:
 #   tools/build.sh mac            -> build/mac/stremioorigin        (the Mac preview, SDL2 + OpenGL 2.1)
 #   tools/build.sh webos          -> build/webos/stremioorigin      (LG webOS, ARMv7, SDL2 + GLES2)
@@ -20,7 +21,7 @@ case "$TARGET" in
   mac)
     CC="cc"; CXX="c++"; AR="ar"; WEBPCC="cc"
     TFLAGS="-DSB_MAC=1 -I$MACSDL/include -I$MACSDL/include/SDL2"
-    LIBS="$($MACSDL/bin/sdl2-config --static-libs) -Wl,-framework,OpenGL -lcurl -liconv -lz"
+    LIBS="$($MACSDL/bin/sdl2-config --static-libs) -Wl,-framework,OpenGL -Wl,-framework,AVFoundation -Wl,-framework,CoreMedia -Wl,-framework,CoreVideo -Wl,-framework,Foundation -Wl,-framework,QuartzCore -lcurl -liconv -lz"   # (AVFoundation: the preview plays the streams)
     PLAT=mac ;;
   webos)
     CC="$ZIG cc -target arm-linux-gnueabi.2.12 -mcpu=cortex_a9 -mfloat-abi=softfp"
@@ -100,18 +101,19 @@ STAMP="$B/obj/.appid"; if [ "$(cat "$STAMP" 2>/dev/null)" != "$APPID" ]; then rm
 for f in "$TP"/crypto/*.c; do   # SHA-256, AES, GCM, PBKDF2 (log sharing): small, built beside the app rather than into libtp.a
   o="$B/tp/crypto_$(basename "${f%.c}").o"; if [ ! -f "$o" ] || [ "$f" -nt "$o" ]; then $CC -w $OPT -I$TP/crypto -c "$f" -o "$o"; fi; OBJS+=("$o")
 done
-for f in "$ROOT"/src/core/*.c "$ROOT"/src/ui/*.c "$ROOT"/src/screens/*.c "$ROOT"/src/platform/$PLAT/*.c "$ROOT"/src/main.c; do
+for f in "$ROOT"/src/core/*.c "$ROOT"/src/ui/*.c "$ROOT"/src/screens/*.c "$ROOT"/src/platform/$PLAT/*.c "$ROOT"/src/platform/$PLAT/*.m "$ROOT"/src/main.c; do   # (*.m: the Mac preview's Objective-C, none elsewhere)
   [ -f "$f" ] || continue
   o="$B/obj/$(echo "${f#$ROOT/src/}" | tr / _).o"
   if [ ! -f "$o" ] || [ "$f" -nt "$o" ] || [ -n "$(find "$ROOT/src" -name '*.h' -newer "$o" | head -1)" ] || [ "$B/sbkeys.h" -nt "$o" ]; then
-    $CC $CFLAGS -c "$f" -o "$o"
+    case "$f" in *.m) $CC $CFLAGS -fobjc-arc -c "$f" -o "$o" ;; *) $CC $CFLAGS -c "$f" -o "$o" ;; esac
   fi
   OBJS+=("$o")
 done
 if [ "$TARGET" = mac ]; then
   $CXX $OPT -o "$B/stremioorigin" "${OBJS[@]}" "$B/tp/libass.a" "$B/tp/libtp.a" $LIBS
 else
-  $CXX $OPT -Wl,--gc-sections -o "$B/stremioorigin.dbg" "${OBJS[@]}" "$B/tp/libass.a" "$B/tp/libtp.a" $LIBS   # symbols kept: crash addresses resolve against it
+  $CXX $OPT -Wl,--gc-sections -Wl,-T,"$ROOT/tools/webos-relocs.ld" -o "$B/stremioorigin.dbg" "${OBJS[@]}" "$B/tp/libass.a" "$B/tp/libtp.a" $LIBS   # symbols kept: crash addresses resolve against it
+  python3 "$ROOT/tools/relocs-check.py" "$B/stremioorigin.dbg"   # (webOS 3 starts it only with them together)
   python3 "$ROOT/tools/elfstrip.py" "$B/stremioorigin.dbg" "$B/stremioorigin" && chmod +x "$B/stremioorigin"   # the same link, stripped: crash addresses match the symbols byte for byte (two links came out apart)
   BID=$(LC_ALL=C grep -ao 'SBBUILDID:[0-9a-f]\{32\}' "$B/stremioorigin.dbg" | head -1 | cut -c11-22)   # every build's debug copy kept by its id (the last 40): a crash from any build installed can be named
   if [ -n "$BID" ]; then mkdir -p "$ROOT/dist/dbg/builds"; cp "$B/stremioorigin.dbg" "$ROOT/dist/dbg/builds/$BID.dbg"; ls -t "$ROOT"/dist/dbg/builds/*.dbg | tail -n +41 | xargs rm -f; fi

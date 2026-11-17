@@ -222,6 +222,7 @@ static void xform(float *x, float *y) { *x = (*x - curSox) * curSx + curSox + cu
 void gfx_mirror_push(float cx) { float y = 0; xform(&cx, &y); mirM = cx; mirN = 1; } /* (the line taken where it is now: transforms pushed later move with the picture) */
 void gfx_mirror_pop(void) { mirN = 0; }
 int gfx_mirrored(void) { return mirN; }
+void gfx_mirror_span(float *x0, float *x1) { if (mirN) { float a = 2 * mirM - *x1, b = 2 * mirM - *x0; *x0 = a; *x1 = b; } } /* a span on the screen (after gfx_to_screen) where the mirror really puts it */
 static void mir(float *x0, float *x1) { if (mirN) { float a = 2 * mirM - *x1, b = 2 * mirM - *x0; *x0 = a; *x1 = b; } }
 static int sdfFull; static float sdfR[4]; static void mir(float *x0, float *x1);
 static float quadPad; /* the next quad's fourth parameter (vPar.w), then 0 again */
@@ -338,7 +339,7 @@ static int nine(int kind, float x, float y, float w, float h, float r, float t, 
     float fx0 = (xs[i] - gx) / gw, fx1 = (xs[i + 1] - gx) / gw, fy0 = (ys[j] - gy) / gh, fy1 = (ys[j + 1] - gy) / gh;
     quad(P_ALPHA, tex, xs[i], ys[j], qw, qh, 0, 0, 0, 0,
          bilerp(c00, c10, c01, c11, fx0, fy0), bilerp(c00, c10, c01, c11, fx1, fy0), bilerp(c00, c10, c01, c11, fx0, fy1), bilerp(c00, c10, c01, c11, fx1, fy1),
-         us[i][0], vs[j][0], us[i][1], vs[j][1]);
+         mirN ? us[i][1] : us[i][0], vs[j][0], mirN ? us[i][0] : us[i][1], vs[j][1]); /* (mirrored: each piece lands on the other side, so it is turned too: its corner faces out again) */
   }
   return 1;
 }
@@ -352,6 +353,19 @@ void gfx_rect(float x, float y, float w, float h, uint32_t c) { if (invisible(c)
 void gfx_rrect(float x, float y, float w, float h, float r, uint32_t c) { if (invisible(c) || clipped_out(x, y, w, h)) return;
   if (r <= 0) { plain(x, y, w, h, c, c, c, c); return; }
   if (!nine(CK_FILL, x, y, w, h, r, 0, 0, c, c, c, c)) quad(P_SHAPE, 0, x, y, w, h, r, 0, 0, 1, c, c, c, c, 0, 0, 1, 1); }
+/* a see-through rounded box: what was drawn there is erased (alpha a: 1 clears it whole), so the video plane under the
+   window shows through it, its edges soft */
+void gfx_hole(float x, float y, float w, float h, float r, float a) {
+  if (a <= 0.003f || clipped_out(x, y, w, h)) return;
+#ifdef SB_MAC
+  { extern void video_mac_hole(float, float, float, float, float, float); video_mac_hole(x, y, w, h, r, a); return; } /* the preview has no plane under its window: the picture is drawn in the box */
+#endif
+  gfx_flush();
+  glBlendFuncSeparate(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+  uint32_t c = BLACK_A((int)(255 * (a > 1 ? 1 : a))); if (r < 1) r = 1; /* (the shape program: a plain opaque fill would skip the blend) */
+  if (!nine(CK_FILL, x, y, w, h, r, 0, 0, c, c, c, c)) quad(P_SHAPE, 0, x, y, w, h, r, 0, 0, 1, c, c, c, c, 0, 0, 1, 1);
+  gfx_flush(); glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+}
 void gfx_rrect_v(float x, float y, float w, float h, float r, uint32_t t, uint32_t b) { if ((invisible(t) && invisible(b)) || clipped_out(x, y, w, h)) return;
   if (r <= 0) { plain(x, y, w, h, t, t, b, b); return; }
   if (!nine(CK_FILL, x, y, w, h, r, 0, 0, t, t, b, b)) quad(P_SHAPE, 0, x, y, w, h, r, 0, 0, 1, t, t, b, b, 0, 0, 1, 1); }
@@ -448,7 +462,8 @@ void gfx_image(GLuint tex, float x, float y, float w, float h, float r, uint32_t
     sdfFull = 1; sdfR[0] = x; sdfR[1] = y; sdfR[2] = w; sdfR[3] = h;
     float pr[4][4] = { { x, y, w, m }, { x, y + h - m, w, m }, { x, y + m, m, h - 2 * m }, { x + w - m, y + m, m, h - 2 * m } };
     for (int i = 0; i < 4; i++) { float px = pr[i][0], py = pr[i][1], pw = pr[i][2], ph = pr[i][3];
-      quad(P_IMAGE, tex, px, py, pw, ph, r, 0, 0, 1, tint, tint, tint, tint, u0 + (u1 - u0) * (px - x) / w, v0 + (v1 - v0) * (py - y) / h, u0 + (u1 - u0) * (px + pw - x) / w, v0 + (v1 - v0) * (py + ph - y) / h); }
+      float fa = (px - x) / w, fb = (px + pw - x) / w; if (mirN) { float t = 1 - fb; fb = 1 - fa; fa = t; } /* (mirrored: a side piece lands on the other side, the picture kept its way round: it shows that side's part) */
+      quad(P_IMAGE, tex, px, py, pw, ph, r, 0, 0, 1, tint, tint, tint, tint, u0 + (u1 - u0) * fa, v0 + (v1 - v0) * (py - y) / h, u0 + (u1 - u0) * fb, v0 + (v1 - v0) * (py + ph - y) / h); }
     sdfFull = 0;
     quad(P_PLAINIMG, tex, x + m, y + m, w - 2 * m, h - 2 * m, 0, 0, 0, 0, tint, tint, tint, tint, u0 + (u1 - u0) * m / w, v0 + (v1 - v0) * m / h, u1 - (u1 - u0) * m / w, v1 - (v1 - v0) * m / h);
     return; }

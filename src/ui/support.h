@@ -11,4 +11,8 @@ float support_h(float Q);
 void  support_glass(unsigned int tex);
 void  support_glass_picture(unsigned int tex); /* the same, a plain picture the right way up (a backdrop) */
 float support_w(float Q);   /* the width taken: the pill's (the code is centred under it) */
+/* the same with the pill and its words k times larger than in proportion (the support card; the others use 1) */
+float support_draw_k(float x, float y, float Q, float k, float sel, int f, const char *coffee, const char *coffeeShown, const char *gh, const char *ghShown);
+float support_w_k(float Q, float k);
+float support_h_k(float Q, float k);
 #endif

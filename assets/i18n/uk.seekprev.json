@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Попередній перегляд на смузі перемотування",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Кадри з фільму над смугою під час перемотування. Вимк.: кадри не створюються",
+ "Previews for torrents": "Попередній перегляд для торентів",
+ "Slower than debrid, up to 500 MB extra per stream.": "Повільніше, ніж debrid, до 500 МБ додатково на потік.",
+ "Previews {n}%": "Попередній перегляд {n}%",
+ "Previews ready": "Попередній перегляд готовий",
+ "Uses more data, on mobile data too.": "Використовує більше даних, і мобільних теж.",
+ "Getting the seek bar’s previews ready… {n}%": "Готуємо прев’ю для смуги перемотування… {n}%",
+ "Play now": "Дивитися зараз",
+ "Load previews before playing": "Завантажувати прев’ю перед переглядом",
+ "about {n} s left": "лишилося близько {n} с",
+ "about {n} min left": "лишилося близько {n} хв",
+ "The film starts once this much of it has its previews; OK starts it at once": "Фільм почнеться, коли для цієї частки будуть прев’ю; OK запускає його одразу"
+}

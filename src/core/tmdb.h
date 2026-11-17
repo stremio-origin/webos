@@ -27,6 +27,9 @@ enum { TMDB_OFF = 0, TMDB_PENDING, TMDB_READY, TMDB_NONE };
 
 void tmdb_init(void);                 /* after store_init and i18n_init; otherwise done on first use */
 int  tmdb_has_key(void);
+const char *tmdb_orig_lang(const char *imdbId); /* the title's original language ("ja"; "tt123:1:2" takes the show's): "" unknown or no key, NULL while asked (asked once, kept in the store) */
+int  tmdb_call_any(const char *path, char *url, size_t ucap, char *hdr, size_t hcap); /* the same from any thread */
+int  tmdb_call(const char *path, char *url, size_t ucap, char *hdr, size_t hcap); /* (a path such as "/collection/10?language=fr"): its URL and header; 0 with no key */
 int  tmdb_builtin(void);            /* this build carries the app's own key: nobody needs to add one */
 void tmdb_key_clear(void);            /* "Remove the TMDB key" */
 /* changes whenever lookups start again (a key added or removed, another language): screens drop what they

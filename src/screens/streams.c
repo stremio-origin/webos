@@ -1,5 +1,7 @@
 /* The streams sheet: an opaque side sheet from the right edge with soft leading corners and a shadow over the page's
    glass, a sentence-case heading, calm rows and the gliding accent highlight under the focus. */
+#include "screens/livehub.h"
+#include "screens/player.h"
 #include "screens/streams.h"
 #include <SDL2/SDL.h>
 #include "screens/sheet.h"
@@ -22,6 +24,9 @@
 
 #define MAXG 24
 #define MAXITEMS 151
+#define PER_ADDON 150  /* an addon's own chip lists this many of its streams (40 before: an aggregator's later ones were never seen) */
+#define PER_ALL 40     /* "All" takes this many from each addon, as before: one big addon never fills it */
+#define STORE_MAX 1000 /* streams kept for the sheet in all, each about 6.6 KB: a pile of big addons stays within a few MB */
 #define SW 960.0f          /* the sheet */
 #define PADX 52.0f
 #define LW (SW - 2 * PADX) /* its content */
@@ -34,7 +39,7 @@ typedef struct { char name[96]; Stream *items; int n; int resume; } Group;
 static struct {
   int open, zone; /* 0 list, 1 chips */ Tween x, op; /* the panel's slide and fade: an even ease-out (the quick-tween curve put it all in the first two frames) */ Tween out; int closing; SGlass glass;
   Group groups[MAXG]; int ng; unsigned tok; int loading; double t; char key[160];
-  char type[16], id[64], vid[80], title[256], ep[400];
+  char type[16], id[SB_ID], vid[SB_VID], title[256], ep[400];
   int filter, chipIdx; int chips[MAXG + 1]; int nchips; QT chipsX;
   const Stream *items[MAXITEMS]; int itemGroup[MAXITEMS], kind[MAXITEMS]; int n, idx; QT listY; Nudge nudge; FPill pill;
   float itemH[MAXITEMS], itemY[MAXITEMS], headY[MAXITEMS]; int laid; double nwAt[MAXITEMS]; double enterAt; /* the rows rise in one after another from here (opening, a new filter) */
@@ -42,6 +47,7 @@ static struct {
   /* the tabs: the focus highlight and the current tab's underline glide from tab to tab (in the row's own x) */
   FPill chipPill; QT ulX, ulW; int ulOn;
   Tween phA, msgA, spA; /* the waiting rows, the "none" words and the spinner fade in and out (never pop) */
+  int pend, asked; Tween leftA; char left[96], leftOld[96]; double leftAt; /* the addons still to answer: said beside the spinner once a wait is noticed ("2 add-ons left"), a new count fading in over the last */
   /* the best pick: where the focus came to rest (its hint after 3 s), OK held on it, its details panel */
   double restAt; int restKey; int holding, swelled; double holdAt; int info; Tween infoK; QT infoY; float infoH, infoW, infoFrom[4], infoTo[4]; const Stream *infoS; SGlass pglass;
   /* measured once, not per frame: each row's header line (in layout), the chips' words and widths (chipsLaid), the total */
@@ -61,7 +67,8 @@ static void rebuild(void) {
   const Stream *sel = S.idx < S.n ? S.items[S.idx] : NULL; int selKind = S.idx < S.n ? S.kind[S.idx] : 0; double now = app_now();
   int n = 0; double nw[MAXITEMS];
   for (int g = 0; g < S.ng && n < MAXITEMS - 1; g++) { if (!S.groups[g].n) continue; if (S.filter >= 0 && g != S.filter) continue;
-    for (int i = 0; i < S.groups[g].n && n < MAXITEMS - 1; i++) { const Stream *s = &S.groups[g].items[i]; S.items[n] = s; S.itemGroup[n] = g; S.kind[n] = S.groups[g].resume ? R_RESUME : R_PLAIN;
+    int lim = S.filter >= 0 || S.groups[g].n < PER_ALL ? S.groups[g].n : PER_ALL;
+    for (int i = 0; i < lim && n < MAXITEMS - 1; i++) { const Stream *s = &S.groups[g].items[i]; S.items[n] = s; S.itemGroup[n] = g; S.kind[n] = S.groups[g].resume ? R_RESUME : R_PLAIN;
       nw[n] = was_seen(s) ? 0 : now; n++; } } /* rows new to the list fade in (never pop) */
   /* best stream on: the pick for this TV right after the resume row */
   if (best_on() && S.filter < 0 && n) { const Stream *list[MAXITEMS]; int m = 0; for (int i = 0; i < n; i++) if (S.kind[i] == R_PLAIN) list[m++] = S.items[i];
@@ -77,15 +84,19 @@ static void rebuild(void) {
 }
 static void add(const Stream *arr, int n, int gIdx, const char *gName, int resume) {
   if (gIdx >= MAXG) return; Group *g = &S.groups[gIdx]; if (gIdx >= S.ng) S.ng = gIdx + 1; if (!g->name[0]) snprintf(g->name, sizeof g->name, "%s", gName ? gName : T("Addon")); g->resume = resume;
-  int k = n < 40 - g->n ? n : 40 - g->n; if (k > 0) { g->items = realloc(g->items, (g->n + k) * sizeof *g->items); memcpy(g->items + g->n, arr, k * sizeof *arr); g->n += k; }
+  int kept = 0; for (int i = 0; i < S.ng; i++) kept += S.groups[i].n;
+  int k = n < PER_ADDON - g->n ? n : PER_ADDON - g->n; if (k > STORE_MAX - kept) k = STORE_MAX - kept; if (k > 0) { g->items = realloc(g->items, (g->n + k) * sizeof *g->items); memcpy(g->items + g->n, arr, k * sizeof *arr); g->n += k; }
   count_redo();
   if (S.open) { render_chips(); rebuild(); }
 }
 static void on_part(StreamGroup *g, int gi, void *ud) { if ((unsigned)(uintptr_t)ud == S.tok) add(g->items, g->n, gi + 1, g->name, 0); free(g->items); } /* the part is ours: add() keeps copies */
+static void on_any(int pending, int count, void *ud) { if ((unsigned)(uintptr_t)ud != S.tok) return; S.pend = pending; S.asked = count; } /* (with it, an addon's answer is read whole, not its first 40: add() keeps PER_ADDON) */
 static void on_done(int total, void *ud) { (void)total; if ((unsigned)(uintptr_t)ud != S.tok) return; S.loading = 0; if (S.open) rebuild(); }
 static int key(int k);
 static void tick(float dt);
 static void draw(void);
+static Screen *sUnder; /* the overlay the sheet opened over (All channels), given the keys back when it closes */
+static int overP; /* over the playing picture (a channel held in the hub over it): drawn by the player's side, a little smaller, the picture never stopped */
 static Screen sheet = { NULL, NULL, key, tick, draw, NULL, NULL, NULL };
 static float sheet_x(void) { return app_rtl() ? 0 : SB_W - SW; }
 static char emptyNote[200]; /* said instead of "No streams found." (an episode that has not aired) */
@@ -93,7 +104,7 @@ void streams_empty_note(const char *t) { snprintf(emptyNote, sizeof emptyNote, "
 void streams_show(const char *type, const char *id, const char *vid, const char *title, const char *epLabel) {
   emptyNote[0] = 0;
   char k[160]; snprintf(k, sizeof k, "%s|%s", type, vid);
-  float cur = S.closing ? S.out.v : S.open ? S.op.v : 0; S.open = 1; S.closing = 0; S.zone = 0; app_overlay = &sheet;
+  float cur = S.closing ? S.out.v : S.open ? S.op.v : 0; S.open = 1; S.closing = 0; S.zone = 0; if (app_overlay != &sheet) sUnder = app_overlay; app_overlay = &sheet; /* (over All channels: it has the keys again after) */
   /* from closed: it slides in once with its glass baked; reopened mid-close: the slide just turns back */
   if (cur < 0.01f) { tween_set(&S.op, 0); tween_set(&S.x, 48); tween_set(&S.phA, 1); tween_set(&S.msgA, 0); tween_set(&S.spA, 1); Uint32 b0 = SDL_GetTicks(); sglass_bake(&S.glass, sheet_x(), 0, SW, SB_H); fpill_snap(&S.pill); S.enterAt = app_now() + (SDL_GetTicks() - b0) / 1000.0 + 0.06; }
   else tween_set(&S.op, cur);
@@ -106,14 +117,22 @@ void streams_show(const char *type, const char *id, const char *vid, const char 
   Stream r; if (sb_resume_stream(id, vid, &r)) { Stream x = r; /* (it keeps its addon: played again, it is remembered as that addon's, not as "Last used") */ snprintf(x.name, sizeof x.name, "%s", T("Resume last stream")); S.resumeSum[0] = 0; { BestRate br; memset(&br, 0, sizeof br); best_rate(&r, NULL, -1, 100, &br); snprintf(S.resumeSum, sizeof S.resumeSum, "%s", br.sum); } /* its specs laid out as the best fit's are */
     add(&x, 1, 0, T("Last used"), 1); }
   else rebuild();
-  sb_streams(type, vid, on_part, on_done, (void *)(uintptr_t)S.tok);
+  S.pend = S.asked = 0; S.left[0] = S.leftOld[0] = 0; tween_set(&S.leftA, 0); /* (a new list: its own count) */
+  sb_streams_ex(type, vid, on_part, on_done, on_any, (void *)(uintptr_t)S.tok);
 }
+void streams_show_over_player(const char *type, const char *id, const char *title) { overP = 1; streams_show(type, id, id, title, NULL); }
+int streams_over_player(void) { return overP && S.open; }
+void streams_over_frame(float dt) { if (!overP) return; tick(dt); float a = S.closing ? S.out.v : S.open ? S.op.v : 0; if (!S.open && a <= 0.001f) { overP = 0; return; }
+  const float k = 0.88f; gfx_scale_push(k, k, app_rtl() ? 0 : SB_W, SB_H / 2); draw(); gfx_scale_pop(); } /* (a little smaller, against its edge) */
+int streams_over_key(int k) { return key(k); }
 void streams_close(int instant) {
-  if (!S.open && !instant) return; S.open = 0; if (app_overlay == &sheet) app_overlay = NULL; S.info = 0; S.holding = 0; tween_set(&S.infoK, 0);
+  if (!S.open && !instant) return; S.open = 0; if (app_overlay == &sheet) app_overlay = sUnder; sUnder = NULL; S.info = 0; S.holding = 0; tween_set(&S.infoK, 0);
   if (instant) { S.closing = 0; tween_set(&S.op, 0); return; }
   S.closing = 1; app_occluder_drop(); tween_set(&S.out, S.op.v); tween_to(&S.out, 0, 0.18f, EASE_IN_OUT); tween_to(&S.x, 32, 0.2f, EASE_CSS_EASEOUT);
 }
-static void play(int i) { const Stream *s = S.items[i]; fpill_press(&S.pill); app_play(s, S.type, S.id, S.vid, 0); }
+static void play(int i) { const Stream *s = S.items[i]; fpill_press(&S.pill);
+  if (overP && player_open()) { streams_close(0); hub_close(); player_zap_begin(); player_quiet_next(); } /* (over the picture: the switch fades through black as the channel keys do) */
+  app_play(s, S.type, S.id, S.vid, 0); }
 /* the best pick's details: the row grows into a panel that hugs the stream's own words (every line as the addon wrote
    it, wrapped, nothing cut), on the sheets' glass; a long one scrolls with Up/Down */
 #define INFO_PAD 36.0f
@@ -146,7 +165,7 @@ static void info_close(void) { S.info = 0; tween_to(&S.infoK, 0, 0.26f, EASE_ROW
 /* an episode's list: its Watched pill by its name at the top (Up from the list or the providers) */
 static int is_ep_list(void) { return S.ep[0] && strchr(S.vid, ':') != NULL; }
 static Item ep_item(void) { Item it; memset(&it, 0, sizeof it); snprintf(it.id, sizeof it.id, "%s", S.id); snprintf(it.type, sizeof it.type, "%s", S.type); snprintf(it.videoId, sizeof it.videoId, "%s", S.vid); it.ep = 1; return it; }
-static void ep_toggle(void) { Item it = ep_item(); sound_play(SND_TOGGLE); lib_toggle_watched(&it, js_arr(sb_meta_cached(S.type, S.id), "videos")); app_refresh_boards(); }
+static void ep_toggle(void) { Item it = ep_item(); sound_play(SND_TOGGLE); lib_toggle_watched(&it, js_arr(sb_meta_cached(S.type, S.id), "videos")); app_refresh_boards(); if (SCR == SCR_DETAIL) { extern void detail_refresh_watched(void); detail_refresh_watched(); } } /* (the episodes under the sheet ticked at once, not on the page's next visit) */
 static void ep_act(int a, int b) { (void)a; (void)b; S.zone = 2; ep_toggle(); }
 static int key(int k) {
   if (S.zone == 2) { /* the Watched pill */
@@ -207,6 +226,9 @@ static void tick(float dt) {
   qt_to(&S.listY, -y, 0.24f);
   if (S.zone == 0 && S.idx < S.n) fpill_to(&S.pill, 0, S.itemY[S.idx], LW, S.itemH[S.idx], GLIDE_DUR); else fpill_hide(&S.pill);
   fpill_tick(&S.chipPill, dt); qt_tick(&S.ulX, dt); qt_tick(&S.ulW, dt); tween_to(&S.phA, S.loading && !S.n ? 1 : 0, 0.22f, EASE_IN_OUT); tween_to(&S.msgA, !S.loading && !S.n ? 1 : 0, 0.26f, EASE_IN_OUT); tween_to(&S.spA, S.loading ? 1 : 0, 0.25f, EASE_IN_OUT);
+  { char nl[96] = ""; if (S.loading && S.pend > 0) { char n[16]; snprintf(n, sizeof n, "%d", S.pend); snprintf(nl, sizeof nl, "%s", S.pend == 1 ? T("1 add-on left") : T1("{n} add-ons left", "n", n)); }
+    if (nl[0] && strcmp(nl, S.left)) { snprintf(S.leftOld, sizeof S.leftOld, "%s", S.left); snprintf(S.left, sizeof S.left, "%s", nl); S.leftAt = app_now(); } /* (a new count: it fades in over the last) */
+    tween_to(&S.leftA, S.loading && S.pend > 0 && app_now() - S.t > 1.2 ? 1 : 0, 0.3f, EASE_IN_OUT); tween_tick(&S.leftA, dt); } /* (said only once the wait is noticed: a quick answer never flashes it) */
   tween_tick(&S.phA, dt); tween_tick(&S.msgA, dt); tween_tick(&S.spA, dt); tween_tick(&S.infoK, dt); qt_tick(&S.infoY, dt); sglass_tick(&S.pglass, dt);
   { int rk = S.zone * 1000 + S.idx + (S.idx < S.n ? S.kind[S.idx] * 100000 : 0); if (rk != S.restKey) { S.restKey = rk; S.restAt = app_now(); } }
   if (S.holding) {
@@ -240,7 +262,7 @@ static void draw_chip_row(float x0, float y, int rtl) {
   if (cu >= 0) { float ux = xs[cu] + 20, uw = ws[cu] - 40; if (!S.ulOn) { qt_set(&S.ulX, ux); qt_set(&S.ulW, uw); S.ulOn = 1; } else { qt_to(&S.ulX, ux, GLIDE_DUR); qt_to(&S.ulW, uw, GLIDE_DUR); } } else S.ulOn = 0;
   #define CHIP_X(lx_, w_) (rtl ? x0 + LW - ((lx_) - S.chipsX.v) - (w_) : x0 + (lx_) - S.chipsX.v)
   { float nx = S.zone == 1 ? nudge_x(&S.nudge) : 0;
-    if (S.chipPill.a.v > 0.001f) { gfx_offset_push(CHIP_X(S.chipPill.x.v, S.chipPill.w.v) - S.chipPill.x.v + nx, y); fpill_halo(&S.chipPill, 14, 0.96f, acc_a(0.34f)); fpill_draw(&S.chipPill, 14, 0.96f); gfx_offset_pop(); }
+    if (S.chipPill.a.v > 0.001f) { gfx_offset_push(CHIP_X(S.chipPill.x.v, S.chipPill.w.v) - S.chipPill.x.v + nx, y); fpill_draw(&S.chipPill, 14, 0.96f); gfx_offset_pop(); }
     if (S.ulOn) gfx_rrect(CHIP_X(S.ulX.v, S.ulW.v) + (cu == S.chipIdx && S.zone == 1 ? nx : 0), y + 56 + 5, S.ulW.v, 4, 2, acc_a(0.9f)); } /* 4 px, the text's width, just under the tab */
   for (int i = 0; i < S.nchips; i++) { const char *lbl = S.chLbl[i], *cnt = S.chCnt[i];
     int cur = S.chips[i] == S.filter, f = S.zone == 1 && i == S.chipIdx; float cx = CHIP_X(xs[i], ws[i]), h = 56;
@@ -301,12 +323,16 @@ static void draw(void) {
   float x0 = sx + PADX, lx = rtl ? x0 + LW : x0; int al = rtl ? ALIGN_RIGHT : ALIGN_LEFT;
   float y = 52; float hw = text_draw(T("Streams"), lx, y + (30 - text_line_height(24)) / 2, 24, 600, WHITE_A(184), 0, 0, al);
   if (S.spA.v > 0.001f) { gfx_opacity_push(S.spA.v); spinner(rtl ? lx - hw - 14 - 10 : lx + hw + 14 + 10, y + 15 + 1); gfx_opacity_pop(); }
+  if (S.leftA.v > 0.001f && S.left[0]) { /* beside the spinner, quietly: how many addons are still to answer */
+    float tx = rtl ? lx - hw - 14 - 20 - 12 : lx + hw + 14 + 20 + 12, ty = y + 15 + 1 - text_line_height(20) / 2.0f, ke = (float)((app_now() - S.leftAt) / 0.28); if (ke > 1) ke = 1; ke = ease_apply(EASE_CSS_EASE, ke);
+    gfx_opacity_push(S.leftA.v); if (ke < 1 && S.leftOld[0]) { gfx_opacity_push(1 - ke); text_draw(S.leftOld, tx, ty - 6 * ke, 20, 500, WHITE_A(150), 0.1f, 0, al); gfx_opacity_pop(); }
+    gfx_opacity_push(ke); text_draw(S.left, tx, ty + 6 * (1 - ke), 20, 500, WHITE_A(150), 0.1f, 0, al); gfx_opacity_pop(); gfx_opacity_pop(); }
   y += 30 + 6; text_draw(S.title, lx, y + (44 - text_line_height(36)) / 2, 36, 700, WHITE_A(255), -0.4f, LW, al); y += 44;
   if (S.ep[0]) { y += 4; float ew = text_draw(S.ep, lx, y, 24, 500, WHITE_A(199), 0, LW - 300, al);
     if (is_ep_list()) { Item it = ep_item(); int on = lib_is_marked_watched(&it), f = S.zone == 2; const char *lb = T(on ? "Watched" : "Mark as watched"); /* its Watched pill */
       float th = text_line_height(24), h = 40, w = 36 + 10 + text_width(lb, 21, 600, 0) + 22, px = rtl ? lx - ew - 20 - w : lx + ew + 20, py = y + th / 2 - h / 2, nx = f ? nudge_x(&S.nudge) : 0;
       hit_add(px, py, w, h, NULL, ep_act, 0, 0); gfx_offset_push(nx, 0);
-      if (f) { gfx_rrect(px, py, w, h, h / 2, ACC | 0xff000000u); gfx_ring_out(px, py, w, h, h / 2, 4, acc_a(0.34f)); } else { gfx_rrect(px, py, w, h, h / 2, on ? acc_a(0.4f) : WHITE_A(20)); gfx_ring(px, py, w, h, h / 2, 1, WHITE_A(46)); }
+      if (f) { gfx_rrect(px, py, w, h, h / 2, ACC | 0xff000000u);  } else { gfx_rrect(px, py, w, h, h / 2, on ? acc_a(0.4f) : WHITE_A(20)); gfx_ring(px, py, w, h, h / 2, 1, WHITE_A(46)); }
       uint32_t fg = f ? ACC_FG : WHITE_A(240); icon_draw(on ? "check" : "eye", rtl ? px + w - 14 - 24 : px + 14, py + 8, 24, fg); text_draw(lb, rtl ? px + w - 46 : px + 46, py + (h - text_line_height(21)) / 2, 21, 600, fg, 0, 0, al);
       gfx_offset_pop(); } }
   if (S.nchips > 1) draw_chip_row(x0, CHIPS_Y, rtl);
@@ -328,7 +354,7 @@ static void draw(void) {
     float rdy, fa = row_in(i, i - vis0, now, &rdy);
     gfx_rrect(x0, iy + rdy, LW, ih, 18, WHITE_A((int)(14 * fa + .5f))); }
   if (S.zone == 0 && S.n) { float pdy, pa = row_in(S.idx, S.idx - vis0, now, &pdy); /* the highlight comes in with its row */
-    gfx_opacity_push(pa * (1 - S.infoK.v)); gfx_offset_push(x0 + nudge_x(&S.nudge), nudge_y(&S.nudge) + pdy); fpill_halo(&S.pill, 18, 0.97f, acc_a(0.34f)); fpill_draw(&S.pill, 18, 0.97f); gfx_offset_pop(); gfx_opacity_pop(); } /* the rows' own radius */
+    gfx_opacity_push(pa * (1 - S.infoK.v)); gfx_offset_push(x0 + nudge_x(&S.nudge), nudge_y(&S.nudge) + pdy); fpill_draw(&S.pill, 18, 0.97f); gfx_offset_pop(); gfx_opacity_pop(); } /* the rows' own radius */
   for (int i = 0; i < S.n; i++) { float iy = S.itemY[i], ih = S.itemH[i]; if (iy > bot) break; if (iy + ih < top && (S.headY[i] < 0 || S.headY[i] + head_h() < top)) continue;
     int g = S.itemGroup[i]; float rdy, fa = row_in(i, i - vis0, now, &rdy);
     if (fa < 1) gfx_opacity_push(fa); if (rdy > 0.01f) gfx_offset_push(0, rdy);

@@ -1,0 +1,23 @@
+{
+ "Seek bar": "نوار پیمایش",
+ "Seek step, chapters, previews": "گام پرش، فصل‌ها، پیش‌نمایش‌ها",
+ "Best stream, next episode, picture size": "بهترین جریان، قسمت بعد، اندازه تصویر",
+ "Accent colour, screensaver, clock, trailers": "رنگ تأکید، محافظ صفحه، ساعت، تریلرها",
+ "Track what you watch": "آنچه می‌بینید را ثبت کنید",
+ "Member since": "عضو از",
+ "Stremio account": "حساب Stremio",
+ "{n} titles": "{n} عنوان",
+ "{n} installed": "{n} نصب‌شده",
+ "Connected": "متصل",
+ "Not connected": "متصل نیست",
+ "Default": "پیش‌فرض",
+ "Font": "قلم",
+ "Arabic font": "قلم عربی",
+ "For subtitles in Arabic": "برای زیرنویس‌های عربی",
+ "Language, size, font, colour": "زبان، اندازه، قلم، رنگ",
+ "Subtitle font": "قلم زیرنویس",
+ "Arabic subtitle font": "قلم عربی زیرنویس",
+ "Styled subtitles keep their own fonts, colours and background.": "زیرنویس‌های سبک‌دار قلم‌ها، رنگ‌ها و پس‌زمینهٔ خود را نگه می‌دارند.",
+ "Stats for nerds on": "آمار برای حرفه‌ای‌ها روشن",
+ "Stats for nerds off": "آمار برای حرفه‌ای‌ها خاموش"
+}

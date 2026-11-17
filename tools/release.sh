@@ -1,6 +1,6 @@
 #!/bin/bash
 # A release in one step:  tools/release.sh VERSION [site-dir]
-# Sets the version (pkg/appinfo.json and the What's new card, which must match), builds the IPK
+# Sets the version (pkg/appinfo.json; the What's new card keeps its own: a new card, a new card version), builds the IPK
 # (tools/package.sh) and writes the Homebrew Channel files into the site folder, the GitHub Pages
 # repository users add to the Homebrew Channel:
 #   <id>_<version>_arm.ipk, icon.png, api/apps/<id>/manifest.json (+ releases/latest.json,
@@ -20,7 +20,7 @@ mkdir -p "$SITE"
 python3 - "$ROOT" "$VER" <<'EOF'
 import re, sys
 root, ver = sys.argv[1], sys.argv[2]
-for f in ('pkg/appinfo.json', 'assets/whatsnew.json'): # the version alone, the files as they are written
+for f in ('pkg/appinfo.json',): # the version alone, the file as it is written (the What's new card keeps its own version: it is keyed by it, so a fix release with the same card never shows it twice)
     p = root + '/' + f; t = open(p, encoding='utf-8').read(); n = re.subn(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + ver + r'\g<2>', t, count=1)
     if n[1] != 1: sys.exit('no version in ' + f)
     open(p, 'w', encoding='utf-8').write(n[0])
@@ -37,13 +37,15 @@ mkdir -p "$ROOT/dist/dbg/$VER" && cp "$ROOT/build/webos/stremioorigin.dbg" "$ROO
 rm -f "$SITE"/${ID}_*_arm.ipk
 cp "$IPK" "$SITE/"
 cp "$ROOT/pkg/largeIcon.png" "$SITE/icon.png"
-python3 - "$SITE" "$ID" "$VER" "$SHA" "$BASE" "$SRC" <<'EOF'
+python3 - "$SITE" "$ID" "$VER" "$SHA" "$BASE" "$SRC" "$ROOT/tools/homebrew" <<'EOF'
 import json, os, sys
-site, pid, ver, sha, base, src = sys.argv[1:]
-short = 'Native app for Stremio addons on LG webOS TVs. Unofficial.'
+site, pid, ver, sha, base, src, hb = sys.argv[1:]
+# the Homebrew Channel listing text, approved as written: tools/homebrew/ (the one place it lives, so it cannot drift)
+short = open(os.path.join(hb, 'shortDescription.txt'), encoding='utf-8').read().strip()
+full = open(os.path.join(hb, 'full_description.html'), encoding='utf-8').read()
 manifest = {
   'id': pid, 'version': ver, 'type': 'native', 'title': 'Stremio Origin',
-  'appDescription': 'Your own Stremio account and addons on your LG TV: artwork, trailers, the best stream in one press, subtitles, torrents, 11 languages. Unofficial.',
+  'appDescription': 'A native app for Stremio addons, written in C. You bring the account and addons; it ships empty. 28 languages. Unofficial.',
   'iconUri': base + '/icon.png', 'sourceUrl': src, 'rootRequired': False,
   'ipkUrl': '%s/%s_%s_arm.ipk' % (base, pid, ver), 'ipkHash': {'sha256': sha}}
 d = os.path.join(site, 'api', 'apps', pid)
@@ -57,12 +59,7 @@ listing = {'paging': {'page': 1, 'count': 1, 'maxPage': 1, 'itemsTotal': 1}, 'pa
 open(os.path.join(site, 'api', 'apps.json'), 'w').write(json.dumps(listing, indent=2) + '\n')
 listing['packages'][0]['fullDescriptionUrl'] = 'api/' + listing['packages'][0]['fullDescriptionUrl'] # the same list at the root: paths from there
 open(os.path.join(site, 'apps.json'), 'w').write(json.dumps(listing, indent=2) + '\n')
-open(os.path.join(d, 'full_description.html'), 'w').write(
-  '<p><b>Stremio Origin</b>: a native app for Stremio addons on LG webOS TVs (ARM).</p>\n'
-  '<p>Bring your own Stremio account and addons: the app ships empty and plays only the links your addons return. '
-  'Artwork and trailers, the best stream for your TV in one press, styled subtitles and subtitle sync, torrents, 11 languages.</p>\n'
-  '<p>Tested on webOS 4.4. Unofficial: not affiliated with Stremio.</p>\n'
-  '<p>Source: <a href="%s">%s</a></p>\n' % (src, src))
+open(os.path.join(d, 'full_description.html'), 'w', encoding='utf-8').write(full)
 print('site updated:', pid, ver, sha)
 EOF
 ls -l "$SITE"/${ID}_*_arm.ipk

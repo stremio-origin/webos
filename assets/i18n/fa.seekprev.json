@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "پیش‌نمایش روی نوار پیمایش",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "تصاویری از فیلم بالای نوار هنگام جابه‌جایی. خاموش: هیچ تصویری ساخته نمی‌شود",
+ "Previews for torrents": "پیش‌نمایش برای تورنت",
+ "Slower than debrid, up to 500 MB extra per stream.": "کندتر از debrid، تا ۵۰۰ مگابایت اضافه برای هر استریم.",
+ "Previews {n}%": "پیش‌نمایش {n}٪",
+ "Previews ready": "پیش‌نمایش‌ها آماده‌اند",
+ "Uses more data, on mobile data too.": "داده بیشتری مصرف می‌کند، روی داده همراه هم.",
+ "Getting the seek bar’s previews ready… {n}%": "در حال آماده‌سازی پیش‌نمایش‌های نوار… {n}٪",
+ "Play now": "اکنون پخش کن",
+ "Load previews before playing": "بارگیری پیش‌نمایش‌ها پیش از پخش",
+ "about {n} s left": "حدود {n} ثانیه مانده",
+ "about {n} min left": "حدود {n} دقیقه مانده",
+ "The film starts once this much of it has its previews; OK starts it at once": "فیلم وقتی این مقدار از آن پیش‌نمایش داشت شروع می‌شود؛ OK آن را فوراً شروع می‌کند"
+}

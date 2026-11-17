@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Arama çubuğu",
+ "Seek step, chapters, previews": "Atlama adımı, bölümler, önizlemeler",
+ "Best stream, next episode, picture size": "En iyi akış, sonraki bölüm, görüntü boyutu",
+ "Accent colour, screensaver, clock, trailers": "Vurgu rengi, ekran koruyucu, saat, fragmanlar",
+ "Track what you watch": "İzlediklerini takip et",
+ "Member since": "Üyelik tarihi",
+ "Stremio account": "Stremio hesabı",
+ "{n} titles": "{n} başlık",
+ "{n} installed": "{n} yüklü",
+ "Connected": "Bağlı",
+ "Not connected": "Bağlı değil",
+ "Default": "Varsayılan",
+ "Font": "Yazı tipi",
+ "Arabic font": "Arapça yazı tipi",
+ "For subtitles in Arabic": "Arapça altyazılar için",
+ "Language, size, font, colour": "Dil, boyut, yazı tipi, renk",
+ "Subtitle font": "Altyazı yazı tipi",
+ "Arabic subtitle font": "Arapça altyazı yazı tipi",
+ "Styled subtitles keep their own fonts, colours and background.": "Stilli altyazılar kendi yazı tiplerini, renklerini ve arka planlarını korur.",
+ "Stats for nerds on": "Meraklısı için istatistikler açık",
+ "Stats for nerds off": "Meraklısı için istatistikler kapalı"
+}

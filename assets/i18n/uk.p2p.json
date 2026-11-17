@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Мало пірів ({n}) · {r}","Getting the file list…":"Отримуємо список файлів…","Low storage: small buffer":"Мало місця: малий буфер","Low storage: streaming from memory":"Мало місця: потокове відтворення з пам’яті","Slow source: {r} for a {v} video":"Повільне джерело: {r} для відео {v}","Waiting for the next pieces…":"Очікуємо наступні частини…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Мало місця: підключіть USB-накопичувач"
+}

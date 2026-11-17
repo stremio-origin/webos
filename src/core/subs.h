@@ -5,11 +5,15 @@
 #include "core/stremio.h"
 typedef struct { double s, e; char *t; } Cue;
 int  subs_parse(const char *txt, Cue **out);   /* returns the count; free with subs_free */
-int  subs_parse_body(const unsigned char *body, size_t len, Cue **out); /* a raw gzip body is unpacked first; UTF-16 / Windows-1252 become UTF-8 */
+int  subs_parse_body(const unsigned char *body, size_t len, Cue **out); /* a raw gzip body is unpacked first; UTF-16 / a Windows code page become UTF-8 */
 /* a subtitle file fetched and read on a thread of its own; the answer comes through subs_pump() on the main thread.
    status: HTTP status (0 = network failure); cues are the callback's (free with subs_free), n = 0 when nothing was readable */
 void subs_load(const char *url, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud);
+void subs_load_lang(const char *url, const char *lang, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud); /* lang: the subtitle's language (any code): an old file's code page */
 void subs_pump(void);                          /* every frame while the player is open */
+/* inside a subs_load callback: the file itself when it is SubStation (.ass / .ssa), whole and as UTF-8, for styled
+   drawing (the caller owns it: free); NULL for any other format */
+char *subs_take_script(void);
 void subs_free(Cue *c, int n);
 /* languages: one canonical code per language whatever the source uses (639-2 B/T, 639-1, BCP-47) */
 const char *subs_lang_canon(const char *code, char *out, size_t cap);
@@ -24,7 +28,7 @@ void subs_list(const char *type, const char *vid, void (*cb)(SubEntry *subs, int
    in ranges; it is worked out first, off the drawing thread), its size and file name when known. own: the subtitles
    the stream carried, listed first. cb (through subs_pump) after each answer with everything so far (malloc'd: the
    callback's owner frees it); final once every source answered or failed; ok: how many answered */
-typedef struct { char type[16], vid[80], url[4096], filename[256], hash[24]; double size; int hashable; double fps; } SubQuery; /* fps: the picture's, when known (Auto-sync) */
+typedef struct { char type[16], vid[SB_VID], url[4096], filename[256], hash[24]; double size; int hashable; double fps; } SubQuery; /* fps: the picture's, when known (Auto-sync) */
 void subs_find(const SubQuery *q, const SubEntry *own, int nown, void (*cb)(SubEntry *subs, int n, int final, int ok, void *ud), void *ud);
 int  subs_addons_for(const char *type, const char *vid);   /* installed subtitles addons serving it */
 int  subs_os_hash(const char *url, double *size, char out[17]);  /* worker threads only (it blocks); *size: known size or 0 */

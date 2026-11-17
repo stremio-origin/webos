@@ -20,7 +20,10 @@
 #include <string.h>
 
 static struct { int open, started, state; double at, doneAt, outAt; char out[16], err[200], url[600]; } C; static SGlass glass;
-#define SB_ISSUES "https://github.com/stremio-origin/webos/issues/new" /* where this build's issues go */
+/* where this build's issues go, and what it says it is: each platform's own repo (an Android TV report filed on the
+   webOS repo as "webOS" was the wrong place) */
+static const char *issues_url(void) { return strstr(plat_device_name(), "Android") ? "https://github.com/stremio-origin/androidtv/issues/new" : "https://github.com/stremio-origin/webos/issues/new"; }
+static const char *plat_label(void) { return strstr(plat_device_name(), "Android") ? "Android%20TV" : "webOS"; }
 #define CW 1040.0f
 #define CH 470.0f
 static void close_card(void) { if (!C.open) return; C.open = 0; C.outAt = app_now(); }
@@ -36,7 +39,7 @@ static void tick(float dt) {
     char o[64]; int st = applog_share_state(o, sizeof o);
     if (st == 1 && strlen(o) == 4) { C.state = 1; snprintf(C.out, sizeof C.out, "%s", o); C.doneAt = app_now();
       /* the issue, prefilled: its title, the log code and the build in the text */
-      snprintf(C.url, sizeof C.url, "%s?title=%s&body=Log%%20code%%3A%%20%s%%0AVersion%%3A%%20%s%%20(%s)%%0A%%0AWhat%%20happened%%3A%%20", SB_ISSUES, "Issue%20from%20the%20TV", o, update_current(), "webOS"); }
+      snprintf(C.url, sizeof C.url, "%s?title=%s&body=Log%%20code%%3A%%20%s%%0AVersion%%3A%%20%s%%20(%s)%%0A%%0AWhat%%20happened%%3A%%20", issues_url(), "Issue%20from%20the%20TV", o, update_current(), plat_label()); }
     else if (st == -1 || (st == 0 && app_now() - C.at > 40.6)) { C.state = -1; C.doneAt = app_now();
       snprintf(C.err, sizeof C.err, "%s", T(st == -1 && (!strcmp(o, "net") || !strcmp(o, "timeout")) ? "No internet connection" : "Couldn’t share the logs. Try again in a moment")); }
   }
@@ -57,7 +60,7 @@ static void draw(void) {
   float ty = y + P;
   text_draw(T("Share logs"), tx, ty, 40, 700, WHITE_A(255), -0.5f, tw, al); ty += text_line_height(40) + 14;
   const char *p = T("Scan the code and describe the issue.");
-  float plh = 26 * 1.4f; int pn = text_wrap_count(p, tw, 4, 26, 400, 0); text_draw_wrapped(p, tx, ty, tw, 4, 26, 400, WHITE_A(210), 0, al, plh); ty += pn * plh + 26;
+  float plh = 26 * 1.4f; if (C.state != -1) { int pn = text_wrap_count(p, tw, 4, 26, 400, 0); text_draw_wrapped(p, tx, ty, tw, 4, 26, 400, WHITE_A(210), 0, al, plh); ty += pn * plh + 26; } /* (failed: there is no code to scan, only the reason) */
   if (C.state == 1) { /* the code rises in; its letters stand apart, always left to right */
     float t = (float)(app_now() - C.doneAt), k = ease_q(t / 0.3f), w = text_width(C.out, 88, 700, 18);
     text_draw(T("Log code"), tx, ty, 22, 600, WHITE_A(150), 0.6f, tw, al);
