@@ -12,6 +12,15 @@
   "bgColor": "#0c0b11",
   "iconColor": "#1a1430",
   "resolution": "1920x1080",
-  "requiredPermissions": ["all", "settings.query", "systemconfig.query", "application.launcher", "physicaldevice.query"],
-  "nativeLifeCycleInterfaceVersion": 2
+  "requiredPermissions": [
+    "all",
+    "settings.query",
+    "systemconfig.query",
+    "application.launcher",
+    "physicaldevice.query"
+  ],
+  "nativeLifeCycleInterfaceVersion": 2,
+  "bgImage": "assets/splashbg.jpg",
+  "splashBackground": "assets/splashbg.jpg",
+  "splashIcon": "assets/splashicon.png"
 }
