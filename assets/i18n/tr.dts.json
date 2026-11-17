@@ -2,5 +2,10 @@
 "DTS sound": "DTS sesi",
 "Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV": "Otomatik, bu TV'nin neyi oynattığını bulur. Emin değilseniz Dönüştür. Kapalı, işi TV'ye bırakır",
 "Convert": "Dönüştür",
-"Default audio language, DTS, interface sounds": "Varsayılan ses dili, DTS, arayüz sesleri"
+"Default audio language, DTS, interface sounds": "Varsayılan ses dili, DTS, arayüz sesleri",
+"Converting the sound for this TV…": "Bu TV için ses dönüştürülüyor…",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (dönüştürülmüş)",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (dönüştürülmüş)",
+"Playing the {t} track: this TV can’t play DTS": "{t} parçası oynatılıyor: Bu TV DTS oynatamıyor",
+"Playing the {t} track: this TV can’t play TrueHD": "{t} parçası oynatılıyor: Bu TV TrueHD oynatamıyor"
 }

@@ -1,4 +1,5 @@
 /* Sign in: a code to scan with the phone on the left, email and password on the right. */
+#include "ui/xline.h"
 #include "screens/login.h"
 #include "screens/splash.h"
 #include "core/keys.h"
@@ -23,7 +24,7 @@ static struct {
   int zone;                 /* 0 email, 1 password, 2 button */
   int editing;              /* OK on a field: typing goes in */
   char email[128], pass[128], err[256];
-  char code[16], link[256], stat[128]; int qrOk, started; double pollAt; unsigned pollReq;
+  char code[16], link[256], stat[128]; int qrOk, started, renewing; double pollAt, codeAt; unsigned pollReq;
   int revealed; double revealAt; Timer1 in;
   int done; Timer1 doneT; int left; double doneAt; int restarting; Timer1 restart;
   Nudge nudge; double t0;
@@ -31,9 +32,13 @@ static struct {
 } L;
 
 static void reveal(void) { if (L.revealed) return; L.revealed = 1; timer_start(&L.in, 0.79f); }
+static void renew(const char *why);
 static void on_read(int status, const unsigned char *body, size_t len, void *ud) {
-  (void)len; (void)ud; L.pollReq = 0; if (status != 200 || L.done) return;
+  (void)len; (void)ud; L.pollReq = 0; if (L.done) return;
+  if (status == 404 || status == 410 || status == 400) { renew("the code expired"); return; } /* (the code gone: a new one) */
+  if (status != 200) return;
   cJSON *j = net_json(body); if (!j) return;
+  if (js_obj(j, "error") || js_str(j, "error", NULL)) { cJSON_Delete(j); return; } /* (not signed in on the phone yet: link.stremio.com answers {"error":{"code":101,"message":"Invalid or expired token"}} for a fresh, waiting code too, so it is no sign of an expiry; renewing on it made a new code every 3 s. The code is renewed at 4 minutes, or when the server answers 404/410/400) */
   const cJSON *r = js_obj(j, "result"); const char *ak = js_str(r, "authKey", NULL); if (!ak) ak = js_str(r, "auth_key", NULL);
   if (ak && *ak) { char k[256]; snprintf(k, sizeof k, "%s", ak); cJSON_Delete(j); extern void login_finish(const char *); login_finish(k); return; }
   cJSON_Delete(j);
@@ -41,11 +46,14 @@ static void on_read(int status, const unsigned char *body, size_t len, void *ud)
 static void on_create(int status, const unsigned char *body, size_t len, void *ud) {
   (void)len; (void)ud; cJSON *j = status == 200 ? net_json(body) : NULL;
   const char *code = js_str(j, "code", NULL), *link = js_str(j, "link", NULL);
-  if (!code || !*code) { snprintf(L.stat, sizeof L.stat, "%s", T("QR unavailable — use email")); reveal(); cJSON_Delete(j); return; }
-  snprintf(L.code, sizeof L.code, "%s", code); snprintf(L.link, sizeof L.link, "%s", link ? link : ""); if (!L.link[0]) snprintf(L.link, sizeof L.link, "https://link.stremio.com/%s", code);
+  if (!code || !*code) { if (L.renewing) { L.renewing = 0; L.codeAt = app_now() - 200; cJSON_Delete(j); return; } /* (a new code not had: the shown one stays, asked again in a minute) */ snprintf(L.stat, sizeof L.stat, "%s", T("QR unavailable — use email")); reveal(); cJSON_Delete(j); return; }
+  L.renewing = 0; L.codeAt = app_now(); snprintf(L.code, sizeof L.code, "%s", code); snprintf(L.link, sizeof L.link, "%s", link ? link : ""); if (!L.link[0]) snprintf(L.link, sizeof L.link, "https://link.stremio.com/%s", code);
   L.stat[0] = 0; L.qrOk = 1; /* (no status under the code: it simply works) */ L.pollAt = app_now() + 2.5; reveal(); /* everything comes in once the code is drawn */
   cJSON_Delete(j);
 }
+/* a code lasts a few minutes: a new one before it expires (4 min), or at once when the server says it is over; the
+   shown one stays until the new one is here, so the code never blinks out */
+static void renew(const char *why) { if (L.renewing || L.done) return; L.renewing = 1; fprintf(stderr, "[login] a new sign-in code (%s)\n", why); net_get("https://link.stremio.com/api/create", on_create, NULL); }
 static void start_qr(void) { if (L.started) return; L.started = 1; L.stat[0] = 0; net_get("https://link.stremio.com/api/create", on_create, NULL); }
 static void step(void) { if (--L.left <= 0 && !L.restarting) { L.restarting = 1; timer_start(&L.restart, 0.5f); } }
 static void on_user(int ok, const char *err, void *ud) { (void)ok; (void)err; (void)ud; step(); }
@@ -91,6 +99,7 @@ static void text(const char *s) { if (!L.editing || L.done) return; char *f = L.
 static void tick(float dt) {
   timer_tick(&L.in, dt); nudge_tick(&L.nudge, dt); osk_tick(&L.osk, dt);
   if (!L.revealed && app_now() >= L.revealAt) reveal();
+  if (L.qrOk && !L.done && !L.renewing && app_now() - L.codeAt > 240) renew("4 minutes old");
   if (L.qrOk && !L.done && !L.pollReq && app_now() >= L.pollAt) { char u[320]; snprintf(u, sizeof u, "https://link.stremio.com/api/read?code=%s", L.code); L.pollReq = net_get(u, on_read, NULL); L.pollAt = app_now() + 2.5; }
   if (L.done) { timer_tick(&L.doneT, dt);
     if (!L.restarting && app_now() - L.doneAt > 9) { L.restarting = 1; timer_start(&L.restart, 0.5f); } /* a slow network never keeps it here */
@@ -187,7 +196,8 @@ static void draw(void) {
 }
 void login_loading_draw(double since, float a) {
   if (a <= 0.004f) return; gfx_opacity_push(a);
-  text_draw(T("Signed in! Loading…"), SB_W / 2, SB_H / 2 - 44, 32, 700, WHITE_A(255), 0, 0, ALIGN_CENTER);
+  { static XLine xl; static WlSlot ws; /* a light line over it while a big library comes in (core/waitlines): the same place, nothing moves */
+    xline_draw_w(&xl, xline_wait(&ws, (unsigned)(since * 1000), T("Signed in! Loading…"), 1, WL_SIGNIN, WL_ACT_NONE, 0), SB_W / 2, SB_H / 2 - 44, 32, 700, 0, WHITE_A(255), 0, ALIGN_CENTER); }
   float ly = SB_H / 2 - 44 + text_line_height(32) + 28, lx = SB_W / 2 - 190; gfx_rrect(lx, ly, 380, 4, 2, WHITE_A(31));
   gfx_clip_push(lx, ly, 380, 4); float ph = fmodf((float)(app_now() - since) / 1.25f, 1), p = ease_apply(EASE_IN_OUT, ph), sx = lx + 380 * 0.42f * (-1 + 3.4f * p);
   gfx_rrect_h(sx, ly, 380 * 0.21f, 4, 2, col_alpha(ACC2, 0), ACC2); gfx_rrect_h(sx + 380 * 0.21f, ly, 380 * 0.21f, 4, 2, ACC2, col_alpha(ACC2, 0)); gfx_clip_pop();

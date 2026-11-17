@@ -1,3 +1,4 @@
+/* The formatting is rough and I'm not going to bother. Pull requests that fix it are welcome; complaints without one help neither me nor the end user. */
 /* The Mac preview: a window, keyboard keys standing in for the remote. */
 #include "platform/plat.h"
 #include "core/keys.h"
@@ -51,7 +52,10 @@ int plat_lifecycle(const SDL_Event *e) {
 const char *plat_ui_locale(void) { return NULL; } /* the Mac preview: $LANG decides */
 char *plat_luna_call(const char *uri, const char *payload, int timeoutMs) { (void)uri; (void)payload; (void)timeoutMs; return NULL; }
 unsigned long plat_luna_subscribe(const char *uri, const char *payload, PlatLunaCb cb, void *ud) { (void)uri; (void)payload; (void)cb; (void)ud; return 0; }
+unsigned long plat_luna_subscribe_app(const char *uri, const char *payload, PlatLunaCb cb, void *ud) { (void)uri; (void)payload; (void)cb; (void)ud; return 0; }
+int plat_luna_send_app(const char *uri, const char *payload) { (void)uri; (void)payload; return 0; }
 void plat_luna_cancel(unsigned long handle) { (void)handle; }
 void plat_luna_pump(void) {}
 int plat_luna_send(const char *uri, const char *payload) { (void)uri; (void)payload; return 0; }
 int plat_panel_lines(void) { return 0; }
+void plat_pointer_visible(int on) { (void)on; }

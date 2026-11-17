@@ -1,0 +1,10 @@
+{
+ "Next episode card": "بطاقة الحلقة التالية",
+ "Large": "كبيرة",
+ "Compact": "مدمجة",
+ "Compact: a smaller picture and no summary, more of the film shows": "مدمجة: صورة أصغر بدون ملخص، فيظهر المزيد من الفيلم",
+ "Torrent connections": "اتصالات التورنت",
+ "Automatic": "تلقائي",
+ "TCP only": "TCP فقط",
+ "TCP only can help on mobile (4G / 5G) routers; a torrent may find fewer peers": "TCP فقط قد يساعد على أجهزة التوجيه المحمولة (4G / 5G)، لكن التورنت قد يجد عددًا أقل من النظراء"
+}

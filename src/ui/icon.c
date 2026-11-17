@@ -94,7 +94,7 @@ static unsigned char *rasterise_stroke(Shape *sh, float vb, int px, float sw) {
 
 /* ---- the icon set ---- */
 typedef struct { char name[32]; char *d; float vb, stroke; } IconDef;
-#define MAXDEFS 128
+#define MAXDEFS 256 /* (every assets/icons*.json together; one past it is logged, never dropped quietly) */
 static IconDef defs[MAXDEFS]; static int ndefs;
 int icon_exists(const char *name);
 typedef struct { int def, px, rot; AtlasSlot slot; GLuint own; unsigned use; } Cached; /* in the shared pages, or a texture of its own when they are full */
@@ -103,7 +103,8 @@ static void icon_load(const char *path) {
   FILE *f = fopen(path, "rb"); if (!f) return;
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); char *t = malloc(n + 1); size_t g = fread(t, 1, n, f); t[g] = 0; fclose(f);
   cJSON *j = cJSON_Parse(t); free(t); if (!j) { fprintf(stderr, "[icon] bad %s\n", path); return; }
-  cJSON *e; cJSON_ArrayForEach(e, j) { if (!cJSON_IsString(e) || ndefs >= MAXDEFS || icon_exists(e->string)) continue;
+  cJSON *e; cJSON_ArrayForEach(e, j) { if (!cJSON_IsString(e) || icon_exists(e->string)) continue;
+    if (ndefs >= MAXDEFS) { fprintf(stderr, "[icon] too many icons: %s from %s left out\n", e->string, path); continue; }
     const char *svg = e->valuestring; const char *d = strstr(svg, " d=\""); if (!d) continue; d += 4; const char *end = strchr(d, '"'); if (!end) continue;
     IconDef *ic = &defs[ndefs++]; snprintf(ic->name, sizeof ic->name, "%s", e->string); ic->d = strndup(d, end - d); ic->vb = 24;
     const char *vbp = strstr(svg, "viewBox=\""); if (vbp) { float a, b, c, dd; if (sscanf(vbp + 9, "%f %f %f %f", &a, &b, &c, &dd) == 4) ic->vb = c; }
@@ -155,6 +156,7 @@ void icon_draw_rot(const char *name, float x, float y, float size, uint32_t colo
     if (n && bd * 3 <= px) { c = n; c->use = ++useTick; atlas_touch(&c->slot); if (lastPx[def] != px) { lastPx[def] = px; lastMade[def] = fr; } } }
   if (!c) { c = icon_get(def, px, 0); lastMade[def] = fr; lastPx[def] = px; }
   float u0 = 0, v0 = 0, u1 = 1, v1 = 1; GLuint t = c->own; if (!t) { atlas_uv(&c->slot, &u0, &v0, &u1, &v1); t = atlas_tex(c->slot.page); }
+  if (gfx_mirrored() && (!strcmp(name, "ph_back") || !strcmp(name, "ph_chev"))) { float t2 = u0; u0 = u1; u1 = t2; } /* (a mirrored page: an arrow points the other way too) */
   float r = fmodf(deg, 360); if (fabsf(r) < 0.01f) gfx_alpha_tex_uv(t, x, y, size, size, color, u0, v0, u1, v1); else gfx_alpha_tex_rot(t, x, y, size, size, r, color, u0, v0, u1, v1);
 }
 void icon_draw(const char *name, float x, float y, float size, uint32_t color) { icon_draw_rot(name, x, y, size, color, 0); }

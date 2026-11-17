@@ -8,7 +8,8 @@ void trakt_init(void);                 /* after store_init; otherwise done on fi
 int  trakt_has_key(void);           /* the built-in id or the user's */
 int  trakt_builtin(void);           /* this build carries the app's own id: nobody needs to add one */
 void trakt_key_clear(void);            /* "Remove the Trakt id" */
-unsigned trakt_generation(void);       /* bumps when the id comes or goes: what was fetched without it is asked again */
+unsigned trakt_generation(void);
+const char *trakt_client_id(void);     /* the id in use: the user's own, else the app's; "" with neither */       /* bumps when the id comes or goes: what was fetched without it is asked again */
 /* a GET of api.trakt.tv<path> with the id's headers, the answer on the main thread; 0 when there is no id */
 unsigned trakt_request(const char *path, NetCb cb, void *ud);
 #endif

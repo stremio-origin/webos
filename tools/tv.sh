@@ -3,8 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; TV="${TV:?set TV to the TV address}"; KEY="${TV_KEY:?set TV_KEY to the SSH key for the TV}"; ID="${APPID:-tv.stremioorigin.app}"; WAIT="${1:-10}"
 SSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=6 root@$TV"
-APPID="$ID" TITLE="${TITLE:-Stremio Origin C}" "$ROOT/tools/package.sh" | tail -1
-scp -q -i "$KEY" -o BatchMode=yes "$ROOT/dist/${ID}_1.0.0_arm.ipk" "root@$TV:/tmp/sb.ipk"
+IPK=$(APPID="$ID" TITLE="${TITLE:-Stremio Origin C}" "$ROOT/tools/package.sh" | tail -1 | awk "{print \$NF}"); echo "$IPK"  # (the package just built, whatever its version)
+scp -q -i "$KEY" -o BatchMode=yes "$IPK" "root@$TV:/tmp/sb.ipk"
 if [ -n "${RUNONLY:-}" ]; then   # RUNONLY=1 SBENV="SB_GLCFG=1" tools/tv.sh 320: run the installed build by hand with extra env, no rebuild
   $SSH -tt "luna-send -n 1 luna://com.webos.applicationManager/close '{\"id\":\"$ID\"}' >/dev/null 2>&1; killall stremioorigin 2>/dev/null; sleep 1; rm -f /tmp/$ID.log; cd /media/developer/apps/usr/palm/applications/$ID; rm -f /tmp/sb.ipk; ${SBENV:-} APPID=$ID LS2_APPID=$ID SDL_VIDEODRIVER=wayland XDG_RUNTIME_DIR=/tmp/xdg SB_SHOT=/tmp/sbp.png SB_SHOT_FRAME=${1:-320} SB_SHOT_EXIT=1 timeout -t ${RUNFOR:-120} ./stremioorigin >/dev/null 2>&1; grep -E '${GREP:-start\]|frame\] 300|crash}' /tmp/$ID.log | tail -${TAIL:-3}" 2>&1 | grep -v "^Connection to" | cut -c1-300
   exit 0

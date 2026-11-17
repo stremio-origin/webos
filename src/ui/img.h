@@ -13,7 +13,7 @@ GLuint img_get(const char *url, int w, int h, float *aspect);
 /* the same picture made to fit the box exactly (fit 0: stretched to it, 1: cover-cropped at the
    centre, 2: cover-cropped from the top) with its corners rounded by `radius` (layout units), so it
    draws with the plain image program. A variant of its own; shares the download with img_get. */
-GLuint img_get_shaped(const char *url, int w, int h, float radius, int fit);
+GLuint img_get_shaped(const char *url, int w, int h, float radius, int fit); /* fit 10 + a shape: the same, blurred soft (made once, as it decodes) */
 int    img_shaped_loaded(const char *url, int w, int h, float radius, int fit);
 int    img_shaped_failed(const char *url, int w, int h, float radius, int fit);
 int    img_palette(const char *url, int w, int h, int alpha, Palette *out); /* 1 ready, 0 loading, -1 failed */
@@ -24,10 +24,12 @@ void   img_prefetch(const char *url, int w, int h);
 int    img_budget_mb(void);           /* the picture memory allowed (small on most TVs) */
 void   img_urgent(const char *url, int w, int h);       /* the next one decoded (the backdrop waited on) */
 void   img_prefetch_pri(const char *url, int w, int h); /* ahead of the queue, and never evicted (title art) */
+void   img_prefetch_mode(int on);     /* 1: what is asked next is a look-ahead (served after what is on screen, none past 90 % of the budget); 0 again after */
 void   img_pump(void);                   /* uploads finished decodes; call per frame (bounded work) */
 void   img_frame(void);                  /* marks the frame (for eviction) */
 void   img_release_unused(int keepMb);   /* evicts least recently drawn textures over the budget */
 void   img_set_budget_mb(int mb);
+void   img_log_stats(void);          /* one [img] line: fetches and new connections, where decodes came from, thrash, the on-screen wait */
 void   img_set_draw_scale(float s);      /* surface pixels per layout unit when below 1: pictures are decoded at the size really drawn */
 int    img_used_mb(void);
 /* computes cover-crop uv for drawing a texture of aspect `ta` into a box of aspect `ba`, anchored at the top (posters) or centre */

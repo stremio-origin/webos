@@ -16,7 +16,7 @@
 enum { SRC_META, SRC_WIKI, SRC_TRATE, SRC_TCOMM, SRC_FIND, SRC_MVOTE, SRC_MREV };
 enum { RK_TRAKT = 0, RK_TMDB, RK_IMDB, RK_RT, RK_MC }; /* the sources' order in the tiles, and who gives the main score */
 static Reviews kept[KEEP]; static int keptNext; static unsigned gen;
-typedef struct { char key[48]; int src; } Ask; /* a request on its way: which entry it is for (the entry may be gone by then) */
+typedef struct { char key[192]; int src; } Ask; /* a request on its way: which entry it is for (the entry may be gone by then) */
 typedef struct { char type[16], id[24]; int s, e; } Who;
 
 static Reviews *find(const char *key) { for (int i = 0; i < KEEP; i++) if (kept[i].key[0] && !strcmp(kept[i].key, key)) return &kept[i]; return NULL; }
@@ -124,7 +124,7 @@ static void ask_wiki(Reviews *r) {
 /* the title's details: the IMDb rating (an episode's own when its entry carries one), TMDB's id for the TMDB calls */
 static void meta_in(Reviews *r, const cJSON *m) {
   Who w; who_of(r, &w); float ir = 0;
-  if (w.e) { char vid[80]; snprintf(vid, sizeof vid, "%s:%d:%d", w.id, w.s, w.e); const cJSON *v; cJSON_ArrayForEach(v, js_arr(m, "videos")) if (!strcmp(js_str(v, "id", ""), vid)) { ir = (float)js_numstr(v, "rating", js_numstr(v, "imdbRating", 0)); break; } }
+  if (w.e) { char vid[SB_VID]; snprintf(vid, sizeof vid, "%s:%d:%d", w.id, w.s, w.e); const cJSON *v; cJSON_ArrayForEach(v, js_arr(m, "videos")) if (!strcmp(js_str(v, "id", ""), vid)) { ir = (float)js_numstr(v, "rating", js_numstr(v, "imdbRating", 0)); break; } }
   else if (!w.s) ir = (float)js_numstr(m, "imdbRating", 0);
   if (ir > 0) { char s[12]; snprintf(s, sizeof s, "%.1f", ir); tile(r, RK_IMDB, "IMDb", s); score(r, RK_IMDB, ir, 0, "IMDb"); }
   int tid = (int)js_num(m, "moviedb_id", 0);
@@ -140,7 +140,7 @@ static void start(Reviews *r) {
   touched(r);
 }
 const Reviews *reviews_get(const char *type, const char *id, int season, int episode) {
-  char key[48]; snprintf(key, sizeof key, "%s|%s|%d|%d", type, id, season, episode);
+  char key[192]; snprintf(key, sizeof key, "%s|%s|%d|%d", type, id, season, episode); /* (a long addon id whole: #81) */
   { static unsigned tg, kg; static int seen; unsigned t2 = trakt_generation(), k2 = tmdb_generation(); /* a key came or went: all is asked again */
     if (seen && (t2 != tg || k2 != kg)) { for (int i = 0; i < KEEP; i++) { free(kept[i].c); memset(&kept[i], 0, sizeof kept[i]); } gen++; } seen = 1; tg = t2; kg = k2; }
   Reviews *r = find(key);

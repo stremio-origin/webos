@@ -5,6 +5,7 @@
    closing) the new page's copy flies from the old place. While it flies it is drawn after the page, outside the
    page's own fade and move, at full strength. */
 #include "ui/shared.h"
+#include "core/stremio.h"
 #include "core/anim.h"
 #include "core/app.h"
 #include "ui/text.h"
@@ -15,7 +16,7 @@
 #include <math.h>
 
 #define SXN 48
-typedef struct { char key[80]; float x, y, w, h; GLuint tex; int layer; } Mark;
+typedef struct { char key[SB_ID + 16]; float x, y, w, h; GLuint tex; int layer; } Mark; /* key: "poster:<id>" and the like */
 static Mark cur[SXN], last[SXN], from[SXN]; static int ncur, nlast, nfrom;
 static double t0; static int active, layer, pref, quick; /* layer: 0 the page, 1 the player (drawn over it); pref: the one the elements fly to */
 typedef struct { GLuint tex; float x, y, w, h, r; uint32_t tint; float u0, v0, u1, v1; } Late;

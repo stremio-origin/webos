@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Трака за премотавање",
+ "Seek step, chapters, previews": "Корак, поглавља, прегледи",
+ "Best stream, next episode, picture size": "Најбољи стрим, следећа епизода, величина слике",
+ "Accent colour, screensaver, clock, trailers": "Боја наглашавања, чувар екрана, сат, трејлери",
+ "Track what you watch": "Бележите шта гледате",
+ "Member since": "Члан од",
+ "Stremio account": "Stremio налог",
+ "{n} titles": "{n} наслова",
+ "{n} installed": "{n} инсталирано",
+ "Connected": "Повезано",
+ "Not connected": "Није повезано",
+ "Default": "Подразумевано",
+ "Font": "Фонт",
+ "Arabic font": "Арапски фонт",
+ "For subtitles in Arabic": "За титлове на арапском",
+ "Language, size, font, colour": "Језик, величина, фонт, боја",
+ "Subtitle font": "Фонт титлова",
+ "Arabic subtitle font": "Арапски фонт титлова",
+ "Styled subtitles keep their own fonts, colours and background.": "Стилизовани титлови задржавају своје фонтове, боје и позадину.",
+ "Stats for nerds on": "Статистика за знатижељне укључена",
+ "Stats for nerds off": "Статистика за знатижељне искључена"
+}

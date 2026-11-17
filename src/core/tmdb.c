@@ -101,7 +101,7 @@ static int key_from_phone(const char *raw) {
 
 /* ---- the work queue ------------------------------------------------------------------------------ */
 enum { E_OK = 0, E_BADKEY, E_NET };
-typedef struct Job { struct Job *next; char type[8], id[16], lang[4], key[420]; int light, err; unsigned gen; Loc *v; int none; } Job;
+typedef struct Job { struct Job *next; char type[8], id[16], lang[8], key[420]; int light, err; unsigned gen; Loc *v; int none; } Job;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static Job *qHead, *qTail, *done; static int workersOn; static volatile int haveDone;
 static double now_ms(void) { struct timeval tv; gettimeofday(&tv, NULL); return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0; }
@@ -140,18 +140,19 @@ static cJSON *fetch(const Job *j, int *err, int *none) {
   const char *kind = !strcmp(j->type, "series") ? (tv ? "tv" : mv ? "movie" : "") : (mv ? "movie" : tv ? "tv" : "");
   if (!*kind) { cJSON_Delete(f); *none = 1; return NULL; }
   int tid = (int)js_num(!strcmp(kind, "tv") ? tv : mv, "id", 0); cJSON_Delete(f);
-  snprintf(p, sizeof p, "/%s/%d?language=%s&append_to_response=images,translations&include_image_language=%s", kind, tid, j->lang, j->lang);
+  char il[3]; snprintf(il, sizeof il, "%s", j->lang); const char *rg = j->lang[2] == '-' ? j->lang + 3 : ""; /* pt-BR: the words of "pt" in "BR", the pictures of "pt" */
+  snprintf(p, sizeof p, "/%s/%d?language=%s&append_to_response=images,translations&include_image_language=%s", kind, tid, j->lang, il);
   cJSON *d = tmdb_get(p, j->key, &st);
   if (!d || !js_num(d, "id", 0)) { cJSON_Delete(d); *err = E_NET; return NULL; }
   const char *name = "", *ov = ""; const cJSON *t;
-  cJSON_ArrayForEach(t, js_arr(js_obj(d, "translations"), "translations")) { const cJSON *td = js_obj(t, "data"); if (!td || strcmp(js_str(t, "iso_639_1", ""), j->lang)) continue;
+  cJSON_ArrayForEach(t, js_arr(js_obj(d, "translations"), "translations")) { const cJSON *td = js_obj(t, "data"); if (!td || strcmp(js_str(t, "iso_639_1", ""), il) || (*rg && strcmp(js_str(t, "iso_3166_1", ""), rg))) continue;
     if (!*name) { name = js_str(td, "title", ""); if (!*name) name = js_str(td, "name", ""); }
     if (!*ov) ov = js_str(td, "overview", ""); }
   cJSON *v = cJSON_CreateObject(), *gs = cJSON_CreateArray();
   cJSON_AddStringToObject(v, "name", name); cJSON_AddStringToObject(v, "overview", ov);
   cJSON_ArrayForEach(t, js_arr(d, "genres")) { const char *g = js_str(t, "name", ""); if (*g) cJSON_AddItemToArray(gs, cJSON_CreateString(g)); }
   cJSON_AddItemToObject(v, "genres", gs);
-  const cJSON *im = js_obj(d, "images"); const char *lg = best_image(js_arr(im, "logos"), j->lang), *po = best_image(js_arr(im, "posters"), j->lang); char u[600];
+  const cJSON *im = js_obj(d, "images"); const char *lg = best_image(js_arr(im, "logos"), il), *po = best_image(js_arr(im, "posters"), il); char u[600];
   snprintf(u, sizeof u, "%s%s", *lg ? IMG : "", lg); cJSON_AddStringToObject(v, "logo", u);
   snprintf(u, sizeof u, "%s%s", *po ? IMG : "", po); cJSON_AddStringToObject(v, "poster", u);
   cJSON *eps = cJSON_CreateObject(); cJSON_AddItemToObject(v, "eps", eps);
@@ -283,6 +284,10 @@ void tmdb_init(void) {
   httpd_set_key_handler(key_from_phone);
 }
 int tmdb_has_key(void) { drain(); return key[0] != 0; }
+/* a call for another part of the app (collections): its URL and header with the key in use; 0 when there is none */
+/* the same from any thread (the pictures' workers): the key as it stands, nothing else touched */
+int tmdb_call_any(const char *path, char *url, size_t ucap, char *hdr, size_t hcap) { if (!key[0] || !apiBase[0]) return 0; call_url(path, key, url, ucap, hdr, hcap); return 1; }
+int tmdb_call(const char *path, char *url, size_t ucap, char *hdr, size_t hcap) { drain(); if (!key[0] || !apiBase[0]) return 0; call_url(path, key, url, ucap, hdr, hcap); return 1; }
 void tmdb_key_clear(void) { remove(keyPath); snprintf(key, sizeof key, "%s", builtin); resetReq = 1; }
 int tmdb_builtin(void) { if (!inited) tmdb_init(); return builtin[0] != 0; }
 unsigned tmdb_generation(void) { drain(); return gen; }
@@ -342,3 +347,27 @@ unsigned tmdb_request(const char *path, NetCb cb, void *ud) {
   char url[2048], hdr[480]; call_url(path, key, url, sizeof url, hdr, sizeof hdr);
   return net_get_hdr(url, hdr[0] ? hdr : NULL, cb, ud);
 }
+/* a title's original language (TMDB's original_language, "ja", "es"...), for "Original" audio: asked once, kept in the
+   store (origLangs: "tt123:ja tt456:es", the last 300; "-" for one TMDB doesn't know). NULL while it is asked */
+static struct { char id[24]; int busy; } OL[8];
+static int ol_get(const char *id, char *out, size_t cap) { const char *l = store_get("origLangs", ""); size_t n = strlen(id);
+  for (const char *p = l; (p = strstr(p, id)); p += n) if ((p == l || p[-1] == ' ') && p[n] == ':') { const char *v = p + n + 1; size_t k = strcspn(v, " "); if (k >= cap) k = cap - 1; memcpy(out, v, k); out[k] = 0; return 1; }
+  return 0; }
+static void ol_put(const char *id, const char *lang) { char cur[8]; if (ol_get(id, cur, sizeof cur)) return; const char *l = store_get("origLangs", ""); static char b[8192];
+  snprintf(b, sizeof b, "%s%s%s:%s", l, *l ? " " : "", id, *lang ? lang : "-"); int words = 1; for (const char *p = b; *p; p++) words += *p == ' ';
+  char *q = b; while (words > 300 && (q = strchr(q, ' '))) { q++; words--; } store_set("origLangs", q ? q : b); }
+static void on_orig(int st, const unsigned char *b, size_t n, void *ud) { (void)n; int k = (int)(intptr_t)ud; cJSON *j = st == 200 ? net_json(b) : NULL;
+  if (k >= 0 && k < 8 && OL[k].busy) { OL[k].busy = 0;
+    if (j) { const cJSON *a = cJSON_GetObjectItemCaseSensitive(j, "movie_results"), *r = cJSON_GetArraySize(a) ? cJSON_GetArrayItem(a, 0) : NULL;
+      if (!r) { a = cJSON_GetObjectItemCaseSensitive(j, "tv_results"); r = cJSON_GetArraySize(a) ? cJSON_GetArrayItem(a, 0) : NULL; }
+      const char *lg = r ? js_str(r, "original_language", "") : ""; ol_put(OL[k].id, lg); fprintf(stderr, "[tmdb] %s: original language %s\n", OL[k].id, *lg ? lg : "unknown"); }
+    else fprintf(stderr, "[tmdb] %s: original language not had (%d)\n", OL[k].id, st); } /* (not kept: asked again next time) */
+  net_json_free(j); }
+const char *tmdb_orig_lang(const char *imdbId) {
+  static char v[8]; if (!imdbId || strncmp(imdbId, "tt", 2)) return ""; char id[24]; snprintf(id, sizeof id, "%.*s", (int)strcspn(imdbId, ":"), imdbId);
+  if (ol_get(id, v, sizeof v)) return strcmp(v, "-") ? v : "";
+  for (int i = 0; i < 8; i++) if (OL[i].busy && !strcmp(OL[i].id, id)) return NULL;
+  int k = -1; for (int i = 0; i < 8; i++) if (!OL[i].busy) { k = i; break; } if (k < 0) return NULL;
+  char p[96]; snprintf(p, sizeof p, "/find/%s?external_source=imdb_id", id); snprintf(OL[k].id, sizeof OL[k].id, "%s", id); OL[k].busy = 1;
+  if (!tmdb_request(p, on_orig, (void *)(intptr_t)k)) { OL[k].busy = 0; return ""; } /* (no key: nothing to know it from) */
+  return NULL; }

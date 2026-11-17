@@ -103,6 +103,7 @@ static int notes_from(const char *md, char out[5][256]) {
 static void pill_show(void);
 static double nextAt; static int forceCheck, pillPend; /* the next check while the app stays open; a check that skips the 6-hour rest; a notice that waits for the film to end */
 static int reached; /* the release list or the listing answered: finding nothing for this package then means nothing newer */
+static int lastSt; /* the list's HTTP answer (0: none), for the log when it could not be read */
 static void done(const Rel *best, int manual) {
   char at[32]; snprintf(at, sizeof at, "%.0f", now_ms()); store_set("updAt", at);
   if (best && U.cur[0] && ver_cmp(best->ver, U.cur) > 0) {
@@ -112,14 +113,14 @@ static void done(const Rel *best, int manual) {
   } else {
     int none = best || reached;
     U.has = 0; U.state = none ? UPD_NONE : UPD_ERROR; store_remove("updVer");
-    fprintf(stderr, "[update] %s\n", none ? "up to date" : "could not check");
+    if (none) fprintf(stderr, "[update] up to date\n"); else if (lastSt > 0) fprintf(stderr, "[update] could not check (HTTP %d%s)\n", lastSt, lastSt == 200 ? ", not a release list" : ""); else fprintf(stderr, "[update] could not check (no answer: offline, no name lookup or too slow)\n");
     if (manual) toast(T(none ? "You have the latest version" : "Could not check for updates"), 2000, NULL);
     if (!none && U.started) nextAt = app_now() + 600; /* no answer (the network not up yet, the site away): again in 10 minutes */
   }
   changed();
 }
 static void on_manifest(int st, const unsigned char *body, size_t len, void *ud) {
-  (void)len; int manual = (int)(size_t)ud; Rel r; memset(&r, 0, sizeof r); int ok = 0;
+  (void)len; int manual = (int)(size_t)ud; Rel r; memset(&r, 0, sizeof r); int ok = 0; lastSt = st;
   cJSON *m = st == 200 ? cJSON_Parse((const char *)body) : NULL; if (cJSON_IsObject(m)) reached = 1;
   cJSON *v = cJSON_GetObjectItemCaseSensitive(m, "version"), *u = cJSON_GetObjectItemCaseSensitive(m, "ipkUrl"), *h = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(m, "ipkHash"), "sha256");
   if (cJSON_IsString(v) && cJSON_IsString(u) && cJSON_IsString(h) && *v->valuestring && *u->valuestring && *h->valuestring) {
@@ -135,7 +136,7 @@ static void on_manifest(int st, const unsigned char *body, size_t len, void *ud)
 }
 static int is_hex64(const char *s) { for (int i = 0; i < 64; i++) if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0; return !s[64]; }
 static void on_releases(int st, const unsigned char *body, size_t len, void *ud) {
-  (void)len; int manual = (int)(size_t)ud; Rel best; int has = 0; memset(&best, 0, sizeof best);
+  (void)len; int manual = (int)(size_t)ud; Rel best; int has = 0; memset(&best, 0, sizeof best); lastSt = st;
   cJSON *list = st == 200 ? cJSON_Parse((const char *)body) : NULL, *r, *a;
   const char *pre = SB_APP_ID "_"; size_t pl = strlen(pre);
   cJSON *arr = cJSON_IsArray(list) ? list : NULL; reached = arr != NULL;
@@ -171,6 +172,9 @@ static char waitPath[1200], shPath[1200];
 static void relaunch_cancel(void) { if (waitPath[0]) unlink(waitPath); if (shPath[0]) unlink(shPath); }
 /* the Channel runs this as root, apart from the app: once appinfo.json shows the new version (at most 5 min), the app opens again */
 static void relaunch_arm(void) {
+#ifdef SB_ANDROIDTV
+  return; /* (Android TV: its installer opens the app again; no Channel, no script) */
+#endif
   if (!U.appinfo[0]) return;
   char *sh = shPath; snprintf(sh, sizeof shPath, "%s/relaunch.sh", plat_data_dir()); snprintf(waitPath, sizeof waitPath, "%s/relaunch.wait", plat_data_dir());
   FILE *w = fopen(waitPath, "w"); if (w) fclose(w);
@@ -193,12 +197,14 @@ static void on_install(const char *payload, void *ud) {
     /* no Channel on this TV, or the app may not call it (an app installed in developer mode without the
        Channel): the hub answers at once, and the way that is left is the Channel's own install */
     int noChannel = strstr(e, "does not exist") || strstr(e, "Unknown service") || strstr(e, "Denied") || strstr(e, "not allowed") || strstr(e, "Not permitted");
-    U.state = UPD_AVAIL; snprintf(U.msg, sizeof U.msg, "%s", noChannel ? T("Install it from the Homebrew Channel") : T1("The update failed: {e}", "e", e));
+    int ask = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "permission")); /* (Android TV: the system's leave to install is still to be given; its page is open: not a failure) */
+    U.state = UPD_AVAIL; snprintf(U.msg, sizeof U.msg, "%s", ask ? e : noChannel ? T("Install it from the Homebrew Channel") : T1("The update failed: {e}", "e", e));
+    if (ask) { fprintf(stderr, "[update] waiting for the leave to install apps (the request stays: given, the download starts by itself)\n"); changed(); cJSON_Delete(j); return; }
     if (U.job) { plat_luna_cancel(U.job); U.job = 0; } relaunch_cancel();
     fprintf(stderr, "[update] install failed: %s\n", e); toast(noChannel ? T("Install it from the Homebrew Channel") : T("The update failed"), 2500, NULL);
     changed(); cJSON_Delete(j); return;
   }
-  if (cJSON_IsString(st) && st->valuestring) { char pc[16] = ""; if (cJSON_IsNumber(pg)) snprintf(pc, sizeof pc, " %d%%", (int)(pg->valuedouble + 0.5)); snprintf(U.msg, sizeof U.msg, "%s%s", T(st->valuestring), pc); }
+  if (cJSON_IsString(st) && st->valuestring) { char pc[16] = ""; if (U.state != UPD_INSTALLING) { U.state = UPD_INSTALLING; fprintf(stderr, "[update] installing %s (the leave given)\n", U.avail.ver); } /* (the download that waited for the leave to install) */ if (cJSON_IsNumber(pg)) snprintf(pc, sizeof pc, " %d%%", (int)(pg->valuedouble + 0.5)); snprintf(U.msg, sizeof U.msg, "%s%s", T(st->valuestring), pc); }
   if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "finished"))) { snprintf(U.msg, sizeof U.msg, "%s", T("Installed: the app opens again in a moment")); fprintf(stderr, "[update] installed %s\n", U.avail.ver); }
   changed(); cJSON_Delete(j);
 }

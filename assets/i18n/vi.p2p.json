@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Ít peer ({n}) · {r}","Getting the file list…":"Đang lấy danh sách tệp…","Low storage: small buffer":"Ít bộ nhớ: bộ đệm nhỏ","Low storage: streaming from memory":"Ít bộ nhớ: phát trực tiếp từ RAM","Slow source: {r} for a {v} video":"Nguồn chậm: {r} cho video {v}","Waiting for the next pieces…":"Đang chờ các phần tiếp theo…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Ít bộ nhớ: cắm USB vào"
+}

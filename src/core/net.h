@@ -11,6 +11,7 @@ typedef void (*NetCb)(int status, const unsigned char *body, size_t len, void *u
 
 int      net_init(const char *caBundlePath);  /* caBundlePath may be NULL */
 unsigned net_get(const char *url, NetCb cb, void *ud);
+unsigned net_get_first(const char *url, NetCb cb, void *ud); /* ahead of the queue (what the user waits on as they type) */
 /* a file's size from one 1-byte range request (body = the byte count as text, status 0 when unknown); the body is never read */
 unsigned net_file(const char *path, NetCb cb, void *ud);  /* a local file read (and JSON parsed) off the drawing thread: 200 or 404 */
 unsigned net_size(const char *url, NetCb cb, void *ud);
@@ -31,6 +32,7 @@ void     net_json_free(struct cJSON *j);   /* a parsed answer freed off the draw
 int      net_pending(void);
 /* synchronous fetch for worker threads of other modules (images); returns malloc'd body or NULL */
 unsigned char *net_fetch_sync(const char *url, size_t *len, int *status, int timeoutMs);
+void net_fetch_stats(long *n, long *fresh); /* the synchronous fetches so far, and how many opened a new connection */
 /* the same with one extra request header ("Authorization: Bearer ..."), NULL for none */
 unsigned char *net_fetch_sync_hdr(const char *url, const char *extraHeader, size_t *len, int *status, int timeoutMs);
 
@@ -54,4 +56,6 @@ typedef struct NetRange NetRange;
 NetRange *net_range_new(void);
 int       net_range_get(NetRange *r, const char *url, long long start, long len, unsigned char **out, long *got, long long *total, int *httpStatus, int timeoutMs);
 void      net_range_free(NetRange *r);
+int       net_led_known(const char *url);
+int       net_range_multi(NetRange *h, const char *url, const long long *st, const long *ln, int n, unsigned char **parts, long *plen, int *httpStatus, int timeoutMs); /* several ranges in one request (multipart/byteranges); NR_NORANGE: not answered that way */ /* where this link leads is known (a connection already followed it) */
 #endif

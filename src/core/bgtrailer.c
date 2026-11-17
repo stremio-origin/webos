@@ -10,7 +10,8 @@
 
 enum { S_OFF, S_META, S_FIND, S_LOAD, S_SHOW, S_GONE };
 static BgtHooks H; static int st, idleOn; static unsigned gen, tok;
-static double lastCheck, hiddenAt, memAt; static char tid[64], ttype[16];
+static double lastCheck, hiddenAt, memAt, loadAt; static char tid[SB_ID], ttype[16];
+static char down[2][2048]; static int nDown, iDown; /* the lower MP4s still to fall back to (720p, then 480p) */
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
 void bgt_init(const BgtHooks *h) { if (h) H = *h; }
@@ -34,13 +35,21 @@ void bgt_release_now(void) {
 void bgt_key(void) { if (idleOn || st != S_OFF) { if (st == S_LOAD || st == S_SHOW) fprintf(stderr, "[btr] stop: input\n"); idleOn = 0; stop_soft(); } }
 void bgt_playing(void) { if (st == S_LOAD) st = S_SHOW; }
 void bgt_ended(void) { if (st == S_LOAD || st == S_SHOW) { fprintf(stderr, "[btr] stop: the video ended or failed\n"); stop_soft(); } }
+/* the sharper one would not play (or never started): the next lower one, while nothing shows yet; once it shows, a
+   failure ends it as before (never a second start under the eyes) */
+static int step_down(const char *why) {
+  if (st != S_LOAD || iDown >= nDown || !H.load) return 0;
+  fprintf(stderr, "[btr] %s: the lower one (%d of %d)\n", why, iDown + 1, nDown); loadAt = now_s();
+  H.load(down[iDown++], "video/mp4", tid, H.ud); return 1; }
+void bgt_failed(void) { if (!step_down("failed")) bgt_ended(); }
 
 static void on_found(const Trailer *t, const char *err, void *ud) {
   if ((unsigned)(uintptr_t)ud != gen || st != S_FIND) return;
   tok = 0;
   if (!t || !idleOn) { st = S_OFF; return; }
   /* the setting decides, not the free memory (the TV makes room for its own player); the free memory is only logged */
-  st = S_LOAD; memAt = now_s() + 10; fprintf(stderr, "[btr] load %s (%s), %d MB free\n", tid, t->mime, plat_mem_free_mb());
+  nDown = 0; iDown = 0; for (int i = 0; i < 2; i++) if (t->down[i][0]) snprintf(down[nDown++], sizeof down[0], "%s", t->down[i]);
+  st = S_LOAD; memAt = now_s() + 10; loadAt = now_s(); fprintf(stderr, "[btr] load %s (%s, %d lower to fall back to), %d MB free\n", tid, t->mime, nDown, plat_mem_free_mb());
   if (H.load) H.load(t->url, t->mime, tid, H.ud);
 }
 static void on_meta(cJSON *m, void *ud) {
@@ -62,6 +71,7 @@ void bgt_tick(const BgtView *v) {
   if (st == S_GONE && t >= hiddenAt && (v->idle >= 0.7f || t - hiddenAt >= 4)) { st = S_OFF; if (H.unload) H.unload(H.ud); }
   if (t - lastCheck < 1) return;
   lastCheck = t;
+  if (st == S_LOAD && t - loadAt > 12) step_down("not started after 12 s"); /* (a sharp one the link can't bring in time) */
   int idle = v->idle > 5 && v->browsing && v->focused && !v->blocked;
   if (idle && !idleOn) { idleOn = 1; try_start(v); }
   else if (!idle && idleOn) { if (st == S_LOAD || st == S_SHOW) fprintf(stderr, "[btr] stop: idle %.1f s, board %d, focused %d, blocked %d\n", v->idle, v->browsing, v->focused != NULL, v->blocked); idleOn = 0; stop_soft(); }

@@ -8,12 +8,12 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define MAXN 9
+#define MAXN 16 /* (a token carries the index in 4 bits) */
 #define MEMN 120
 typedef struct { char key[128], id[16], img[600]; } FaceMem;
 static FaceMem mem[MEMN]; static int memN;
 typedef struct { char name[128], id[16], img[600]; int state; /* 0 asking, 1 err, 2 found (maybe no photo), 3 settled */ } P;
-static struct { P p[MAXN]; int n; unsigned gen; FaceCb cb; void *ud; int round, pend; double retryAt; } F;
+static struct { P p[MAXN]; int n; unsigned gen; FaceCb cb; void *ud; int round, pend; double retryAt; char title[128]; } F; /* title: folded, to find who is known for it */
 
 /* ---- names: lower case, accents folded ("Bagiński" = "baginski") ---- */
 static int utf8_next(const unsigned char **s) {
@@ -56,7 +56,7 @@ static FaceMem *mem_find(const char *key) { for (int i = 0; i < MEMN && i < memN
 static void settle(int i) {
   P *p = &F.p[i]; if (p->state == 3) return; p->state = 3;
   char k[128]; norm(p->name, k, sizeof k, 1); if (!mem_find(k)) { FaceMem *m = &mem[memN++ % MEMN]; snprintf(m->key, sizeof m->key, "%s", k); snprintf(m->id, sizeof m->id, "%s", p->id); snprintf(m->img, sizeof m->img, "%s", p->img); }
-  { char ck[160], v[700]; snprintf(ck, sizeof ck, "face:%s", k); int n = snprintf(v, sizeof v, "%s\n%s", p->id, p->img); cache_write(ck, (const unsigned char *)v, (size_t)n); } /* kept on disk: the next visit has every face at once */
+  { char ck[160], v[700]; snprintf(ck, sizeof ck, "face2:%s", k); int n = snprintf(v, sizeof v, "%s\n%s", p->id, p->img); cache_write(ck, (const unsigned char *)v, (size_t)n); } /* kept on disk: the next visit has every face at once */
   if (F.cb) F.cb(i, p->id, p->img, F.ud); }
 #define TOK(i) ((void *)(uintptr_t)(((F.gen & 0xffffff) << 4) | (unsigned)(i)))
 #define OK_TOK(ud) ((((unsigned)(uintptr_t)(ud)) >> 4) == (F.gen & 0xffffff))
@@ -104,13 +104,20 @@ static void stage_commons(void) {
   net_get(u, on_commons, TOK(0));
 }
 /* ---- 1: IMDb's name suggestions ---- */
+static int known_for(const cJSON *e) { if (!F.title[0]) return 0; char s[300]; norm(js_str(e, "s", ""), s, sizeof s, 1); return strstr(s, F.title) != NULL; } /* "Actor, <title> (year)" */
 static void on_imdb(int st, const unsigned char *body, size_t len, void *ud) {
   (void)len; if (!OK_TOK(ud)) return; int i = IDX(ud); P *p = &F.p[i];
   cJSON *j = st == 200 ? net_json(body) : NULL; const cJSON *d = js_arr(j, "d");
   if (!d) p->state = 1;
   else { char fn[128]; norm(p->name, fn, sizeof fn, 1); const cJSON *top = NULL, *exact = NULL, *e;
-    cJSON_ArrayForEach(e, d) { if (strncmp(js_str(e, "id", ""), "nm", 2)) continue; if (!top) top = e; char n2[128]; norm(js_str(e, "l", ""), n2, sizeof n2, 1); if (!exact && !strcmp(n2, fn)) exact = e; }
-    int same = 0; if (top) { char tl[128]; norm(js_str(top, "l", ""), tl, sizeof tl, 1); same = !strcmp(last_word(tl), last_word(fn)) && tl[0] == fn[0]; }
+    /* of the people with exactly that name, the one known for this title (IMDb says what each is known for), else the
+       most popular; someone with only a like name (same surname and initial) only when known for this title: a
+       popular namesake's face and films came up for the actor */
+    const cJSON *exactHere = NULL;
+    cJSON_ArrayForEach(e, d) { if (strncmp(js_str(e, "id", ""), "nm", 2)) continue; if (!top) top = e; char n2[128]; norm(js_str(e, "l", ""), n2, sizeof n2, 1);
+      if (!strcmp(n2, fn)) { if (!exact) exact = e; if (!exactHere && known_for(e)) exactHere = e; } }
+    if (exactHere) exact = exactHere;
+    int same = 0; if (top) { char tl[128]; norm(js_str(top, "l", ""), tl, sizeof tl, 1); same = !strcmp(last_word(tl), last_word(fn)) && tl[0] == fn[0] && known_for(top); }
     const cJSON *pick = exact ? exact : same ? top : NULL;
     #define HASIMG(x) (*js_str(js_obj(x, "i"), "imageUrl", ""))
     if (pick && !HASIMG(pick) && same && top != pick && HASIMG(top)) pick = top; /* an exact entry without a photo gives way to the plainly same popular one */
@@ -139,12 +146,13 @@ void faces_tick(void) {
   round_start();
 }
 void faces_cancel(void) { F.gen++; F.cb = NULL; F.n = 0; F.retryAt = 0; }
-void faces_find(const char *const *names, int n, FaceCb cb, void *ud) {
+void faces_find(const char *const *names, int n, const char *title, FaceCb cb, void *ud) {
+  norm(title ? title : "", F.title, sizeof F.title, 1);
   F.gen++; F.cb = cb; F.ud = ud; F.round = 0; F.retryAt = 0; F.n = n > MAXN ? MAXN : n;
   for (int i = 0; i < F.n; i++) { P *p = &F.p[i]; memset(p, 0, sizeof *p); snprintf(p->name, sizeof p->name, "%s", names[i]); }
   for (int i = 0; i < F.n; i++) { char k[128]; norm(F.p[i].name, k, sizeof k, 1); FaceMem *m = mem_find(k);
     if (m) { snprintf(F.p[i].id, sizeof F.p[i].id, "%s", m->id); snprintf(F.p[i].img, sizeof F.p[i].img, "%s", m->img); F.p[i].state = 3; if (cb) cb(i, m->id, m->img, ud); continue; }
-    char ck[160]; snprintf(ck, sizeof ck, "face:%s", k); size_t len = 0; char *t = (char *)cache_read(ck, 30 * 86400, &len); /* a few hundred bytes each */
+    char ck[160]; snprintf(ck, sizeof ck, "face2:%s", k); size_t len = 0; char *t = (char *)cache_read(ck, 30 * 86400, &len); /* a few hundred bytes each */
     if (t) { char *nl = strchr(t, '\n'); if (nl) { *nl = 0; snprintf(F.p[i].id, sizeof F.p[i].id, "%s", t); snprintf(F.p[i].img, sizeof F.p[i].img, "%s", nl + 1); F.p[i].state = 3;
         FaceMem *mm = &mem[memN++ % MEMN]; snprintf(mm->key, sizeof mm->key, "%s", k); snprintf(mm->id, sizeof mm->id, "%s", F.p[i].id); snprintf(mm->img, sizeof mm->img, "%s", F.p[i].img); if (cb) cb(i, F.p[i].id, F.p[i].img, ud); } free(t); } }
   round_start();

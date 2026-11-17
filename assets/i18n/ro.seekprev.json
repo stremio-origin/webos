@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Previzualizări pe bara de derulare",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Imagini din film deasupra barei în timp ce derulezi. Oprit: nu se creează",
+ "Previews for torrents": "Previzualizări pentru torrente",
+ "Slower than debrid, up to 500 MB extra per stream.": "Mai lent decât debrid, până la 500 MB în plus pe stream.",
+ "Previews {n}%": "Previzualizări {n}%",
+ "Previews ready": "Previzualizări gata",
+ "Uses more data, on mobile data too.": "Consumă mai multe date, și pe date mobile.",
+ "Getting the seek bar’s previews ready… {n}%": "Pregătim previzualizările barei… {n}%",
+ "Play now": "Redă acum",
+ "Load previews before playing": "Încarcă previzualizările înainte de redare",
+ "about {n} s left": "au mai rămas circa {n} s",
+ "about {n} min left": "au mai rămas circa {n} min",
+ "The film starts once this much of it has its previews; OK starts it at once": "Filmul pornește când această parte are previzualizări; OK îl pornește imediat"
+}

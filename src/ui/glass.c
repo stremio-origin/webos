@@ -91,13 +91,24 @@ void lglass_shell(float x, float y, float w, float h, float r, uint32_t body, fl
   gfx_ring(x, y, w, h, r, 1, WHITE_A((int)(fminf(36 * k, 90))));
   lglass_rim(x, y, w, h, r, 0.10f * k, 0.55f * fminf(k, 1.4f), 1); lglass_rim(x, y, w, h, r, 0.05f * k, 0.30f * fminf(k, 1.4f), 0);
 }
-void lglass_accent(float x, float y, float w, float h, float r, float a) { /* the lit one: accent glass, a glow from the top, a fine bright edge */
+void lglass_accent(float x, float y, float w, float h, float r, float a) { /* the lit one: accent glass, its sheen crossing it from corner to corner, a thin glassy edge in a lighter accent */
   if (a <= 0.004f) return;
-  gfx_shadow(x, y + h * 0.18f, w, h, r, fminf(h * 0.6f, 40), col_alpha(ACC | 0xff000000u, 0.35f * a));
-  gfx_rrect_v(x, y, w, h, r, col_alpha(ACC2 | 0xff000000u, 0.92f * a), col_alpha(ACC | 0xff000000u, 0.92f * a));
-  gfx_rrect_v(x, y, w, h, r, WHITE_A((int)(48 * a)), WHITE_A(0));
-  gfx_clip_push(x, y, w, h); gfx_alpha_tex(gfx_radial_tex(), x + w * 0.15f, y - h * 0.6f, w * 0.7f, h, WHITE_A((int)(50 * a))); gfx_clip_pop();
-  gfx_ring(x, y, w, h, r, 1.2f, WHITE_A((int)(70 * a))); /* a fine bright edge: no glint on the lit one, it moves */
+  gfx_shadow(x, y + h * 0.18f, w, h, r, fminf(h * 0.6f, 40), BLACK_A((int)(70 * fminf(a, 1)))); /* (a plain shadow: no accent glow) */
+  gfx_rrect_v(x, y, w, h, r, col_alpha(ACC2 | 0xff000000u, 0.94f * a), col_alpha(ACC | 0xff000000u, 0.94f * a));
+  gfx_rrect_h(x, y, w, h, r, WHITE_A((int)(40 * a)), WHITE_A(0)); gfx_rrect_v(x, y, w, h, r, WHITE_A((int)(34 * a)), WHITE_A(0)); /* the sheen: brightest at the top left, gone by the bottom right */
+  gfx_rrect_v(x, y + h * 0.5f, w, h * 0.5f, r, BLACK_A(0), BLACK_A((int)(26 * a))); /* (and the lower edge a touch deeper) */
+  gfx_ring(x, y, w, h, r, 1.5f, col_alpha(col_mix(ACC2 | 0xff000000u, 0xffffffffu, 0.55f), 0.85f * a)); /* the thin glassy edge, in the accent's own light */
+  gfx_ring(x + 1.5f, y + 1.5f, w - 3, h - 3, r > 1.5f ? r - 1.5f : 0, 1, WHITE_A((int)(30 * a)));
+}
+/* a selection in glass of any colour (body col): its sheen crossing it from the top-left corner to the bottom-right,
+   the lower edge a touch deeper, a thin glassy outline in a lighter shade of the colour and a faint inner line */
+void lglass_tint(float x, float y, float w, float h, float r, uint32_t col, float a) {
+  if (a <= 0.004f) return; uint32_t c = col | 0xff000000u; float ca = ((col >> 24) & 255) / 255.0f * a;
+  gfx_rrect(x, y, w, h, r, col_alpha(c, ca));
+  gfx_rrect_h(x, y, w, h, r, WHITE_A((int)(40 * a)), WHITE_A(0)); gfx_rrect_v(x, y, w, h, r, WHITE_A((int)(34 * a)), WHITE_A(0));
+  gfx_rrect_v(x, y + h * 0.5f, w, h * 0.5f, r, BLACK_A(0), BLACK_A((int)(26 * ca)));
+  gfx_ring(x, y, w, h, r, 1.5f, col_alpha(col_mix(c, 0xffffffffu, 0.55f), 0.85f * a));
+  gfx_ring(x + 1.5f, y + 1.5f, w - 3, h - 3, r > 1.5f ? r - 1.5f : 0, 1, WHITE_A((int)(30 * a)));
 }
 /* a moving pill's stretch from its speed (units a second): 0..1, smoothed in s */
 float lglass_stretch(float *s, float *last, float x, float dt) { float v = dt > 0 ? fabsf(x - *last) / dt : 0; *last = x; *s += (fminf(v / 2600.0f, 1) - *s) * fminf(1, dt * 14); return *s; }

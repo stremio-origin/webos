@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Forhåndsvisninger på tidslinjen",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Billeder fra filmen over linjen, mens du spoler. Fra: der laves ingen",
+ "Previews for torrents": "Forhåndsvisninger for torrents",
+ "Slower than debrid, up to 500 MB extra per stream.": "Langsommere end debrid, op til 500 MB ekstra pr. stream.",
+ "Previews {n}%": "Forhåndsvisninger {n} %",
+ "Previews ready": "Forhåndsvisninger klar",
+ "Uses more data, on mobile data too.": "Bruger mere data, også på mobildata.",
+ "Getting the seek bar’s previews ready… {n}%": "Gør forhåndsvisningerne på tidslinjen klar… {n} %",
+ "Play now": "Afspil nu",
+ "Load previews before playing": "Indlæs forhåndsvisninger før afspilning",
+ "about {n} s left": "ca. {n} s tilbage",
+ "about {n} min left": "ca. {n} min tilbage",
+ "The film starts once this much of it has its previews; OK starts it at once": "Filmen starter, når så meget af den har forhåndsvisninger; OK starter den med det samme"
+}

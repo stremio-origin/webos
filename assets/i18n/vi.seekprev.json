@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Xem trước trên thanh tua",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Hình ảnh của phim phía trên thanh khi bạn tua. Tắt: không tạo hình nào",
+ "Previews for torrents": "Xem trước cho torrent",
+ "Slower than debrid, up to 500 MB extra per stream.": "Chậm hơn debrid, tối đa thêm 500 MB mỗi luồng.",
+ "Previews {n}%": "Xem trước {n}%",
+ "Previews ready": "Xem trước đã sẵn sàng",
+ "Uses more data, on mobile data too.": "Tốn nhiều dữ liệu hơn, cả dữ liệu di động.",
+ "Getting the seek bar’s previews ready… {n}%": "Đang chuẩn bị ảnh xem trước trên thanh tua… {n}%",
+ "Play now": "Phát ngay",
+ "Load previews before playing": "Tải ảnh xem trước trước khi phát",
+ "about {n} s left": "còn khoảng {n} giây",
+ "about {n} min left": "còn khoảng {n} phút",
+ "The film starts once this much of it has its previews; OK starts it at once": "Phim bắt đầu khi phần này có ảnh xem trước; OK phát ngay"
+}

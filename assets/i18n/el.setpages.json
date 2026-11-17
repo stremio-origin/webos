@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Μπάρα αναζήτησης",
+ "Seek step, chapters, previews": "Βήμα, κεφάλαια, προεπισκοπήσεις",
+ "Best stream, next episode, picture size": "Καλύτερη ροή, επόμενο επεισόδιο, μέγεθος εικόνας",
+ "Accent colour, screensaver, clock, trailers": "Χρώμα έμφασης, προφύλαξη οθόνης, ρολόι, τρέιλερ",
+ "Track what you watch": "Κατέγραψε τι βλέπεις",
+ "Member since": "Μέλος από",
+ "Stremio account": "Λογαριασμός Stremio",
+ "{n} titles": "{n} τίτλοι",
+ "{n} installed": "{n} εγκατεστημένα",
+ "Connected": "Συνδεδεμένο",
+ "Not connected": "Μη συνδεδεμένο",
+ "Default": "Προεπιλογή",
+ "Font": "Γραμματοσειρά",
+ "Arabic font": "Αραβική γραμματοσειρά",
+ "For subtitles in Arabic": "Για υπότιτλους στα αραβικά",
+ "Language, size, font, colour": "Γλώσσα, μέγεθος, γραμματοσειρά, χρώμα",
+ "Subtitle font": "Γραμματοσειρά υποτίτλων",
+ "Arabic subtitle font": "Αραβική γραμματοσειρά υποτίτλων",
+ "Styled subtitles keep their own fonts, colours and background.": "Οι μορφοποιημένοι υπότιτλοι κρατούν τις δικές τους γραμματοσειρές, χρώματα και φόντο.",
+ "Stats for nerds on": "Στατιστικά για προχωρημένους: ενεργά",
+ "Stats for nerds off": "Στατιστικά για προχωρημένους: ανενεργά"
+}

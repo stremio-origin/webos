@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "ui/text.h"
+#include "ui/strip.h"
 #include <SDL2/SDL.h>
 #include "ui/gfx.h"
 #include "ui/atlas.h"
@@ -31,11 +32,17 @@
    One FT_Face per (family, weight): the variable fonts are set to that weight once, and glyph
    rendering never changes the coordinates again (changing them per glyph is what makes variable
    fonts slow). Sizes are set per line with FT_Set_Pixel_Sizes. */
-enum { FAM_LATIN = 0, FAM_ARABIC = 1, FAM_FB = 2 };   /* fam >= FAM_FB: the fallback file fam - FAM_FB */
+enum { FAM_LATIN = 0, FAM_ARABIC = 1, FAM_SUB = 2, FAM_FB = FAM_SUB + TEXT_SUBFONTS }; /* fam >= FAM_FB: the fallback file fam - FAM_FB; FAM_SUB + i: subtitle font i (0-9 Latin, 10-19 Arabic) */
+/* the subtitle fonts (assets/fonts/subs, one weight each), read on first use; a weight carries the choice: bits 12-16
+   the Latin one (1-10, 0 none), bits 17-21 the Arabic one (text_sub_weight) */
+static const char *const SUBFILE[TEXT_SUBFONTS] = { "roboto", "opensans", "notosans", "lato", "montserrat", "sourcesans3", "firasans", "atkinson", "merriweather", "robotoslab",
+  "notonaskh", "notokufi", "cairo", "tajawal", "almarai", "amiri", "plexarabic", "changa", "readexpro", "elmessiri" };
+static char assetBase[1024]; static pthread_mutex_t subMu = PTHREAD_MUTEX_INITIALIZER;
+int text_sub_weight(int weight, int latin, int arabic) { if (latin < 0 || latin > 10) latin = 0; if (arabic < 0 || arabic > 10) arabic = 0; return (weight & 0xfff) | latin << 12 | arabic << 17; }
 enum { FID_NONE = -1, FID_TAG = -2 };                  /* a run's font: no font has it (dropped); a flag drawn as a tag */
 /* bitmap: 1 = colour PNG glyphs only (drawn as a mask), -1 = FreeType could not open it; ftpx: the FT size of a fallback face */
 typedef struct { int fam, weight; FT_Face face; hb_font_t *hb; int px, ftpx, bitmap; } Font;
-#define MAX_FONTS 16
+#define MAX_FONTS 40
 #define MAX_FB 64
 #define CPC_N 1024
 /* one font set per thread: the drawing thread's, and the text thread's (FreeType faces are not shared across threads).
@@ -45,7 +52,7 @@ static FontSet mainSet; static _Thread_local FontSet *FS; static _Thread_local i
 #define fonts (FS->f)
 #define nfonts (FS->n)
 #define ft (FS->lib)
-static unsigned char *fontData[2]; static long fontLen[2];
+static unsigned char *fontData[FAM_FB]; static long fontLen[FAM_FB];
 static float sscale = 1.0f;  /* surface pixels per layout unit: glyphs are rasterised at that resolution */
 static int uiRtl;
 static int budgetLines;      /* lines rasterised this frame */
@@ -54,8 +61,12 @@ static int budgetLines;      /* lines rasterised this frame */
 static double statLineMs, statWidthMs; static int statRaster, statShape, statLookups;
 void text_stats(double *lineMs, double *widthMs, int *raster, int *shape, int *lookups) { *lineMs = statLineMs; *widthMs = statWidthMs; *raster = statRaster; *shape = statShape; *lookups = statLookups; statLineMs = statWidthMs = 0; statRaster = statShape = statLookups = 0; }
 
+static long read_file(const char *path, unsigned char **out);
 static Font *font_get(int fam, int weight) {
   int i; for (i = 0; i < nfonts; i++) if (fonts[i].fam == fam && fonts[i].weight == weight) return &fonts[i];
+  if (fam >= FAM_SUB && fam < FAM_FB && !fontData[fam] && !fontLen[fam]) { pthread_mutex_lock(&subMu); /* (a subtitle font: read once, whichever thread asks first) */
+    if (!fontData[fam] && !fontLen[fam]) { char p[1200]; unsigned char *d = NULL; snprintf(p, sizeof p, "%s/fonts/subs/%s.ttf", assetBase, SUBFILE[fam - FAM_SUB]); long n = read_file(p, &d); if (n > 0) { fontLen[fam] = n; fontData[fam] = d; } else fontLen[fam] = -1; fprintf(stderr, "[text] subtitle font %s: %s\n", SUBFILE[fam - FAM_SUB], n > 0 ? "ready" : "missing"); }
+    pthread_mutex_unlock(&subMu); }
   if (nfonts >= MAX_FONTS || !fontData[fam]) return NULL;
   Font *f = &fonts[nfonts];
   if (FT_New_Memory_Face(ft, fontData[fam], fontLen[fam], 0, &f->face)) return NULL;
@@ -201,6 +212,7 @@ int text_init(const char *assetDir, float surfaceScale) {
   FS = &mainSet; shapeRtl = uiRtl;
   if (FT_Init_FreeType(&ft)) return 0;
   sscale = surfaceScale;
+  snprintf(assetBase, sizeof assetBase, "%s", assetDir);
   snprintf(p, sizeof p, "%s/fonts/InterVariable.ttf", assetDir); fontLen[0] = read_file(p, &fontData[0]);
   snprintf(p, sizeof p, "%s/fonts/NotoSansArabic.ttf", assetDir); fontLen[1] = read_file(p, &fontData[1]);
   if (!fontLen[0]) { fprintf(stderr, "[text] no font at %s\n", p); return 0; }
@@ -335,7 +347,7 @@ static float shape_run(Shaped *out, Font *f, const uint32_t *cps, int a, int b, 
   hb_buffer_add_codepoints(buf, cps, b, a, b - a);
   hb_buffer_set_direction(buf, rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
   if (f->fam >= FAM_FB) { hb_buffer_set_script(buf, sc ? sc : HB_SCRIPT_COMMON); hb_buffer_set_flags(buf, HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES); }
-  else hb_buffer_set_script(buf, f->fam == FAM_ARABIC ? HB_SCRIPT_ARABIC : HB_SCRIPT_LATIN);
+  else hb_buffer_set_script(buf, f->fam == FAM_ARABIC || f->fam >= FAM_SUB + 10 ? HB_SCRIPT_ARABIC : HB_SCRIPT_LATIN);
   hb_buffer_set_language(buf, hb_language_get_default());
   hb_feature_t feats[2] = { { HB_TAG('c','v','1','1'), 1, 0, (unsigned)-1 }, { HB_TAG('s','s','0','1'), 1, 0, (unsigned)-1 } }; /* the web app's Inter features */
   hb_shape(f->hb, buf, f->fam == FAM_LATIN ? feats : NULL, f->fam == FAM_LATIN ? 2 : 0);
@@ -367,6 +379,7 @@ static float shape_tag(Shaped *out, const uint32_t *cps, int a, int b, int px, f
 static int strong_script(hb_script_t sc) { return sc && sc != HB_SCRIPT_COMMON && sc != HB_SCRIPT_INHERITED && sc != HB_SCRIPT_UNKNOWN; }
 /* the whole line: cps are logical order; returns total advance; fills `out` in visual order */
 static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int weight, float tracking) {
+  int rw = weight & 0xfff, sl = (weight >> 12) & 31, sa = (weight >> 17) & 31; /* (the weight itself; the subtitle fonts it carries) */
   if (n <= 0) return 0;
   FriBidiCharType *types = malloc(n * sizeof *types); FriBidiBracketType *brk = malloc(n * sizeof *brk);
   FriBidiLevel *levels = malloc(n * sizeof *levels);
@@ -375,6 +388,7 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
   /* Arabic UI: a line with no right-to-left letter at all (an addon's stream name, a Latin title) is laid out left to
      right, as the page does with unicode-bidi: plaintext; otherwise its emoji and numbers jump to the far end */
   if (base == FRIBIDI_PAR_RTL) { int i = 0; while (i < n && !FRIBIDI_IS_RTL(types[i])) i++; if (i == n) base = FRIBIDI_PAR_LTR; }
+  else { for (int i = 0; i < n; i++) if (FRIBIDI_IS_STRONG(types[i])) { if (FRIBIDI_IS_RTL(types[i])) base = FRIBIDI_PAR_RTL; break; } } /* (any other UI: a line whose first letter is Arabic or Hebrew, an Arabic subtitle say, is laid out right to left: its full stop and numbers where they belong) */
   fribidi_get_bracket_types((const FriBidiChar *)cps, n, types, brk);
   if (!fribidi_get_par_embedding_levels_ex(types, brk, n, &base, levels)) { for (int i = 0; i < n; i++) levels[i] = 0; }
   /* runs: same level, same font, and (for fallback fonts) one script; a Latin line is one cluster per letter, all Inter */
@@ -405,8 +419,12 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
   for (int k = 0; k < nr; k++) {
     Run *r = &runs[map[k]];
     if (r->fid == FID_TAG) { pen += shape_tag(out, cps, r->a, r->b, px, tracking, pen); continue; }
-    Font *f = r->fid >= FAM_FB ? fb_font(r->fid - FAM_FB) : font_get(r->fid, weight); if (!f) f = font_get(FAM_LATIN, weight); if (!f) continue;
-    pen += shape_run(out, f, cps, r->a, r->b, r->lv & 1, px, tracking, pen, r->sc, weight >= 600 && f->fam >= FAM_FB);
+    Font *f = r->fid >= FAM_FB ? fb_font(r->fid - FAM_FB) : font_get(r->fid, rw); if (!f) f = font_get(FAM_LATIN, rw); if (!f) continue;
+    if ((r->fid == FAM_LATIN && sl) || (r->fid == FAM_ARABIC && sa)) { /* the viewer's subtitle font, where it has every letter of the run (else the app's own) */
+      Font *s2 = font_get(FAM_SUB + (r->fid == FAM_LATIN ? sl - 1 : 10 + sa - 1), rw); int all = s2 != NULL;
+      for (int q = r->a; q < r->b && all; q++) { uint32_t c = cps[q]; if (c > 0x20 && c != 0xa0 && !is_ign(c)) all = font_has(s2, c); }
+      if (all) f = s2; }
+    pen += shape_run(out, f, cps, r->a, r->b, r->lv & 1, px, tracking, pen, r->sc, rw >= 600 && f->fam >= FAM_FB);
   }
   free(types); free(brk); free(levels); free(runs); free(rl); free(map);
   out->width = pen;
@@ -502,8 +520,14 @@ static void raster_box(unsigned char *bmp, int w, int hgt, const Box *b, float x
       float cov = 0.5f - (fabsf(d + stroke / 2) - stroke / 2); if (cov <= 0) continue; if (cov > 1) cov = 1;
       unsigned v = (unsigned)(cov * 225) + bmp[y * w + x]; bmp[y * w + x] = v > 255 ? 255 : (unsigned char)v; } }
 }
-static unsigned char *raster_bitmap(Shaped *s, int px, int *ow, int *oh, int *oasc) { /* any thread: glyphs into an alpha bitmap */
-  int asc = (int)(px * 0.97f + 0.5f), hgt = (int)(px * 1.21f + 0.999f);
+/* The line box is 0.97 px above the baseline and 0.24 px below it. Some glyphs reach past it: the two dots of a final
+   Arabic yeh are a mark the font sets well below the baseline (they were cut off, so ي read as ى), a stacked
+   Vietnamese accent or an Arabic mark over a tall letter can rise above it. So the glyphs are drawn with room on
+   both sides, and the bitmap keeps only the rows past the box that have ink: *otop says how many it gained above
+   (the line is drawn that much higher), a line that stays inside its box is exactly as before. */
+static unsigned char *raster_bitmap(Shaped *s, int px, int *ow, int *oh, int *oasc, int *otop) { /* any thread: glyphs into an alpha bitmap */
+  int pad = (int)(px * 0.5f + 2), boxAsc = (int)(px * 0.97f + 0.5f), boxH = (int)(px * 1.21f + 0.999f);
+  int asc = boxAsc + pad, hgt = boxH + 2 * pad;
   int w = (int)ceilf(s->width) + 4; if (w < 1) w = 1; if (w > 4096) w = 4096;
   unsigned char *bmp = calloc((size_t)w * hgt, 1);
   for (int i = 0; i < s->nbox; i++) raster_box(bmp, w, hgt, &s->box[i], s->box[i].x + 2, asc + s->box[i].y, px / 18.0f < 1 ? 1 : px / 18.0f);
@@ -519,14 +543,27 @@ static unsigned char *raster_bitmap(Shaped *s, int px, int *ow, int *oh, int *oa
       for (unsigned c = 0; c < b->width; c++) { int x = gx + (int)c; if (x < 0 || x >= w) continue;
         unsigned v = b->buffer[r * b->pitch + c] + bmp[y * w + x]; bmp[y * w + x] = v > 255 ? 255 : (unsigned char)v; } }
   }
-  *ow = w; *oh = hgt; *oasc = asc; return bmp;
+  int y0 = pad, y1 = pad + boxH; /* the box, widened to the ink past it */
+  for (int y = 0; y < pad && y0 == pad; y++) for (int x = 0; x < w; x++) if (bmp[y * w + x]) { y0 = y; break; }
+  for (int y = hgt - 1; y >= pad + boxH && y1 == pad + boxH; y--) for (int x = 0; x < w; x++) if (bmp[y * w + x]) { y1 = y + 1; break; }
+  if (y0 > 0) memmove(bmp, bmp + (size_t)y0 * w, (size_t)(y1 - y0) * w);
+  *ow = w; *oh = y1 - y0; *oasc = asc - y0; *otop = pad - y0; return bmp;
 }
-static void upload_line(unsigned char *bmp, int w, int hgt, int asc, SbLine *out, AtlasSlot *slot) { /* the drawing thread: into the shared pages */
+/* development / test: a line shaped and drawn here, without the cache: how many rows of ink it has above and below the
+   line box, and whether any reaches the very edge of the room it was drawn in (it would be cut) */
+int text_ink_check(const char *utf8, int px, int weight, int *above, int *below) {
+  int n; uint32_t *cps = to_cps(utf8, &n, 1); Shaped s = { 0 }; shape_line(&s, cps, n, px, weight, 0);
+  int w, h, asc, top; unsigned char *bmp = raster_bitmap(&s, px, &w, &h, &asc, &top);
+  int boxAsc = (int)(px * 0.97f + 0.5f), boxH = (int)(px * 1.21f + 0.999f), pad = (int)(px * 0.5f + 2);
+  *above = top; *below = h - top - boxH; int edge = (top >= pad) || (*below >= pad); (void)boxAsc;
+  free(bmp); shaped_free(&s); free(cps); return edge;
+}
+static void upload_line(unsigned char *bmp, int w, int hgt, int asc, int top, SbLine *out, AtlasSlot *slot) { /* the drawing thread: into the shared pages */
   if (atlas_put(bmp, w, hgt, -1, 1, slot)) { out->tex = atlas_tex(slot->page); atlas_uv(slot, &out->u0, &out->v0, &out->u1, &out->v1); }
   else { slot->page = -1; out->tex = gfx_tex_create(bmp, w, hgt, 1, 1); out->u0 = out->v0 = 0; out->u1 = out->v1 = 1; }
-  out->w = w; out->h = hgt; out->baseline = asc;
+  out->w = w; out->h = hgt; out->baseline = asc; out->top = (float)top;
 }
-static int rasterise(Shaped *s, int px, SbLine *out, AtlasSlot *slot) { int w, h, asc; unsigned char *bmp = raster_bitmap(s, px, &w, &h, &asc); upload_line(bmp, w, h, asc, out, slot); free(bmp); return 1; }
+static int rasterise(Shaped *s, int px, SbLine *out, AtlasSlot *slot) { int w, h, asc, top; unsigned char *bmp = raster_bitmap(s, px, &w, &h, &asc, &top); upload_line(bmp, w, h, asc, top, out, slot); free(bmp); return 1; }
 
 /* cut with an ellipsis so the shaped width fits maxW (surface px); returns the new cps count */
 static int fit_ellipsis(uint32_t *cps, int n, int px, int weight, float tracking, float maxW, Shaped *s) {
@@ -551,7 +588,7 @@ static int fit_ellipsis(uint32_t *cps, int n, int px, int weight, float tracking
 #define TEXT_SYNC_MS 2.5
 #define TQ 256
 typedef struct { char *key; unsigned hash; char *utf8; int px, weight, rtl; float tracking, maxW; } TReq;
-typedef struct { char *key; unsigned hash; unsigned char *bmp; int w, h, asc, cut; float width; } TRes;
+typedef struct { char *key; unsigned hash; unsigned char *bmp; int w, h, asc, top, cut; float width; } TRes;
 static TReq tq[TQ]; static int tqh, tqn; static TRes tr[TQ]; static int trn;
 static pthread_mutex_t tmu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t tcv = PTHREAD_COND_INITIALIZER;
 static struct { char *key; unsigned hash; } pend[TQ]; static int npend;   /* asked of the thread, not back yet (drawing thread only) */
@@ -566,7 +603,7 @@ static void *text_worker(void *a) { plat_thread_background(4); (void)a;
     int n; uint32_t *cps = to_cps(q.utf8, &n, 1); int spx = (int)(q.px * sscale + 0.5f); float str = q.tracking * sscale;
     Shaped sh = { 0 }; shape_line(&sh, cps, n, spx, q.weight, str); int cut = 0;
     if (q.maxW > 0 && sh.width > q.maxW * sscale) { fit_ellipsis(cps, n, spx, q.weight, str, q.maxW * sscale, &sh); cut = 1; }
-    TRes r; memset(&r, 0, sizeof r); r.key = q.key; r.hash = q.hash; r.cut = cut; r.width = sh.width; r.bmp = raster_bitmap(&sh, spx, &r.w, &r.h, &r.asc);
+    TRes r; memset(&r, 0, sizeof r); r.key = q.key; r.hash = q.hash; r.cut = cut; r.width = sh.width; r.bmp = raster_bitmap(&sh, spx, &r.w, &r.h, &r.asc, &r.top);
     shaped_free(&sh); free(cps); free(q.utf8);
     pthread_mutex_lock(&tmu); if (trn < TQ) tr[trn++] = r; else { free(r.key); free(r.bmp); } pthread_mutex_unlock(&tmu);
   }
@@ -584,8 +621,8 @@ static void text_take(void) { /* the thread's finished lines into the cache (upl
   TRes got[TQ]; int n; pthread_mutex_lock(&tmu); n = trn; memcpy(got, tr, n * sizeof *got); trn = 0; pthread_mutex_unlock(&tmu);
   for (int i = 0; i < n; i++) { TRes *r = &got[i]; pend_del(r->key, r->hash); int slot;
     if (!cache_find(r->key, r->hash, &slot) && !(cacheCount >= CACHE_N - 8 || slot < 0 ? (cache_evict(), cache_find(r->key, r->hash, &slot), slot < 0) : 0)) {
-      SbLine line = { 0 }; AtlasSlot aslot; upload_line(r->bmp, r->w, r->h, r->asc, &line, &aslot);
-      line.width = r->width / sscale; line.w = (int)ceilf(line.w / sscale); line.h = (int)ceilf(line.h / sscale); line.baseline = (int)(line.baseline / sscale + 0.5f); line.ellipsis = r->cut;
+      SbLine line = { 0 }; AtlasSlot aslot; upload_line(r->bmp, r->w, r->h, r->asc, r->top, &line, &aslot);
+      line.width = r->width / sscale; line.w = (int)ceilf(line.w / sscale); line.h = (int)ceilf(line.h / sscale); line.baseline = (int)(line.baseline / sscale + 0.5f); line.top /= sscale; line.ellipsis = r->cut;
       Entry *e = &cache[slot]; e->key = r->key; r->key = NULL; e->hash = r->hash; e->line = line; e->lastUse = frameNo; e->used = 1; e->slot = aslot; cacheCount++; statRaster++; }
     free(r->key); free(r->bmp); }
 }
@@ -618,7 +655,7 @@ static const SbLine *text_line_(const char *utf8, int px, int weight, float trac
   int cut = 0;
   if (maxW > 0 && s.width > maxW * sscale) { fit_ellipsis(cps, n, spx, weight, str, maxW * sscale, &s); cut = 1; }
   SbLine line = { 0 }; AtlasSlot aslot; rasterise(&s, spx, &line, &aslot);
-  line.width = s.width / sscale; line.w = (int)ceilf(line.w / sscale); line.h = (int)ceilf(line.h / sscale); line.baseline = (int)(line.baseline / sscale + 0.5f); line.ellipsis = cut;
+  line.width = s.width / sscale; line.w = (int)ceilf(line.w / sscale); line.h = (int)ceilf(line.h / sscale); line.baseline = (int)(line.baseline / sscale + 0.5f); line.top /= sscale; line.ellipsis = cut;
   shaped_free(&s); free(cps);
   e = &cache[slot]; e->key = strdup(keybuf); e->hash = h; e->line = line; e->lastUse = frameNo; e->used = 1; e->slot = aslot; cacheCount++;
   syncMs += (double)(SDL_GetPerformanceCounter() - ts0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
@@ -638,6 +675,23 @@ float text_width(const char *utf8, int px, int weight, float tracking) {
   float w = shape_line(&s, cps, n, (int)(px * sscale + 0.5f), weight, tracking * sscale) / sscale; shaped_free(&s); free(cps); statShape++; statWidthMs += SDL_GetTicks() - t0;
   free(we->key); we->key = strdup(wk); we->hash = h; we->w = w; return w;
 }
+/* a line drawn from x (left-aligned) inside a room [x0, x0 + room) whose ends fade where fl / fr say (strip.h): where it
+   ramps it is drawn in thin slices, each at its own strength, elsewhere in one piece, so the words themselves fade
+   into the edge (never a whole word dimmed, never a hard cut) */
+float text_draw_hfade(const char *utf8, float x, float y, int px, int weight, uint32_t color, float tracking, float maxW, float x0, float room, int fl, int fr) {
+  if (!utf8 || !*utf8) return 0; const SbLine *l = text_line(utf8, px, weight, tracking, maxW); if (!l) return 0;
+  float bx = x - 2.0f / sscale, W = (float)l->w, H = (float)l->h; if (W <= 0 || !l->tex) return l->width;
+  y -= l->top;
+  float z = STRIP_ZONE < room / 3 ? STRIP_ZONE : room / 3; if (z < 1) z = 1; float zl = fl ? x0 + z : -1e9f, zr = fr ? x0 + room - z : 1e9f; unsigned ca = color >> 24;
+  for (float a = bx; a < bx + W - 0.01f; ) {
+    float b, mid; int ramp = (fl && a < zl) || (fr && a >= zr - 0.01f);
+    if (ramp) b = a + 3; else { b = bx + W; if (fl && zl > a && zl < b) b = zl; if (fr && zr > a && zr < b) b = zr; } /* (whole between the ramps) */
+    if (b > bx + W) b = bx + W; mid = (a + b) * 0.5f;
+    float k = ramp ? strip_fade_at(mid, x0, room, fl, fr) : 1; unsigned na = (unsigned)(ca * k + 0.5f);
+    if (na > 0) gfx_alpha_tex_uv(l->tex, a, y, b - a, H, (color & 0x00ffffffu) | (na << 24), l->u0 + (l->u1 - l->u0) * (a - bx) / W, l->v0, l->u0 + (l->u1 - l->u0) * (b - bx) / W, l->v1);
+    a = b; }
+  return l->width;
+}
 float text_draw(const char *utf8, float x, float y, int px, int weight, uint32_t color, float tracking, float maxW, int align) {
   if (!utf8 || !*utf8) return 0;
   const SbLine *l = text_line(utf8, px, weight, tracking, maxW);
@@ -645,7 +699,7 @@ float text_draw(const char *utf8, float x, float y, int px, int weight, uint32_t
   { int r = uiRtl && !gfx_mirrored(); if (align == ALIGN_START) align = r ? ALIGN_RIGHT : ALIGN_LEFT; else if (align == ALIGN_END) align = r ? ALIGN_LEFT : ALIGN_RIGHT; } /* (mirrored: laid out left to right, the mirror turns it) */
   float dx = align == ALIGN_CENTER ? -l->width / 2 : align == ALIGN_RIGHT ? -l->width : 0;
   /* the bitmap is 2 px wider on the left (glyph overhang) */
-  gfx_alpha_tex_uv(l->tex, x + dx - 2.0f / sscale, y, (float)l->w, (float)l->h, color, l->u0, l->v0, l->u1, l->v1);
+  gfx_alpha_tex_uv(l->tex, x + dx - 2.0f / sscale, y - l->top, (float)l->w, (float)l->h, color, l->u0, l->v0, l->u1, l->v1);
   return l->width;
 }
 
@@ -659,6 +713,22 @@ static int no_brk_before(uint32_t c) { static const unsigned short L[] = { 0x300
 static int no_brk_after(uint32_t c) { return c == 0x300C || c == 0x300E || c == 0xFF08 || c == 0x3010 || c == 0x3008 || c == 0x300A || c == 0x3014 || c == '('; }
 static int brk_cjk(const uint32_t *c, int at, int p) { /* a break between c[p-1] and c[p] inside CJK text */
   return p > at && (is_cjk_brk(c[p - 1]) || is_cjk_brk(c[p])) && c[p] != ' ' && !no_brk_before(c[p]) && !no_brk_after(c[p - 1]) && !(c[p] < 0x80 && c[p - 1] < 0x80);
+}
+/* a word wider than the line (a release's name, an address: no space in it), on a line before the last: where it is cut
+   so the line fits. After a '.', '_', '-' or '/' when one leaves the line at least half full, else at the widest
+   character that fits (never inside an accented letter or a joined emoji); a character at least, so it moves on.
+   Words that fit never come here: text wraps as it always did (PR #67's idea, kept to the word that overflowed) */
+static int long_word_cut(const uint32_t *cps, int at, int end, float maxW, int px, int weight, float tracking) {
+  char tmp[1024]; int *pos = malloc((size_t)(end - at + 1) * sizeof *pos); if (!pos) return end; int np = 0, best = -1;
+  for (int p = at + 1; p < end; p++) { uint32_t c = cps[p - 1]; if ((c == '.' || c == '_' || c == '-' || c == '/') && !cluster_cont(cps, p)) pos[np++] = p; }
+  for (int lo = 0, hi = np - 1; lo <= hi; ) { int mid = (lo + hi) / 2; cps_to_utf8(cps + at, pos[mid] - at, tmp, sizeof tmp); /* (widths grow with the prefix: halving) */
+    if (text_width(tmp, px, weight, tracking) <= maxW) { best = pos[mid]; lo = mid + 1; } else hi = mid - 1; }
+  if (best > at) { cps_to_utf8(cps + at, best - at, tmp, sizeof tmp); if (text_width(tmp, px, weight, tracking) >= maxW * 0.5f) { free(pos); return best; } best = -1; } /* (a separator near its start: cut fuller instead) */
+  np = 0; for (int p = at + 1; p < end; p++) if (!cluster_cont(cps, p)) pos[np++] = p;
+  for (int lo = 0, hi = np - 1; lo <= hi; ) { int mid = (lo + hi) / 2; cps_to_utf8(cps + at, pos[mid] - at, tmp, sizeof tmp);
+    if (text_width(tmp, px, weight, tracking) <= maxW) { best = pos[mid]; lo = mid + 1; } else hi = mid - 1; }
+  if (best <= at) best = np ? pos[0] : end; /* (not even one character fits: one, so the line moves on) */
+  free(pos); return best;
 }
 static int wrap_lines(const char *utf8, float maxW, int maxLines, int px, int weight, float tracking, char lines[][1024], int *ellipsisLast) {
   int n; uint32_t *cps = to_cps(utf8, &n, 0); int at = 0, nl = 0; *ellipsisLast = 0;
@@ -676,13 +746,14 @@ static int wrap_lines(const char *utf8, float maxW, int maxLines, int px, int we
       int lo = 0, hi = nc - 1, best = -1;
       while (lo <= hi) { int mid = (lo + hi) / 2; cps_to_utf8(cps + at, cand[mid] - at, tmp, sizeof tmp);
         if (text_width(tmp, px, weight, tracking) <= maxW) { best = mid; lo = mid + 1; } else hi = mid - 1; }
-      fitEnd = best >= 0 ? cand[best] : cand[0];
+      fitEnd = best >= 0 ? cand[best] : nl + 1 < maxLines && maxW > 0 ? long_word_cut(cps, at, cand[0], maxW, px, weight, tracking) : cand[0]; /* a word wider than the line: cut to fit, or on the last line whole (the ellipsis cuts it) */
     }
     if (fitEnd <= at) fitEnd = stop > at ? stop : at + 1;
     cps_to_utf8(cps + at, fitEnd - at, lines[nl], 1024); nl++;
     at = fitEnd; if (at < n && cps[at] == '\n') at++;
     if (nl == maxLines && at < n) { *ellipsisLast = 1; }
   }
+  if (nl && maxW > 0 && !*ellipsisLast && text_width(lines[nl - 1], px, weight, tracking) > maxW) *ellipsisLast = 1; /* a last line still wider (a word too long for it, nothing after): cut by the ellipsis too, never past the box */
   free(cand); free(cps); return nl;
 }
 /* a paragraph is laid out once: wrapped text is drawn (and its lines counted) every frame */

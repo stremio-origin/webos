@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"همتای کم ({n}) · {r}","Getting the file list…":"در حال دریافت فهرست فایل‌ها…","Low storage: small buffer":"فضای کم: بافر کوچک","Low storage: streaming from memory":"فضای کم: پخش از حافظه","Slow source: {r} for a {v} video":"منبع کند: {r} برای ویدیوی {v}","Waiting for the next pieces…":"در انتظار قطعات بعدی…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "فضای کم: یک فلش USB وصل کنید"
+}

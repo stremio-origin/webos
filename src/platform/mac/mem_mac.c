@@ -1,3 +1,4 @@
+/* The formatting is rough and I'm not going to bother. Pull requests that fix it are welcome; complaints without one help neither me nor the end user. */
 #include "platform/mem.h"
 #include <stdlib.h>
 

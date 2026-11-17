@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Előnézetek az idősávon",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Képek a filmből a sáv fölött, miközben tekersz. Ki: nem készülnek képek",
+ "Previews for torrents": "Előnézetek torrentekhez",
+ "Slower than debrid, up to 500 MB extra per stream.": "Lassabb, mint a debrid, streamenként legfeljebb 500 MB többlet.",
+ "Previews {n}%": "Előnézetek {n}%",
+ "Previews ready": "Az előnézetek készen állnak",
+ "Uses more data, on mobile data too.": "Több adatot használ, mobiladaton is.",
+ "Getting the seek bar’s previews ready… {n}%": "Az idősáv előnézetei készülnek… {n}%",
+ "Play now": "Lejátszás most",
+ "Load previews before playing": "Előnézetek betöltése lejátszás előtt",
+ "about {n} s left": "kb. {n} mp van hátra",
+ "about {n} min left": "kb. {n} perc van hátra",
+ "The film starts once this much of it has its previews; OK starts it at once": "A film akkor indul, ha ekkora részéhez kész az előnézet; az OK azonnal indítja"
+}

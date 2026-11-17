@@ -2,6 +2,7 @@
    (cubic-bezier(.23,1,.32,1), close to a quintic ease-out), and the gliding accent highlight under the focus. */
 #ifndef SB_SHEET_H
 #define SB_SHEET_H
+#include "ui/glass.h"
 #include <math.h>
 #include "core/anim.h"
 #include "core/app.h"
@@ -34,7 +35,7 @@ static inline float fpill_scale(const FPill *p, float k) {
 static inline void fpill_draw(const FPill *p, float radius, float k) {
   if (p->a.v <= 0.001f) return; float s = fpill_scale(p, k), cx = p->x.v + p->w.v / 2, cy = p->y.v + p->h.v / 2;
   gfx_opacity_push(p->a.v); if (s != 1) gfx_scale_push(s, s, cx, cy);
-  gfx_rrect(p->x.v, p->y.v, p->w.v, p->h.v, radius < 0 ? p->h.v / 2 : radius, ACC);
+  lglass_accent(p->x.v, p->y.v, p->w.v, p->h.v, radius < 0 ? p->h.v / 2 : radius, 1); /* (the lit glass, as everywhere) */
   if (s != 1) gfx_scale_pop(); gfx_opacity_pop(); }
 
 /* the accent's soft halo (4 px outside) on the gliding highlight itself, so it never sits on the target while the

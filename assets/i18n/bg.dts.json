@@ -1,0 +1,7 @@
+{"Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV":"Автоматично открива какво пуска телевизорът. Конвертирай, ако не си сигурен. Изключено оставя решението на телевизора","Convert":"Конвертирай","DTS sound":"DTS звук","Default audio language, DTS, interface sounds":"Език на звука по подразбиране, DTS, звуци на интерфейса",
+"Converting the sound for this TV…": "Конвертиране на звука за този телевизор…",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (конвертиран)",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (конвертиран)",
+"Playing the {t} track: this TV can’t play DTS": "Пускане на записа {t}: този телевизор не може да пусне DTS",
+"Playing the {t} track: this TV can’t play TrueHD": "Пускане на записа {t}: този телевизор не може да пусне TrueHD"
+}

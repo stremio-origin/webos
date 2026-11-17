@@ -20,12 +20,15 @@ TARBALL="$ORIGIN_BUILD/src/ffmpeg-$VERSION.tar.xz"
 [ -f "$TARBALL" ] || curl -fsSL -o "$TARBALL" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
 echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null
 SRC="$W/ffmpeg-$VERSION"; [ -f "$SRC/configure" ] || tar -xJf "$TARBALL" -C "$W"
-B="$W/build-$TARGET"; P="$W/prefix-$TARGET"; mkdir -p "$B"
+B="$W/build-$TARGET"; P="$W/prefix-$TARGET"
 # What the converter needs and nothing more: the DTS decoder (the core only is decoded, never the lossless XLL
 # extension), TrueHD / MLP, the AC3 encoder, the Matroska and MP4 readers, the MPEG-TS writer, the parsers and the
 # bitstream filters that turn Matroska's length-prefixed H.264 / HEVC into the start-code form MPEG-TS carries.
 COMPONENTS="--disable-everything --enable-decoder=dca,truehd,mlp --enable-encoder=ac3 --enable-demuxer=matroska,mov --enable-muxer=mpegts,adts \
   --enable-parser=dca,h264,hevc,ac3,aac,mlp --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,dca_core"
+# The H.264 and HEVC decoders too, for seek previews (LGPL as the rest, no scaler). In every build, releases too (the
+# owner's decision, 2026-11-13); SBD_PREVIEW=0 leaves them out, and a library without them simply has no previews.
+PV=""; if [ "${SBD_PREVIEW:-1}" = 1 ]; then COMPONENTS="$COMPONENTS --enable-decoder=h264,hevc"; PV="-prev"; fi
 COMMON="--disable-autodetect --enable-zlib --disable-shared --enable-static --enable-pic --disable-programs --disable-doc --disable-debug \
   --disable-network --disable-avdevice --disable-avfilter --disable-swscale --disable-postproc --enable-avcodec --enable-avformat \
   --enable-avutil --enable-swresample --disable-iconv"
@@ -36,14 +39,15 @@ case "$TARGET" in
     printf '#!/bin/sh\nexec "%s" cc %s "$@"\n' "$ZIG" "$ZT" > "$TC/cc"; printf '#!/bin/sh\nexec "%s" ar "$@"\n' "$ZIG" > "$TC/ar"; printf '#!/bin/sh\nexec "%s" ranlib "$@"\n' "$ZIG" > "$TC/ranlib"
     chmod 755 "$TC/cc" "$TC/ar" "$TC/ranlib"
     ARCH="--enable-cross-compile --arch=arm --target-os=linux --cc=$TC/cc --ar=$TC/ar --ranlib=$TC/ranlib --nm=nm"   # NEON assembly kept (softfp calling convention detected); --cpu is left out, this compiler names the cores its own way
-    XC="-O2 -ffunction-sections -fdata-sections -idirafter $SDK/usr/include -ffile-prefix-map=$HOME=/src"
+    XC="-O2 -ffunction-sections -fdata-sections -idirafter $SDK/usr/include -ffile-prefix-map=$W=/ffmpeg -ffile-prefix-map=$HOME=/src"
     XL="-L$SDK/usr/lib"   # (the TV's own libz, as the app uses)
     OUT="$ROOT/build/webos/libsbdts.so" ;;
   mac)
-    ARCH="--cc=cc"; XC="-O2 -ffile-prefix-map=$HOME=/src"; XL=""; OUT="$ROOT/build/mac/libsbdts.dylib" ;;
+    ARCH="--cc=cc"; XC="-O2 -ffile-prefix-map=$W=/ffmpeg -ffile-prefix-map=$HOME=/src"; XL=""; OUT="$ROOT/build/mac/libsbdts.dylib" ;;
   *) echo "unknown target $TARGET"; exit 1 ;;
 esac
 CONF="$COMMON $COMPONENTS $ARCH"
+B="$B$PV"; P="$P$PV"; mkdir -p "$B"   # (each kind its own build folder: switching never rebuilds the other)
 if [ ! -f "$P/lib/libavformat.a" ] || [ "$(cat "$B/.conf" 2>/dev/null)" != "$CONF $XC" ]; then
   echo "== FFmpeg $VERSION ($TARGET)"
   (cd "$B" && "$SRC/configure" --prefix="$P" $CONF --extra-cflags="$XC" --extra-ldflags="$XL" >/dev/null \
@@ -83,10 +87,11 @@ echo "libdovi (dolby_vision 3.3.2, MIT, https://github.com/quietvoid/dovi_tool) 
 mkdir -p "$(dirname "$OUT")"
 LIBS="$P/lib/libavformat.a $P/lib/libavcodec.a $P/lib/libswresample.a $P/lib/libavutil.a $DOVI"
 if [ "$TARGET" = webos ]; then
-  echo '{ global: sbd_get; local: *; };' > "$TC/exports.map"
-  "$TC/cc" -std=c11 -O2 -fPIC -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app \
-    "$ROOT/tools/dts/sbdts.c" $LIBS "$SDK/usr/lib/libz.so" "$SDK/lib/libgcc_s.so.1" -Wl,--gc-sections -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbdts.so -lpthread -lm -o "$OUT"
+  if [ -n "$PV" ]; then echo '{ global: sbd_get; sbd_prev_get; local: *; };' > "$TC/exports.map"; else echo '{ global: sbd_get; local: *; };' > "$TC/exports.map"; fi
+  "$TC/cc" -std=c11 -O2 -fPIC -shared -fvisibility=hidden -D_GNU_SOURCE ${PV:+-DSBD_PREVIEW} -I"$P/include" -I"$ROOT/src" -ffile-prefix-map=$W=/ffmpeg -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app \
+    "$ROOT/tools/dts/sbdts.c" $LIBS "$SDK/usr/lib/libz.so" "$SDK/lib/libgcc_s.so.1" -Wl,--gc-sections -Wl,-T,"$ROOT/tools/webos-relocs.ld" -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbdts.so -lpthread -lm -o "$OUT"
+  python3 "$ROOT/tools/relocs-check.py" "$OUT"   # (webOS 3 starts it only with them together)
 else
-  cc -std=c11 -O2 -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" "$ROOT/tools/dts/sbdts.c" $LIBS -lz -Wl,-dead_strip -o "$OUT"
+  cc -std=c11 -O2 -shared -fvisibility=hidden -D_GNU_SOURCE ${PV:+-DSBD_PREVIEW} -I"$P/include" -I"$ROOT/src" "$ROOT/tools/dts/sbdts.c" $LIBS -lz -Wl,-dead_strip -o "$OUT"
 fi
 ls -l "$OUT" | awk '{printf "%s  %.1f MB\n", $NF, $5/1048576}'

@@ -1,0 +1,10 @@
+{
+ "Next episode card": "Κάρτα επόμενου επεισοδίου",
+ "Large": "Μεγάλη",
+ "Compact": "Συμπαγής",
+ "Compact: a smaller picture and no summary, more of the film shows": "Συμπαγής: μικρότερη εικόνα και χωρίς περίληψη, φαίνεται περισσότερο από την ταινία",
+ "Torrent connections": "Συνδέσεις torrent",
+ "Automatic": "Αυτόματη",
+ "TCP only": "Μόνο TCP",
+ "TCP only can help on mobile (4G / 5G) routers; a torrent may find fewer peers": "Το μόνο TCP μπορεί να βοηθήσει σε φορητούς δρομολογητές (4G / 5G)· ένα torrent ίσως βρει λιγότερους peers"
+}

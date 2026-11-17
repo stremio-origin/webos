@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Thanh tua",
+ "Seek step, chapters, previews": "Bước tua, chương, ảnh xem trước",
+ "Best stream, next episode, picture size": "Luồng tốt nhất, tập tiếp theo, kích thước hình",
+ "Accent colour, screensaver, clock, trailers": "Màu nhấn, bảo vệ màn hình, đồng hồ, trailer",
+ "Track what you watch": "Theo dõi những gì bạn xem",
+ "Member since": "Thành viên từ",
+ "Stremio account": "Tài khoản Stremio",
+ "{n} titles": "{n} tựa",
+ "{n} installed": "{n} đã cài",
+ "Connected": "Đã kết nối",
+ "Not connected": "Chưa kết nối",
+ "Default": "Mặc định",
+ "Font": "Phông chữ",
+ "Arabic font": "Phông chữ Ả Rập",
+ "For subtitles in Arabic": "Cho phụ đề tiếng Ả Rập",
+ "Language, size, font, colour": "Ngôn ngữ, cỡ chữ, phông chữ, màu",
+ "Subtitle font": "Phông chữ phụ đề",
+ "Arabic subtitle font": "Phông chữ phụ đề Ả Rập",
+ "Styled subtitles keep their own fonts, colours and background.": "Phụ đề có định dạng giữ phông chữ, màu và nền riêng.",
+ "Stats for nerds on": "Thống kê chuyên sâu: bật",
+ "Stats for nerds off": "Thống kê chuyên sâu: tắt"
+}

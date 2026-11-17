@@ -15,6 +15,7 @@ void sglass_draw(const SGlass *g, float x, float y, float w, float h, float r);
 void sglass_free(SGlass *g);
 /* liquid glass, drawn: a see-through shell (body: its colour, 0 none; k 1 at rest, more when lit), the lit accent one,
    its rim alone, and a moving pill's stretch (0..1, kept in s and last) */
+void  lglass_tint(float x, float y, float w, float h, float r, uint32_t col, float a); /* a selection's glass in any colour */
 void  lglass_shell(float x, float y, float w, float h, float r, uint32_t body, float k);
 void  lglass_accent(float x, float y, float w, float h, float r, float a);
 void  lglass_rim(float x, float y, float w, float h, float r, float a0, float a1, int topLeft);

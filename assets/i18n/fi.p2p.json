@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Vain muutama vertainen ({n}) · {r}","Getting the file list…":"Haetaan tiedostoluetteloa…","Low storage: small buffer":"Vähän tallennustilaa: pieni puskuri","Low storage: streaming from memory":"Vähän tallennustilaa: striimaus muistista","Slow source: {r} for a {v} video":"Hidas lähde: {r} {v}-videolle","Waiting for the next pieces…":"Odotetaan seuraavia paloja…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Vähän tallennustilaa: Liitä USB-muisti"
+}

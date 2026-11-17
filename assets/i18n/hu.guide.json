@@ -1,7 +1,8 @@
 {
-"Your phone as a keyboard": "A telefonod mint billentyűzet",
-"{n} of {total}": "{n}/{total}",
-"Next": "Tovább",
-"Skip": "Kihagyás",
-"Thank you": "Köszönöm"
+  "Next": "Tovább",
+  "Skip": "Kihagyás",
+  "Styled subtitles": "Stílusos feliratok",
+  "Thank you": "Köszönöm",
+  "Your phone as a keyboard": "A telefonod mint billentyűzet",
+  "{n} of {total}": "{n}/{total}"
 }

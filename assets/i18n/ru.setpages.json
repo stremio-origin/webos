@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Полоса перемотки",
+ "Seek step, chapters, previews": "Шаг перемотки, главы, превью",
+ "Best stream, next episode, picture size": "Лучший поток, следующий эпизод, размер изображения",
+ "Accent colour, screensaver, clock, trailers": "Акцентный цвет, заставка, часы, трейлеры",
+ "Track what you watch": "Отмечайте, что смотрите",
+ "Member since": "Участник с",
+ "Stremio account": "Аккаунт Stremio",
+ "{n} titles": "{n} названий",
+ "{n} installed": "{n} установлено",
+ "Connected": "Подключено",
+ "Not connected": "Не подключено",
+ "Default": "По умолчанию",
+ "Font": "Шрифт",
+ "Arabic font": "Арабский шрифт",
+ "For subtitles in Arabic": "Для субтитров на арабском",
+ "Language, size, font, colour": "Язык, размер, шрифт, цвет",
+ "Subtitle font": "Шрифт субтитров",
+ "Arabic subtitle font": "Арабский шрифт субтитров",
+ "Styled subtitles keep their own fonts, colours and background.": "Стилизованные субтитры сохраняют свои шрифты, цвета и фон.",
+ "Stats for nerds on": "Статистика для гиков включена",
+ "Stats for nerds off": "Статистика для гиков выключена"
+}

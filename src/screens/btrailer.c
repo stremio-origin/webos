@@ -1,4 +1,5 @@
 #include "screens/btrailer.h"
+#include "core/away.h"
 #include "screens/player.h"
 #include "screens/saver.h"
 #include "screens/board.h"
@@ -11,9 +12,12 @@
 #include "core/video.h"
 #include "core/pace.h"
 #include "ui/gfx.h"
+#include "screens/livepeek.h"
 #include <stdio.h>
 
 /* own = the decoder holds the trailer (the player takes it over the moment it opens) */
+static double castHold; /* until when a phone's play is awaited (no trailer meanwhile) */
+void btr_cast_hold(double secs) { castHold = app_now() + secs; fprintf(stderr, "[btr] held for a phone's play (%.0f s)\n", secs); }
 static struct { int own, under, live, backing, held, resumes, byKey, quiet, endFade, unloadLater; double holdAt, pauseAt; unsigned holdGen; double backAt, resumeAt, coverAt; Tween cover, zoom, melt; } B; /* held: we paused it ourselves */
 
 /* the page frames the video 2.5% larger around (960, 400) inside 1920x799, cover-cropped: the picture zooms
@@ -55,7 +59,7 @@ static void unload_now(void) { B.unloadLater = 0; if (B.own && !player_open()) v
    for a moment (the frame held for the next title, a key pressed meanwhile) before the backdrop came back */
 static void h_unload(void *ud) { (void)ud; if (B.under && B.cover.v < 0.999f) { B.unloadLater = 1; return; } unload_now(); }
 void btr_init(void) { static BgtHooks h = { h_load, h_hide, h_unload, NULL }; bgt_init(&h); tween_set(&B.cover, 1); tween_set(&B.zoom, 1); tween_set(&B.melt, 0); }
-void btr_key(int arrow) { if (arrow && B.under && !B.backing) B.byKey = 1; bgt_key(); } /* only a move to another title holds the frame for the next backdrop */
+void btr_key(int arrow) { castHold = 0; /* (a key: the TV is being used, the hold is over) */ if (arrow && B.under && !B.backing) B.byKey = 1; bgt_key(); } /* only a move to another title holds the frame for the next backdrop */
 int btr_playing(void) { return B.under && !B.backing && !B.byKey; } /* (a key just pressed counts as leaving: the same frame the focus moves) */
 unsigned btr_hold_gen(void) { return B.under && B.backing ? B.holdGen : 0; }
 /* play pressed with a trailer on: it plays on under the player's art as that fades in, and is let go once covered */
@@ -64,15 +68,17 @@ void btr_handover(void) { handing = 1; handAt = app_now(); tween_to(&B.melt, 0, 
 int btr_handing(void) { return handing; }
 void btr_release(void) { handing = 0; bgt_release_now(); B.under = 0; B.backing = 0; tween_set(&B.cover, 1); tween_set(&B.zoom, 1); tween_set(&B.melt, 0); }
 int btr_under(void) { return B.under; }
+int btr_owns(void) { return B.own; }
 float btr_cover(void) { return B.cover.v; }
 float btr_zoom(void) { return B.zoom.v; }
 float btr_melt(void) { return B.melt.v; }
 void btr_tick(float dt) {
   trailer_tick();
   if (player_open() && (B.own || bgt_state() != BGT_OFF)) { B.own = 0; btr_release(); } /* the player has the decoder now */
+  if (player_open() || (castHold && app_now() >= castHold)) castHold = 0; /* (the phone's play came, or never did) */
   const Item *f = NULL;
   if (app_is_board(SCR) && !topNav.active && screens[SCR] && screens[SCR]->focused) f = screens[SCR]->focused();
-  BgtView v = { app_trailer_idle(), app_is_board(SCR), f, topNav.active || app_overlay != NULL || /* (a sheet or the long-press menu: it gives way, softly, and none starts under it) */ player_open() || !app_splash_done || saver_on(),
+  BgtView v = { app_trailer_idle(), app_is_board(SCR), f, topNav.active || app_overlay != NULL || /* (a sheet or the long-press menu: it gives way, softly, and none starts under it) */ player_open() || !app_splash_done || saver_on() || lpk_busy() || castHold > 0 || !app_focused(), /* (#69: the TV's focus elsewhere, an overlay or another app: none plays under it) */ /* (a phone's play on its way: none starts, one playing gives way) */ /* (a channel previews in its own box) */
                 board_spot_up(), pace_period() > 21.5 };
   bgt_tick(&v);
   if (handing && (player_art_full() || !player_open() || app_now() - handAt > 1.5)) { handing = 0; bgt_release_now(); B.under = 0; B.backing = 0; tween_set(&B.cover, 1); tween_set(&B.zoom, 1); tween_set(&B.melt, 0); } /* covered: now it goes */
@@ -88,10 +94,10 @@ void btr_tick(float dt) {
       if (bgt_state() == BGT_LOAD) { bgt_playing(); B.under = 1; B.backing = 0; fprintf(stderr, "[btr] showing %dx%d\n", video_width(), video_height());
         B.endFade = 0; B.pauseAt = 0; video_set_volume(atoi(store_get("bgTrailerVol", "70")), 1800); /* the sound comes up softly to the chosen level */
         tween_set(&B.cover, 1); tween_to(&B.cover, 0, 1.2f, EASE_STD); tween_to(&B.zoom, 1.025f, 1.2f, EASE_STD); tween_to(&B.melt, 1, 0.9f, EASE_CSS_EASE); } }
-    if ((vs == VID_ENDED || vs == VID_ERROR) && (bgt_state() == BGT_LOAD || bgt_state() == BGT_SHOW)) bgt_ended();
+    if ((vs == VID_ENDED || vs == VID_ERROR) && (bgt_state() == BGT_LOAD || bgt_state() == BGT_SHOW)) { if (vs == VID_ERROR) bgt_failed(); else bgt_ended(); } /* (failed before it shows: the next lower one) */
     /* paused by something other than us (the pipeline settling, a focus change of the TV's own): it plays on, a few
        times at most, a second apart, so a pipeline that insists is not fought every frame */
-    if (vs == VID_PAUSED && !B.held && (bgt_state() == BGT_LOAD || bgt_state() == BGT_SHOW) && B.resumes < 3 && app_now() >= B.resumeAt) {
+    if (vs == VID_PAUSED && !B.held && app_focused() && (bgt_state() == BGT_LOAD || bgt_state() == BGT_SHOW) && B.resumes < 3 && app_now() >= B.resumeAt) { /* (never against the TV while its focus is elsewhere) */
       B.resumes++; B.resumeAt = app_now() + 1.0; fprintf(stderr, "[btr] paused without us: play again (%d)\n", B.resumes); video_play(); }
   }
   /* covered again: the video goes from under the picture, which eases back to its own framing */

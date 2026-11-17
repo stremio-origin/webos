@@ -1,7 +1,7 @@
 {
-"Name": "Név",
-"Description": "Leírás",
-"File": "Fájl",
-"Play from the beginning": "Lejátszás az elejéről",
-"Hold for details": "Tartsd lenyomva a részletekhez"
+  "Description": "Leírás",
+  "File": "Fájl",
+  "Hold for details": "Tartsd lenyomva a részletekhez",
+  "Name": "Név",
+  "Play from the beginning": "Lejátszás az elejéről"
 }

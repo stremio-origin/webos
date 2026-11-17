@@ -1,5 +1,7 @@
 #include "platform/plat.h"
 #include "core/subs.h"
+#include "core/forcedsubs.h"
+#include "core/textenc.h"
 #include "core/net.h"
 #include "core/json.h"
 #include "core/addons.h"
@@ -38,12 +40,10 @@ static int utf8_ok(const unsigned char *b, size_t n) {
     i += k + 1; }
   return 1;
 }
-/* Windows-1252's 0x80-0x9F (the rest of the byte range is Latin-1 as it stands) */
-static const unsigned short CP1252[32] = { 0x20ac, 0xfffd, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0xfffd, 0x017d, 0xfffd,
-  0xfffd, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0xfffd, 0x017e, 0x0178 };
 /* subtitle files come in whatever their authors saved: UTF-16 (with a BOM, or told by its zero bytes), UTF-8 (BOM or not),
-   else the Windows code page most old SRT files use. Line ends become "\n" whatever they were. malloc'd */
-static char *to_text(const unsigned char *b, size_t n) {
+   else the Windows code page of the subtitle's language (lang: a three-letter code, NULL when unknown: the text tells;
+   see textenc.c). Line ends become "\n" whatever they were. malloc'd */
+static char *to_text(const unsigned char *b, size_t n, const char *lang) {
   int be = -1; /* UTF-16: 0 little-endian, 1 big-endian */
   if (n >= 2 && b[0] == 0xff && b[1] == 0xfe) { be = 0; b += 2; n -= 2; }
   else if (n >= 2 && b[0] == 0xfe && b[1] == 0xff) { be = 1; b += 2; n -= 2; }
@@ -55,7 +55,7 @@ static char *to_text(const unsigned char *b, size_t n) {
       if (c >= 0xd800 && c < 0xdc00 && i + 3 < n) { unsigned d = be ? (unsigned)(b[i + 2] << 8 | b[i + 3]) : (unsigned)(b[i + 3] << 8 | b[i + 2]); if (d >= 0xdc00 && d < 0xe000) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i += 2; } }
       if (c) o += put_utf8(out + o, c); }
   else if (utf8_ok(b, n)) { for (size_t i = 0; i < n; i++) if (b[i]) out[o++] = (char)b[i]; }
-  else for (size_t i = 0; i < n; i++) { unsigned c = b[i]; if (!c) continue; o += put_utf8(out + o, c >= 0x80 && c < 0xa0 ? CP1252[c - 0x80] : c); }
+  else { int cp = textenc_pick(b, n, lang); for (size_t i = 0; i < n; i++) if (b[i]) o += put_utf8(out + o, textenc_char(cp, b[i])); }
   out[o] = 0;
   size_t w = 0; for (size_t i = 0; i < o; i++) { if (out[i] == '\r') { out[w++] = '\n'; if (out[i + 1] == '\n') i++; } else out[w++] = out[i]; }
   out[w] = 0; return out;
@@ -94,7 +94,7 @@ static int parse_ass(const char *txt, Cue **out) {
 /* blocks separated by blank lines; the line with "-->" times the text under it; tags and {..} are dropped */
 int subs_parse(const char *txt, Cue **out) {
   *out = NULL; if (!txt) return 0; if (!strncmp(txt, "\xef\xbb\xbf", 3)) txt += 3;
-  char *buf = to_text((const unsigned char *)txt, strlen(txt)); /* "\r\n" must not read as a blank line */
+  char *buf = to_text((const unsigned char *)txt, strlen(txt), NULL); /* "\r\n" must not read as a blank line */
   if (strstr(buf, "[Events]") || strstr(buf, "[events]") || !strncmp(buf, "[Script Info]", 13)) { int k = parse_ass(buf, out); free(buf); return k; }
   Cue *cues = NULL; int n = 0, cap = 0;
   char *blk = buf;
@@ -115,29 +115,36 @@ void subs_free(Cue *c, int n) { if (!c) return; for (int i = 0; i < n; i++) free
 
 /* some subtitle hosts hand out the .gz file itself (no Content-Encoding): unpacked here, 16 MB at most; then the
    text's own encoding (UTF-16 has zero bytes, so it is decoded before anything reads it as a C string) */
-int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
-  *out = NULL; if (!body) return 0;
+static char *body_text(const unsigned char *body, size_t len, const char *lang) {
+  if (!body) return NULL;
   unsigned char *buf = NULL; size_t n = 0;
   if (len >= 2 && body[0] == 0x1f && body[1] == 0x8b) {
-    z_stream z; memset(&z, 0, sizeof z); if (inflateInit2(&z, 16 + MAX_WBITS) != Z_OK) return 0;
+    z_stream z; memset(&z, 0, sizeof z); if (inflateInit2(&z, 16 + MAX_WBITS) != Z_OK) return NULL;
     size_t cap = len * 4 + 4096; buf = malloc(cap); int rc = Z_OK;
     z.next_in = (unsigned char *)body; z.avail_in = (uInt)len;
     while (rc == Z_OK) {
       if (cap - n < 4096) { if (cap >= 16u << 20) break; cap *= 2; buf = realloc(buf, cap); }
       z.next_out = buf + n; z.avail_out = (uInt)(cap - n - 1); rc = inflate(&z, Z_NO_FLUSH); n = cap - 1 - z.avail_out;
     }
-    inflateEnd(&z); if (rc != Z_STREAM_END && !n) { free(buf); return 0; }
+    inflateEnd(&z); if (rc != Z_STREAM_END && !n) { free(buf); return NULL; }
     body = buf; len = n;
   }
-  char *txt = to_text(body, len); free(buf);
+  char *txt = to_text(body, len, lang); free(buf); return txt;
+}
+int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
+  *out = NULL; char *txt = body_text(body, len, NULL); if (!txt) return 0;
   int k = subs_parse_any(txt, out); free(txt); return k;
 }
+static int is_ass(const char *t) { if (!strncmp(t, "\xef\xbb\xbf", 3)) t += 3; return (strstr(t, "[Events]") || strstr(t, "[events]") || !strncmp(t, "[Script Info]", 13)) && strstr(t, "Dialogue:"); }
 
 /* ---- language codes ---- */
 static const char *ALIAS[][2] = { { "en", "eng" }, { "ar", "ara" }, { "fr", "fre" }, { "fra", "fre" }, { "es", "spa" }, { "spl", "spa" }, { "de", "ger" }, { "deu", "ger" }, { "it", "ita" }, { "pt", "por" }, { "pob", "por" },
   { "ru", "rus" }, { "tr", "tur" }, { "pl", "pol" }, { "nl", "dut" }, { "nld", "dut" }, { "sv", "swe" }, { "he", "heb" }, { "iw", "heb" }, { "hi", "hin" }, { "ja", "jpn" }, { "ko", "kor" }, { "zh", "chi" }, { "zho", "chi" },
   { "ro", "rum" }, { "ron", "rum" }, { "el", "gre" }, { "ell", "gre" }, { "cs", "cze" }, { "ces", "cze" }, { "fa", "per" }, { "fas", "per" }, { "da", "dan" }, { "fi", "fin" }, { "no", "nor" }, { "nb", "nor" }, { "nob", "nor" },
-  { "hu", "hun" }, { "bg", "bul" }, { "uk", "ukr" }, { "sr", "srp" }, { "hr", "hrv" }, { "sk", "slo" }, { "slk", "slo" }, { "sl", "slv" }, { "id", "ind" }, { "ms", "may" }, { "msa", "may" }, { "th", "tha" }, { "vi", "vie" }, { NULL, NULL } };
+  { "hu", "hun" }, { "bg", "bul" }, { "uk", "ukr" }, { "sr", "srp" }, { "hr", "hrv" }, { "sk", "slo" }, { "slk", "slo" }, { "sl", "slv" }, { "id", "ind" }, { "ms", "may" }, { "msa", "may" }, { "th", "tha" }, { "vi", "vie" },
+  { "bs", "bos" }, { "et", "est" }, { "lv", "lav" }, { "lt", "lit" }, { "sq", "alb" }, { "sqi", "alb" }, { "mk", "mac" }, { "mkd", "mac" }, { "is", "ice" }, { "isl", "ice" }, { "ca", "cat" },
+  { "eu", "baq" }, { "eus", "baq" }, { "gl", "glg" }, { "ka", "geo" }, { "kat", "geo" }, { "hy", "arm" }, { "hye", "arm" }, { "bn", "ben" }, { "ta", "tam" }, { "te", "tel" }, { "ur", "urd" },
+  { "ml", "mal" }, { "si", "sin" }, { "tl", "tgl" }, { "fil", "tgl" }, { "ku", "kur" }, { "mn", "mon" }, { "slk", "slo" }, { "hrv", "hrv" }, { NULL, NULL } }; /* (every language Settings offers: a two- or three-letter code, one name) */
 /* a track's language as a name (the player's chips and lists) */
 static const char *LANGS[][2] = { { "en", "English" }, { "eng", "English" }, { "fr", "French" }, { "fre", "French" }, { "fra", "French" }, { "es", "Spanish" }, { "spa", "Spanish" }, { "de", "German" }, { "ger", "German" }, { "deu", "German" },
   { "it", "Italian" }, { "ita", "Italian" }, { "pt", "Portuguese" }, { "por", "Portuguese" }, { "ru", "Russian" }, { "rus", "Russian" }, { "ar", "Arabic" }, { "ara", "Arabic" }, { "tr", "Turkish" }, { "tur", "Turkish" },
@@ -153,7 +160,12 @@ static const char *SUBNAMES[][2] = { { "spl", "Spanish (LA)" }, { "pob", "Portug
   { "ze", "Chinese (bilingual)" }, { "zht", "Chinese (traditional)" }, { "zhe", "Chinese (bilingual)" }, { "ell", "Greek" }, { "ron", "Romanian" }, { "ces", "Czech" }, { "nld", "Dutch" }, { NULL, NULL } };
 static const char *lookup(const char *t[][2], const char *k) { for (int i = 0; t[i][0]; i++) if (!strcmp(t[i][0], k)) return t[i][1]; return NULL; }
 static void base_code(const char *c, char *k, size_t cap) { size_t i = 0; for (; c && c[i] && c[i] != '-' && c[i] != '_' && i + 1 < cap; i++) k[i] = (char)(c[i] >= 'A' && c[i] <= 'Z' ? c[i] + 32 : c[i]); k[i] = 0; }
-const char *subs_lang_canon(const char *code, char *out, size_t cap) { char k[16]; base_code(code, k, sizeof k); const char *a = lookup(ALIAS, k); snprintf(out, cap, "%s", a ? a : k); return out; }
+/* a language as a player names it ("English", "Italian": libVLC on a phone) back to its code, else NULL */
+static const char *code_of_name(const char *n) { if (!n || !*n) return NULL; char b[48]; size_t i = 0; for (; n[i] && n[i] != '(' && n[i] != '[' && i + 1 < sizeof b; i++) b[i] = n[i]; while (i && b[i - 1] == ' ') i--; b[i] = 0; if (!*b) return NULL;
+  for (int j = 0; LANGS[j][0]; j++) if (!strcasecmp(LANGS[j][1], b)) return LANGS[j][0]; return NULL; }
+const char *subs_lang_canon(const char *code, char *out, size_t cap) { char k[16]; base_code(code, k, sizeof k); const char *a = lookup(ALIAS, k);
+  if (!a && !lookup(LANGS, k)) { const char *c = code_of_name(code); if (c) { base_code(c, k, sizeof k); a = lookup(ALIAS, k); } } /* (a name, not a code: its code) */
+  snprintf(out, cap, "%s", a ? a : k); return out; }
 int subs_lang_match(const char *a, const char *b) { if (!a || !b || !*a || !*b) return 0; char x[16], y[16]; return !strcmp(subs_lang_canon(a, x, sizeof x), subs_lang_canon(b, y, sizeof y)); }
 const char *subs_lang_name(const char *code) { char k[16]; base_code(code, k, sizeof k); return *k ? lookup(LANGS, k) : NULL; }
 const char *subs_sub_name(const char *code) { char k[16]; base_code(code, k, sizeof k); if (!*k) return NULL; const char *n = lookup(SUBNAMES, k); return n ? n : lookup(LANGS, k); }
@@ -163,17 +175,19 @@ const char *subs_sub_name(const char *code) { char k[16]; base_code(code, k, siz
    lists, must not wait there. Each fetch runs on its own short thread (files are also read there, off the drawing
    thread); subs_pump hands the answers over on the main thread. */
 typedef struct FindQ FindQ;
-typedef struct SubJob { struct SubJob *next; char *url; int list, status; unsigned char *body; size_t len; Cue *cues; int n;
+typedef struct SubJob { struct SubJob *next; char *url, lang[16]; int list, status; unsigned char *body; size_t len; Cue *cues; int n; char *script;
   void (*cb)(int, Cue *, int, void *); void *ud;
   FindQ *fq; int src; SubEntry *got; int ngot; int os; } SubJob;   /* list: one addon's answer for a FindQ (src: which); os: the built-in OpenSubtitles list */
 static pthread_mutex_t jmu = PTHREAD_MUTEX_INITIALIZER; static SubJob *jdone;
+static char *jScript; /* the SubStation file being answered, whole, while its callback runs */
 static void job_finish(SubJob *j) { pthread_mutex_lock(&jmu); j->next = jdone; jdone = j; pthread_mutex_unlock(&jmu); }
 static void list_parse(SubJob *j);
 static void *job_main(void *a) { plat_thread_background(5);
   SubJob *j = a; j->body = net_fetch_sync(j->url, &j->len, &j->status, 20000); /* one addon's limit: the others never wait for it */
   if (j->os) {} /* read on the main thread (on_list) */
   else if (j->list) list_parse(j);
-  else if (j->body) { j->n = subs_parse_body(j->body, j->len, &j->cues); free(j->body); j->body = NULL; }
+  else if (j->body) { char *t = body_text(j->body, j->len, j->lang[0] ? j->lang : NULL); free(j->body); j->body = NULL;
+    if (t) { j->n = subs_parse_any(t, &j->cues); if (j->n > 0 && is_ass(t)) j->script = t; else free(t); } }
   job_finish(j);
   return NULL;
 }
@@ -186,12 +200,14 @@ void subs_pump(void) {
   while (rev) { SubJob *j = rev; rev = j->next;
     if (j->os) on_list(j->status, j->body ? j->body : (const unsigned char *)"", j->len, j->ud);
     else if (j->list) find_answer(j);
-    else j->cb(j->status, j->cues, j->n, j->ud);
+    else { jScript = j->script; j->script = NULL; j->cb(j->status, j->cues, j->n, j->ud); free(jScript); jScript = NULL; }
     free(j->body); free(j->url); free(j->got); free(j); }
 }
-void subs_load(const char *url, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud) {
-  SubJob *j = calloc(1, sizeof *j); j->url = strdup(url); j->cb = cb; j->ud = ud; job_start(j);
+char *subs_take_script(void) { char *s = jScript; jScript = NULL; return s; }
+void subs_load_lang(const char *url, const char *lang, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud) {
+  SubJob *j = calloc(1, sizeof *j); j->url = strdup(url); j->cb = cb; j->ud = ud; if (lang && *lang) subs_lang_canon(lang, j->lang, sizeof j->lang); job_start(j);
 }
+void subs_load(const char *url, void (*cb)(int status, Cue *cues, int n, void *ud), void *ud) { subs_load_lang(url, NULL, cb, ud); }
 
 /* ---- the OpenSubtitles hash: the size plus the 64-bit little-endian words of the first and the last 64 KB ---- */
 int subs_os_hash(const char *url, double *size, char out[17]) {
@@ -213,6 +229,7 @@ void subs_entry_facts(SubEntry *e, const struct cJSON *s) {
   e->hm = !strcmp(m, "h") || cJSON_IsTrue(hm) || (cJSON_IsNumber(hm) && hm->valuedouble > 0) || strstr(mb, "hash") != NULL;
   const cJSON *fm = cJSON_GetObjectItemCaseSensitive(s, "fpsMilli"); double fp = cJSON_IsNumber(fm) ? fm->valuedouble : cJSON_IsString(fm) ? atof(fm->valuestring) : 0;
   e->fps = fp > 10000 && fp < 61000 ? fp / 1000 : 0;
+  e->forced = forcedsubs_entry(s, e->label);
 }
 /* the hash worked out for the stream last asked about (the reference Auto-sync uses asks again with it) */
 static pthread_mutex_t hmu = PTHREAD_MUTEX_INITIALIZER; static char hUrl[4096], hHash[24]; static double hSize;
@@ -292,7 +309,7 @@ static void *find_main(void *a) { plat_thread_background(5);
   char ex[600] = "", n[32]; if (q->hash[0]) addon_extra_add(ex, sizeof ex, "videoHash", q->hash);
   if (q->size > 0) { snprintf(n, sizeof n, "%.0f", q->size); addon_extra_add(ex, sizeof ex, "videoSize", n); }
   if (q->filename[0]) addon_extra_add(ex, sizeof ex, "filename", q->filename);
-  fprintf(stderr, "[subs] asking %d source(s) for %s %s (%s)\n", f->nsrc, q->type, q->vid, ex[0] ? ex : "no file facts");
+  fprintf(stderr, "[subs] asking %d source(s) for %s (%s%s%s%s)\n", f->nsrc, q->type, q->hash[0] ? "hash " : "", q->size > 0 ? "size " : "", q->filename[0] ? "file name" : "", q->hash[0] || q->size > 0 || q->filename[0] ? "" : "no file facts"); /* (which facts were sent, never the file's name, hash or the title: a shared log does not say what was watched from them) */
   int ns = f->nsrc; /* f may be gone once the last request is out */
   for (int i = 0; i < ns; i++) { SubJob *j = calloc(1, sizeof *j); char url[2400]; addon_url(url, sizeof url, f->src[i].base, "subtitles", q->type, q->vid, ex);
     j->url = strdup(url); j->list = 1; j->fq = f; j->src = i; job_start(j); }

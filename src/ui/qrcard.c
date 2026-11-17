@@ -21,6 +21,8 @@
 #define PAD_T 48.0f
 #define PAD_B 42.0f
 #define POLL 1.5
+#define BADGE 76.0f    /* a service's mark */
+#define CODE_PX 64     /* a code to type */
 static Screen *under; /* the overlay it opened over (the streams sheet) */
 static struct {
   int open, closing, done; QrCardOpts o; char title[256], sub[400], url[600], shown[600], doneTitle[200], doneSub[300];
@@ -37,6 +39,7 @@ static void layout(void) { /* heights once per state: never measured per frame *
   Q.doneSubLines = Q.doneSub[0] ? (float)text_wrap_count(Q.doneSub, w, 6, 24, 400, 0) : 0;
   float h = PAD_T;
   if (Q.done) { h += 96 + 22 + text_line_height(38); if (Q.doneSub[0]) h += 12 + Q.doneSubLines * p_lh() + 28; }
+  else if (Q.o.code) h += (Q.o.badge ? BADGE + 26 : 0) + text_line_height(CODE_PX) + 10 + Q.subLines * p_lh() + 26 + 280 + 18 + text_line_height(22); /* the mark, the code, one line, the QR, the way out */
   else h += text_line_height(38) + 12 + Q.subLines * p_lh() + 28 + 280 + 18 + text_line_height(23) + 18 + text_line_height(22);
   Q.h = h + PAD_B;
 }
@@ -47,6 +50,7 @@ static void finish(void) {
 void qrcard_close(void) { if (!Q.open || Q.closing) return; Q.closing = 1; timer_start(&Q.out, 0.22f); } /* fades away, a little quicker than it came */
 static int key(int k) { (void)k; if (Q.closing) finish(); else qrcard_close(); return 1; } /* any key, Back too */
 static void tick(float dt) {
+  if (!Q.open) return; /* (gone: the app keeps ticking overlays it has shown; a closed card asks nothing more) */
   timer_tick(&Q.in, dt); timer_tick(&Q.tick, dt); sglass_tick(&glass, dt);
   if (Q.closing) { if (timer_tick(&Q.out, dt) >= 1) finish(); return; }
   double now = app_now();
@@ -67,9 +71,18 @@ static void draw(void) {
   float yy = y + PAD_T;
   if (Q.done) {
     float ta = Q.tick.on ? timer_x(&Q.tick) : 1; /* the tick fades in */
-    gfx_opacity_push(1 - powf(1 - ta, 2)); gfx_circle(cx, yy + 48, 48, ACC); icon_draw("check", cx - 28, yy + 48 - 28, 56, WHITE_A(255)); gfx_opacity_pop();
+    gfx_opacity_push(1 - powf(1 - ta, 2)); gfx_circle(cx, yy + 48, 48, Q.o.badgeBg ? Q.o.badgeBg : ACC); icon_draw("check", cx - 28, yy + 48 - 28, 56, WHITE_A(255)); gfx_opacity_pop();
     yy += 96 + 22; text_draw(Q.doneTitle, cx, yy, 38, 700, WHITE_A(255), -0.4f, w, ALIGN_CENTER); yy += text_line_height(38);
     if (Q.doneSub[0]) text_draw_wrapped(Q.doneSub, cx, yy + 12, w, 6, 24, 400, WHITE_A(214), 0, ALIGN_CENTER, p_lh());
+  } else if (Q.o.code) { /* a code to type: the service's mark, the code large and spaced, one short line, the QR */
+    if (Q.o.badge) { gfx_rrect(cx - BADGE / 2, yy, BADGE, BADGE, BADGE * 0.225f, Q.o.badgeBg); icon_draw(Q.o.badge, cx - BADGE * 0.3f, yy + BADGE * 0.2f, BADGE * 0.6f, WHITE_A(255)); yy += BADGE + 26; }
+    text_draw(Q.title, cx, yy, CODE_PX, 800, WHITE_A(255), 6.0f, w, ALIGN_CENTER); yy += text_line_height(CODE_PX) + 10;
+    if (Q.sub[0]) text_draw_wrapped(Q.sub, cx, yy, w, 6, 24, 400, WHITE_A(199), 0, ALIGN_CENTER, p_lh());
+    yy += Q.subLines * p_lh() + 26;
+    float qx = cx - 140;
+    if (!Q.url[0] || !qr_draw(Q.url, qx, yy, 280, 18, 10)) { gfx_rrect(qx, yy, 280, 280, 18, WHITE_A(255)); text_draw_wrapped(T("No internet connection"), cx, yy + 140 - text_line_height(24), 240, 2, 24, 600, RGB(0x16, 0x14, 0x1d), 0, ALIGN_CENTER, p_lh()); }
+    yy += 280;
+    { const char *cl = T("Close"); float kw = 38 + 10 + text_width(cl, 22, 600, 0); key_hint(cx - kw / 2, yy + 18 + 19, K_OK, cl, WHITE_A(209), 0); }
   } else {
     text_draw(Q.title, cx, yy, 38, 700, WHITE_A(255), -0.4f, w, ALIGN_CENTER); yy += text_line_height(38) + 12;
     if (Q.sub[0]) text_draw_wrapped(Q.sub, cx, yy, w, 6, 24, 400, WHITE_A(214), 0, ALIGN_CENTER, p_lh());

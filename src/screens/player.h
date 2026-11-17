@@ -17,6 +17,7 @@ void player_close(void);
 int  player_waiting(void);
 /* "Play the best stream automatically": the title art and the wait line at once, Back cancels, the pick plays */
 void player_choose_best(const char *type, const char *id, const char *vid);
+void player_cast_best(const char *type, const char *id, const char *vid, double pos); /* a phone's playbest: the same choice, then from pos (0: from the start) */
 int  player_open(void);
 int  player_nerd_lines(char (*out)[120], int max); /* Stats for nerds: what plays and how */
 int  player_art_full(void);
@@ -48,6 +49,19 @@ void player_next_art(const char *name, const char *poster, const char *bg, const
 void player_play_at(const Stream *s, const char *type, const char *id, const char *vid, double pos);
 void player_cast(int cmd, double pos);
 int  player_cast_state(double *pos, double *dur, char *title, int cap);
+int  player_cast_previews(int *pct, int *target, int *eta); /* waiting for the seek previews: 1 and how far, else 0 */
+int player_cast_sync(char *st, int cap);  /* Sync for a phone's remote: 1 running, 0 done, -1 nothing to tell */
+const char *player_p2p_line(void);       /* a torrent's peers and speed ("" when none) */
+void player_cast_chips(void *arr);         /* the info line's chips into a cJSON array, for a phone's remote */
+void player_cast_info(char *out, int cap); /* the stream in a few words, for a phone's remote */
+void player_cast_ident(char *type, int tc, char *id, int ic, char *vid, int vc); /* what plays (a phone's remote follows it) */
 char *player_cast_tracks(void);                               /* the subtitles and audio as a "tracks" message (malloc'd), NULL when nothing plays */
 void player_cast_track(const char *kind, const char *id, int ms); /* "sub" id|"off", "audio" id, "subdelay" ms: as a pick in the trays */   /* a film open, its picture up and paused */
+void player_title_hint(const Item *it);
+void player_quiet_next(void);
+void player_adopt_next(const char *src, float x, float y, float w, float h, float radius); /* the next play is the preview playing in that box: taken as it plays, grown to the screen */
+int player_page_morphing(void); /* a preview growing to the screen or back into its box: the page under it is still, drawn once */
+float player_page_alpha(void);  /* the page under the player: faded as a preview grows */
+void player_zap_begin(void);   /* switching channels full screen: the picture fades to black until the next one runs */
+void player_zap_end(void);     /* the switch found nothing: the old picture fades back */   /* the next play is a switch of channel: no art while it loads (the corner pill says it) */ /* a channel's name and pictures from its card, until its details come */
 #endif

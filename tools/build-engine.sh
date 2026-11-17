@@ -53,7 +53,7 @@ T
 B="$W/build-$TARGET"
 SSL=(-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON); SSLLIB=()
 if [ "$TARGET" = mac ]; then OSSL="$(brew --prefix openssl@3)"; SSL=(-DOPENSSL_ROOT_DIR="$OSSL"); SSLLIB=("$OSSL/lib/libssl.a" "$OSSL/lib/libcrypto.a"); export PKG_CONFIG_PATH="$OSSL/lib/pkgconfig"; fi   # the engine needs it on macOS (system trust store)
-FL="-ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden -D_LARGEFILE64_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app"   # no local paths in the library (source names in asserts)
+FL="-ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden -D_LARGEFILE64_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -ffile-prefix-map=$W=/engine -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app -ffile-prefix-map=$W=/engine"   # no local paths in the library (source names in asserts)
 if [ "$TARGET" = mac ]; then mkdir -p "$W/ossl3"; ln -sfn "$OSSL/include/openssl" "$W/ossl3/openssl"; FL="$FL -I$W/ossl3"; fi   # OpenSSL 3 ahead of the compiler's own /opt/homebrew/include (OpenSSL 4 there does not build the pinned libtorrent; the same folder given twice is dropped, hence the link)
 [ "$TARGET" = mac ] && [ -n "${ENGINE_MAC_PREBUILT:-}" ] || cmake -S "$SRC" -B "$B" -G Ninja -DNUVIO_ENGINE_ENABLE_LIBTORRENT=ON -DNUVIO_ENGINE_BUILD_TESTS=OFF \
   -DFETCHCONTENT_SOURCE_DIR_NUVIO_BOOST="$DEPS/nuvio_boost-src" -DFETCHCONTENT_SOURCE_DIR_NUVIO_LIBTORRENT="$DEPS/nuvio_libtorrent-src" \
@@ -67,7 +67,8 @@ LT="$B/_deps/nuvio_libtorrent-build/libtorrent-rasterbar.a"
 if [ "$TARGET" = webos ]; then
   echo '{ global: sbe_get; local: *; };' > "$TC/exports.map"
   "$TC/c++" -std=c++20 -Os -fPIC $FL -shared -I"$SRC/include" -I"$ROOT/src" "$ROOT/tools/engine/sbengine.cpp" \
-    "$B/libnuvio_engine.a" "$LT" -Wl,--gc-sections -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbengine.so -lpthread -o "$OUT"
+    "$B/libnuvio_engine.a" "$LT" -Wl,--gc-sections -Wl,-T,"$ROOT/tools/webos-relocs.ld" -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbengine.so -lpthread -o "$OUT"
+  python3 "$ROOT/tools/relocs-check.py" "$OUT"   # (webOS 3 starts it only with them together)
 else
   "$TC/c++" -std=c++20 -Os $FL -shared -I"$SRC/include" -I"$ROOT/src" "$ROOT/tools/engine/sbengine.cpp" \
     "$B/libnuvio_engine.a" "$LT" "${SSLLIB[@]}" -framework Security -framework CoreFoundation -framework SystemConfiguration \

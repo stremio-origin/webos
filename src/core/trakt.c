@@ -46,6 +46,7 @@ int trakt_builtin(void) { if (!inited) trakt_init(); return builtin[0] != 0; }
 int trakt_has_key(void) { drain(); return key[0] || builtin[0]; }
 void trakt_key_clear(void) { drain(); remove(keyPath); key[0] = 0; gen++; }
 unsigned trakt_generation(void) { drain(); return gen; }
+const char *trakt_client_id(void) { drain(); return key[0] ? key : builtin; }
 /* Trakt's "too many requests" (429): a minute with no calls, the reviews show the other sources meanwhile */
 static time_t pausedTo;
 typedef struct { NetCb cb; void *ud; } Fwd;

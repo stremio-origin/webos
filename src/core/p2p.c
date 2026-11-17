@@ -72,7 +72,7 @@ static int relocating; static volatile int relocReady; static Prof relocTo; stat
 /* the one torrent being resolved / played */
 static struct { int on; char ih[41], magnet[4096]; int want; uint32_t idx; uint64_t size; double t0; P2pCb cb; void *ud; char status[256]; int stage; } R;
 /* the active one, for stats, pacing and the reason line */
-static struct { char ih[41]; uint64_t size, lastBytes; double lastT, rate, dur, bps; int calm, gentle, playedOnce; double startT0, stallT0, lastWatch, lastReason, reasonLogT, lastReport; int reasonKind; char reason[200]; } A;
+static struct { char ih[41]; uint64_t size, lastBytes; double lastT, rate, dur, bps; int calm, gentle, playedOnce; double startT0, stallT0, lastWatch, lastReason, reasonLogT, lastReport; int reasonKind; char reason[200]; double usbSaidAt; uint64_t refetchSeen; } A; /* usbSaidAt: when the storage hint was last said (once in 10 min at most); refetchSeen: the engine's refetched pieces at the last look */
 
 static double now_s(void) { return SDL_GetTicks() / 1000.0; }
 static double idle_limit(void) { const char *e = getenv("SB_P2PIDLE"); return e ? atof(e) : 300; } /* SB_P2PIDLE=5: development, stop cycles */
@@ -160,6 +160,9 @@ static long clamp_in(const Prof *P, long want, long room) {
   long w = want; if (w > P->wmax) w = P->wmax; if (w > room) w = room; if (w < W_FLOOR) w = W_FLOOR; return w;
 }
 static long clamp_window(long want, long room) { return clamp_in(&PF, want, room); }
+/* short of room: the window smaller than it would be with room enough (a film bigger than a USB drive's 8 GB cap is not
+   short: that window is all it ever takes) */
+static int low_of(const Prof *P, long w) { long full = P->target < P->wmax ? P->target : P->wmax; return P->flashShort || w < full; }
 
 /* runs on a thread (the engine's start, a move): probes write to each place */
 static void choose_profile(Prof *P) {
@@ -198,7 +201,7 @@ static void choose_profile(Prof *P) {
   if (pick == 0 && ram) rmdir(ram); else if (pick == 1) rmdir(fr); /* the probe's empty folder where the window is not */
   if (P->budget < W_FLOOR) P->budget = W_FLOOR; /* never "not possible": the smallest window, wherever there is most room */
   P->target = want_window(0); P->window = clamp_in(P, P->target, P->budget);
-  P->lowStorage = P->flashShort || P->window < P->target;
+  P->lowStorage = low_of(P, P->window);
   char fs[96], rs[96];
   if (fOk) snprintf(fs, sizeof fs, "%ld MB free, keeps %ld -> %ld MB", fFree, fRes, fBud); else snprintf(fs, sizeof fs, "not usable");
   if (ram) snprintf(rs, sizeof rs, "%s %ld MB free, keeps %ld -> %ld MB", rKind == LOC_RAM ? "tmpfs" : "disk", rFree, rRes, rBud); else snprintf(rs, sizeof rs, "not usable");
@@ -207,6 +210,18 @@ static void choose_profile(Prof *P) {
     P->window, P->budget < P->wmax ? P->budget : P->wmax, P->lowStorage ? " (low storage)" : "");
 }
 
+/* Settings > Playback > Torrent connections, TCP only: peers come in over TCP alone (the engine never dials out over uTP;
+   peers coming in over it share one UDP socket, sized by recv_socket_buffer_size, and on some mobile 4G / 5G routers that
+   traffic crawls). Finding peers (DHT, UDP trackers) is unchanged. The receive buffer stays the tier's own: libtorrent gives
+   it to every peer's socket, and 256 KB already carries about 20 Mb/s a peer at a 5G router's 100 ms */
+static int tcp_only(void) { return !strcmp(store_get("p2pTcpOnly", "auto"), "tcp"); }
+static int recv_buffer(void) { return PF.tier == 0 ? 131072 : PF.tier == 1 ? 262144 : 0; }
+static void apply_connections(int changed) {
+  int tcp = tcp_only(); E->setting("enable_outgoing_utp", 0); E->setting("enable_incoming_utp", !tcp);
+  if (changed) E->setting("recv_socket_buffer_size", recv_buffer());
+  if (tcp || changed) { char rb[24]; if (recv_buffer()) snprintf(rb, sizeof rb, "%d KB", recv_buffer() / 1024); else snprintf(rb, sizeof rb, "the system's"); fprintf(stderr, "[p2p] connections: %s, receive buffer %s\n", tcp ? "TCP only" : "automatic", rb); }
+}
+void p2p_connections_changed(void) { if (E && ENG() == ENG_ON) apply_connections(1); } /* (from Settings: at once, for the next peers) */
 /* libtorrent for the device's memory: fewer connections and peers, small socket and send buffers, a short disk queue */
 static void apply_memory_settings(void) {
   static const struct { const char *n; int v[3]; } S[] = {
@@ -218,7 +233,7 @@ static void apply_memory_settings(void) {
     { "send_buffer_watermark",        { 196608, 393216, 524288 } },
     { "send_buffer_low_watermark",    { 32768, 65536, 10240 * 10 } },
     { "send_buffer_watermark_factor", {   50,    50,    50 } },
-    { "recv_socket_buffer_size",      { 131072, 262144, 0 } },   /* 0: the system's own */
+    { "recv_socket_buffer_size",      { 131072, 262144, 0 } },   /* 0: the system's own (recv_buffer) */
     { "send_socket_buffer_size",      { 65536, 131072, 0 } },
     { "max_queued_disk_bytes",        { 524288, 1048576, 1048576 } },
     { "max_allowed_in_request_queue", {   64,   250,   500 } },
@@ -233,9 +248,11 @@ static void apply_memory_settings(void) {
   };
   char bad[300] = ""; int nb = 0;
   for (unsigned i = 0; i < sizeof S / sizeof *S; i++) { int v = S[i].v[PF.tier];
+    if (!strcmp(S[i].n, "recv_socket_buffer_size")) v = recv_buffer();
     if (!strcmp(S[i].n, "connection_speed") && PF.cpus <= 2 && v > 15) v = 15; /* a slow CPU: fewer handshakes a second */
     if (E->setting(S[i].n, v)) nb += snprintf(bad + nb, sizeof bad - nb > 0 ? sizeof bad - nb : 0, " %s", S[i].n); }
   if (bad[0]) fprintf(stderr, "[p2p] settings not taken:%s\n", bad);
+  apply_connections(0);
 }
 static uint64_t mem_cache_bytes(void) { return (PF.tier == 0 ? 4 : PF.tier == 1 ? 8 : 16) * MB; }
 static uint64_t upload_bps(void) { return (PF.tier == 0 ? 256 : PF.tier == 1 ? 512 : 1024) * 1024ull; }
@@ -274,7 +291,7 @@ static void watch_usb(double t) {
     if (!__atomic_load_n(&relocReady, __ATOMIC_ACQUIRE)) return;
     relocating = 0; relocReady = 0;
     if (relocRun != engRun || !strcmp(relocTo.root, PF.root)) return; /* worked out for an engine that stopped since, or no change */
-    Prof n = relocTo; n.target = want_for(&n, A.bps, A.size); n.window = clamp_in(&n, n.target, n.budget); n.lowStorage = n.flashShort || n.window < n.target;
+    Prof n = relocTo; n.target = want_for(&n, A.bps, A.size); n.window = clamp_in(&n, n.target, n.budget); n.lowStorage = low_of(&n, n.window);
     if (E->relocate(n.root, (uint64_t)n.seg * MB)) { fprintf(stderr, "[p2p] window could not move to %s\n", n.root); return; }
     char *old = strdup(PF.root); int was = PF.loc; long ww = PF.window;
     PF = n; snprintf(cacheDir, sizeof cacheDir, "%s", PF.root); E->window((uint64_t)PF.window * MB); A.lastWatch = 0; relocAt = now_s();
@@ -284,6 +301,9 @@ static void watch_usb(double t) {
   unsigned s = usb_serial(); if (s == relocSerial && t < relocLook) return; relocSerial = s; relocLook = t + 1;
   UsbDrive d; int want = usb_cache_on(&d);
   int leave = PF.loc == LOC_USB && (!want || strcmp(d.mnt, PF.usbMnt));
+  /* the drive missing from one look while its folder is still there (a Samsung lists its drives again on coming back to
+     the front): left only after 5 s of that; a drive pulled out takes the folder with it and is left at once */
+  static double missSince; if (!leave) missSince = 0; else { if (missSince <= 0) missSince = t; if (t - missSince < 5 && !access(PF.root, W_OK)) leave = 0; }
   int enter = PF.loc != LOC_USB && want && !A.ih[0] && (!R.on || R.stage == 0);
   if (!leave && !enter) return;
   relocating = 1; relocReady = 0; relocRun = engRun;
@@ -307,7 +327,22 @@ static void fail(const char *msg) {
   if (cb) cb(ud, NULL, msg, 0);
 }
 static int hexval(int c) { return isdigit(c) ? c - '0' : tolower(c) - 'a' + 10; }
+/* a torrent kept through a switch inside the player: the next episode is often in the same one (a season pack), and
+   taking it out and adding it again at once threw its pieces and peers away while the engine was still letting it go
+   (it struggled or crawled until the player was left and opened again). Kept until the next source is known: the same
+   torrent goes on as it is, another one takes its place, none in 20 s: it goes */
+static char keepIh[41]; static double keepAt;
+static void keep_drop(void) { if (keepIh[0] && E && ENG() == ENG_ON) { E->remove(keepIh); fprintf(stderr, "[p2p] the last torrent let go\n"); } keepIh[0] = 0; }
+void p2p_player_switching(void) {
+  const char *ih = A.ih[0] ? A.ih : R.on ? R.ih : ""; char was[41]; snprintf(was, sizeof was, "%s", ih);
+  if (R.on) { R.on = 0; R.status[0] = 0; R.cb = NULL; } /* (a resolve in flight: its answer not wanted, the torrent kept as the playing one is) */
+  if (keepIh[0] && strcmp(keepIh, was)) keep_drop(); /* (one kept from an earlier switch: it goes) */
+  if (was[0] && E && ENG() == ENG_ON) { snprintf(keepIh, sizeof keepIh, "%s", was); keepAt = now_s(); fprintf(stderr, "[p2p] switching sources: %s kept for the next one\n", was); } else if (!was[0]) keepIh[0] = 0;
+  memset(&A, 0, sizeof A); idleSince = now_s();
+}
 void p2p_resolve(const char *url, P2pCb cb, void *ud) {
+  { char ni[41] = ""; int k = 0; const char *u = url + 6; while (k < 40 && isxdigit((unsigned char)u[k])) { ni[k] = (char)tolower((unsigned char)u[k]); k++; } ni[k] = 0;
+    if (keepIh[0]) { if (!strcmp(keepIh, ni)) fprintf(stderr, "[p2p] the same torrent as before: it goes on as it is\n"); else keep_drop(); keepIh[0] = 0; } }
   memset(&R, 0, sizeof R); R.cb = cb; R.ud = ud; R.t0 = now_s();
   memset(&A, 0, sizeof A); A.startT0 = R.t0;
   /* p2p://<ih>/<idx>?tr=<encoded>&tr=... */
@@ -379,7 +414,7 @@ static void watch_room(double t) {
     fprintf(stderr, "[p2p] buffer: %ld MB in %s (window %ld MB, freed %llu MB, refetched %llu pieces), %ld MB free there, %u peers, %.1f MB/s, engine cache %llu MB%s\n", resident, loc_name(PF.loc), PF.window,
       (unsigned long long)(st.freed / MB), (unsigned long long)st.refetched, fr, st.peers, A.rate / 1e6, (unsigned long long)(st.mem_cache_used / MB), st.window_unsupported ? ", STORAGE CANNOT FREE PIECES" : ""); }
   long w = clamp_window(PF.target, room);
-  int low = PF.flashShort || w < PF.target;
+  int low = low_of(&PF, w);
   if (low != PF.lowStorage) PF.lowStorage = low;
   long step = PF.loc == LOC_USB ? 128 : 8; /* a USB drive keeps 30 % free and frees in 16 MB segments: only changes worth it */
   if (w != PF.window && (w < PF.window - (PF.loc == LOC_USB ? step : 0) || w - PF.window >= step)) { /* shrink at once, grow in steps worth a change */
@@ -416,7 +451,15 @@ static int reason_now(char *o, size_t n) { /* the kind of reason (for the log), 
   double need = A.size > 0 && A.dur > 60 ? (double)A.size / A.dur : 0;
   if (need > 0 && A.rate < need * 0.9) { fmt_mbs(A.rate, r, sizeof r); fmt_mbs(need, v, sizeof v); snprintf(o, n, "%s", T2("Slow source: {r} for a {v} video", "r", r, "v", v)); return 4; }
   if (st.peers < 5) { fmt_rate(A.rate, r, sizeof r); snprintf(pe, sizeof pe, "%u", st.peers); snprintf(o, n, "%s", T2("Few peers ({n}) · {r}", "n", pe, "r", r)); return 5; }
-  if (PF.lowStorage) { snprintf(o, n, "%s", PF.loc == LOC_RAM ? T("Low storage: streaming from memory") : T("Low storage: small buffer")); return 6; }
+  { /* storage: said only when it is what holds the film back, and only now and then. Room short of the ideal is the
+       usual state on a TV and harmless; it matters once a playing film stalls and the engine is fetching again pieces
+       it had to let go before they played, or the buffer holds under 40 s of the film. Then said for 8 s, at most once
+       in 10 minutes: a drive helps such a stall, it does not make a poor torrent good */
+    int refetching = st.refetched > A.refetchSeen; A.refetchSeen = st.refetched; double t = now_s();
+    double winS = need > 0 && PF.window > 0 ? PF.window * (double)MB / need : 1e9;
+    int crit = PF.lowStorage && A.playedOnce && (refetching || winS < 40);
+    if (crit && (A.usbSaidAt <= 0 || t - A.usbSaidAt >= 600)) A.usbSaidAt = t;
+    if (A.usbSaidAt > 0 && t - A.usbSaidAt < 8) { snprintf(o, n, "%s", PF.loc != LOC_USB ? T("Low storage: plug in a USB drive") : T("Low storage: small buffer")); return 6; } }
   snprintf(o, n, "%s", T("Waiting for the next pieces…"));
   return 7;
 }
@@ -439,12 +482,14 @@ void p2p_shutdown(void) {
   if (ENG() == ENG_ON) { Uint32 t0 = SDL_GetTicks(); E->remove_all(); /* no torrent state left behind */ E->stop(); rm_tree(cacheDir); rmdir(cacheDir); ENG_SET(ENG_OFF); fprintf(stderr, "[p2p] engine stopped at exit in %u ms\n", SDL_GetTicks() - t0); }
 }
 void p2p_player_closed(void) {
+  keepIh[0] = 0; /* (every torrent goes below) */
   if (R.on) p2p_cancel();
   if (E && ENG() == ENG_ON) E->remove_all(); /* the engine deletes each torrent's payload with it */
   memset(&A, 0, sizeof A); idleSince = now_s();
 }
 void p2p_pump(void) {
   usb_pump();
+  if (keepIh[0] && !R.on && now_s() - keepAt > 20) keep_drop(); /* (the next source was no torrent: the kept one goes) */
   static int swept; if (!swept) { swept = 1; __atomic_store_n(&cleaning, 1, __ATOMIC_RELEASE); pthread_t th; if (!pthread_create(&th, NULL, sweep, NULL)) pthread_detach(th); else cleaning = 0; }
   double t = now_s(); int es = ENG();
   if (E && es == ENG_ON && (A.ih[0] || R.on)) { /* the measured rate: bytes received between looks, smoothed */

@@ -6,5 +6,6 @@
 "Low storage: small buffer": "Мало места: маленький буфер",
 "Waiting for the next pieces…": "Ожидание следующих частей…",
 "{n} MB/s": "{n} МБ/с",
-"{n} KB/s": "{n} КБ/с"
+"{n} KB/s": "{n} КБ/с",
+"Low storage: plug in a USB drive": "Мало места: подключите USB-накопитель"
 }

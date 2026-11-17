@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Pregledi na traci za premotavanje",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Slike iz filma iznad trake dok se krećete. Isključeno: ne prave se",
+ "Previews for torrents": "Pregledi za torente",
+ "Slower than debrid, up to 500 MB extra per stream.": "Sporije od debrida, do 500 MB dodatno po strimu.",
+ "Previews {n}%": "Pregledi {n}%",
+ "Previews ready": "Pregledi su spremni",
+ "Uses more data, on mobile data too.": "Troši više podataka, i na mobilnim podacima.",
+ "Getting the seek bar’s previews ready… {n}%": "Припремамо прегледе на траци… {n}%",
+ "Play now": "Пусти сада",
+ "Load previews before playing": "Учитај прегледе пре пуштања",
+ "about {n} s left": "још око {n} с",
+ "about {n} min left": "још око {n} мин",
+ "The film starts once this much of it has its previews; OK starts it at once": "Филм креће када толики део има прегледе; OK га одмах покреће"
+}

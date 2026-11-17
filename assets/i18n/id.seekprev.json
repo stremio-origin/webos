@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Pratinjau di bilah putar",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Gambar dari film di atas bilah saat Anda menggeser. Mati: tidak ada yang dibuat",
+ "Previews for torrents": "Pratinjau untuk torrent",
+ "Slower than debrid, up to 500 MB extra per stream.": "Lebih lambat dari debrid, hingga 500 MB tambahan per stream.",
+ "Previews {n}%": "Pratinjau {n}%",
+ "Previews ready": "Pratinjau siap",
+ "Uses more data, on mobile data too.": "Memakai lebih banyak data, juga di data seluler.",
+ "Getting the seek bar’s previews ready… {n}%": "Menyiapkan pratinjau bilah putar… {n}%",
+ "Play now": "Putar sekarang",
+ "Load previews before playing": "Muat pratinjau sebelum diputar",
+ "about {n} s left": "sekitar {n} dtk lagi",
+ "about {n} min left": "sekitar {n} mnt lagi",
+ "The film starts once this much of it has its previews; OK starts it at once": "Film dimulai setelah bagian ini punya pratinjau; OK langsung memutarnya"
+}
