@@ -1,11 +1,1 @@
-{
-  "Few peers ({n}) · {r}": "Kevés peer ({n}) · {r}",
-  "Getting the file list…": "Fájllista lekérése…",
-  "Low storage: small buffer": "Kevés tárhely: kis puffer",
-  "Low storage: streaming from memory": "Kevés tárhely: streamelés a memóriából",
-  "Slow source: {r} for a {v} video": "Lassú forrás: {r}, a videóhoz {v} kell",
-  "Waiting for the next pieces…": "Várakozás a következő darabokra…",
-  "{n} KB/s": "{n} KB/s",
-  "{n} MB/s": "{n} MB/s",
-  "Low storage: plug in a USB drive": "Kevés tárhely: Csatlakoztasson USB-meghajtót"
-}
+{"Few peers ({n}) · {r}":"Kevés peer ({n}) · {r}","Getting the file list…":"Fájllista lekérése…","Low storage: small buffer":"Kevés tárhely: kis puffer","Low storage: streaming from memory":"Kevés tárhely: streamelés a memóriából","Slow source: {r} for a {v} video":"Lassú forrás: {r}, a videóhoz {v} kell","Waiting for the next pieces…":"Várakozás a következő darabokra…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s","Low storage: plug in a USB drive":"Kevés tárhely: Csatlakoztasson USB-meghajtót"}
