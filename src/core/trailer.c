@@ -51,7 +51,7 @@ static const char *LANGS[][2] = { { "eng", "English" }, { "spa", "Spanish" }, { 
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 /* a caption's language: the "/en-US-…" part of its URL, else its display name, else English */
 static void guess_lang(const char *name, const char *url, char *out) {
-  static const char *two[][2] = { { "en", "eng" }, { "es", "spa" }, { "fr", "fre" }, { "de", "ger" }, { "it", "ita" }, { "pt", "por" }, { "ru", "rus" },
+  static const char *two[][2] = { { "en", "eng" }, { "es", "spa" }, { "fr", "fre" }, { "de", "ger" }, { "it", "ita" }, { "pt", "por" }, { "pt-BR", "por" }, { "ru", "rus" },
     { "ar", "ara" }, { "nl", "dut" }, { "pl", "pol" }, { "tr", "tur" }, { "sv", "swe" }, { "ro", "rum" }, { "el", "gre" }, { "he", "heb" },
     { "hi", "hin" }, { "ko", "kor" }, { "ja", "jpn" }, { "zh", "chi" },
     { "hu", "hun" }, { "cs", "cze" }, { "sk", "slo" }, { "uk", "ukr" }, { "bg", "bul" }, { "sr", "srp" }, { "hr", "hrv" }, { "da", "dan" }, { "no", "nor" },
