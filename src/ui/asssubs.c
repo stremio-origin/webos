@@ -1,6 +1,7 @@
-/* Styled ASS / SSA subtitles through libass.
+/* Styled ASS / SSA subtitles through libass, for an embedded track or a whole subtitle file (an addon's, any source).
 
-   The thread: feeds libass the script header once and each event once (as the subtitle reader brings them), and renders
+   The thread: feeds libass the script header once and each event once (as the subtitle reader brings them), or a whole
+   file at once, and renders
    only when what shows changes: at the next event start or end, after a seek, a new event that shows now, a new size;
    while an event with an animation (\t, \move, \k, \fad) shows, at the picture's rate, halved while a render takes over
    20 ms (down to a quarter). Renders above 100 ms for 3 s straight give up, not counting the 5 s after opening or a
@@ -32,6 +33,8 @@
 #include <stdarg.h>
 
 #define TILE 1000
+static volatile double assLine; /* Settings › Subtitles › Position for styled lines: libass's line position, 0 = where the script puts them */
+void asssubs_set_line(double pct) { assLine = pct < 0 ? 0 : pct > 100 ? 100 : pct; }
 static volatile double assRenderMs; /* the renders' running average, for Stats for nerds */
 double asssubs_render_ms(void) { return assRenderMs; }
 
@@ -39,9 +42,9 @@ typedef struct { int x, y, w, h; uint32_t color; unsigned char *bm; } Piece;   /
 typedef struct { Piece *p; int n, posOnly; int fw, fh; } Frame;
 typedef struct Inst {
   pthread_t th; pthread_mutex_t mu; pthread_cond_t cv; int dead;
-  MkvSession *mkv; int track; char url[4096], lang[16];
+  MkvSession *mkv; int track; char url[4096], lang[16]; char *script; /* script: a whole subtitle file instead of a track */
   /* from the main thread (under mu) */
-  double t, tAt; int playing; double fps; unsigned gen; int fw, fh, vw, vh; float vx, vy, vww, vhh, scale;
+  double t, tAt, rate; int playing; double fps; unsigned gen; int fw, fh, vw, vh; float vx, vy, vww, vhh, scale; int sample; double line; /* sample: the style being set: with no line at t, the file's nearest line shown in its own style */
   /* to it */
   Frame *pending; int slow, fail;
 } Inst;
@@ -58,6 +61,8 @@ static int ebml_size(const unsigned char *b, int n, int o, long long *sz) { if (
 static int read_at(NetRange *r, const char *url, long long at, long len, unsigned char **out, long *got) {
   long long total; int st; *out = NULL; *got = 0; return net_range_get(r, url, at, len, out, got, &total, &st, 15000) == NR_OK && *got > 0;
 }
+/* Arabic letters (U+0600-U+06FF: Arabic, Persian, Urdu) in a line, as UTF-8 */
+static int has_arabic(const char *t) { for (; t && *t; t++) { unsigned char c = (unsigned char)*t; if (c >= 0xd8 && c <= 0xdb && ((unsigned char)t[1] & 0xc0) == 0x80) return 1; } return 0; }
 static int is_font(const char *name, const char *mime) {
   const char *e = strrchr(name, '.');
   return strstr(mime, "font") || strstr(mime, "truetype") || strstr(mime, "opentype") || (e && (!strcasecmp(e, ".ttf") || !strcasecmp(e, ".otf") || !strcasecmp(e, ".ttc")));
@@ -119,30 +124,40 @@ static void *run(void *arg) {
   ASS_Library *lib = ass_library_init(); if (lib) ass_set_message_cb(lib, ass_log, NULL);
   ASS_Renderer *rd = lib ? ass_renderer_init(lib) : NULL; ASS_Track *tr = lib ? ass_new_track(lib) : NULL;
   if (!rd || !tr) { fprintf(stderr, "[ass] libass would not start\n"); pthread_mutex_lock(&A->mu); A->fail = 1; pthread_mutex_unlock(&A->mu); goto out; }
-  ass_set_cache_limits(rd, 800, 12); ass_set_hinting(rd, ASS_HINTING_NONE); ass_set_shaper(rd, ASS_SHAPING_COMPLEX);
-  int fontsDone = 0; long long attach = -1; unsigned cursor = 0, gen = ~0u; int haveHeader = 0, fw = 0, fh = 0, vw = 0, vh = 0; float scale = 0;
-  long long nextAt = -1, lastNow = -1; int anim = 0; double slowSince = 0, warmAt = wall(); unsigned warmGen = ~0u; int level = 0;
+  ass_set_extract_fonts(lib, 1); /* (a script's own [Fonts]) */ ass_set_cache_limits(rd, 800, 12); ass_set_hinting(rd, ASS_HINTING_NONE); ass_set_shaper(rd, ASS_SHAPING_COMPLEX);
+  int fontsDone = 0, arScan = 0; long long attach = -1; /* (arScan: the lines already looked at for Arabic) */ unsigned cursor = 0, gen = ~0u; int haveHeader = 0, fw = 0, fh = 0, vw = 0, vh = 0; float scale = 0; double line = 0;
+  long long nextAt = -1, lastNow = -1; int anim = 0, lastSmp = 0; double slowSince = 0, warmAt = wall(); unsigned warmGen = ~0u; int level = 0;
   struct { int n, frames; double sum, max, at; } stat = { 0, 0, 0, 0, wall() }; /* a line in the log every 30 s while it renders */
   for (;;) {
     pthread_mutex_lock(&A->mu);
     if (A->dead) { pthread_mutex_unlock(&A->mu); break; }
-    double t = A->t + (A->playing ? wall() - A->tAt : 0), fps = A->fps > 1 ? A->fps : 24; int playing = A->playing; unsigned g = A->gen;
+    double t = A->t + (A->playing ? (wall() - A->tAt) * A->rate : 0), rate = A->rate, fps = A->fps > 1 ? A->fps : 24; int playing = A->playing; unsigned g = A->gen; int smp = A->sample;
     int nfw = A->fw, nfh = A->fh, nvw = A->vw, nvh = A->vh; float nsc = A->scale, vx = A->vx, vy = A->vy, vww = A->vww, vhh = A->vhh;
     int fed = 0;
-    if (!haveHeader && mkv_listed(A->mkv)) { mkv_style(A->mkv, A->track, 1); char *h = mkv_track_header(A->mkv, A->track); if (h) { ass_process_codec_private(tr, h, (int)strlen(h)); free(h); } haveHeader = 1; attach = mkv_attachments_at(A->mkv); }
-    if (haveHeader) fed = mkv_events_since(A->mkv, A->track, &cursor, feed, tr); /* (under the reader's own lock, quick) */
+    char *scr = haveHeader ? NULL : A->script; if (scr) A->script = NULL;
+    if (!haveHeader && A->mkv && mkv_listed(A->mkv)) { mkv_style(A->mkv, A->track, 1); char *h = mkv_track_header(A->mkv, A->track); if (h) { ass_process_codec_private(tr, h, (int)strlen(h)); free(h); } haveHeader = 1; attach = mkv_attachments_at(A->mkv); }
+    if (haveHeader && A->mkv) fed = mkv_events_since(A->mkv, A->track, &cursor, feed, tr); /* (under the reader's own lock, quick) */
     pthread_mutex_unlock(&A->mu);
+    if (scr) { ASS_Track *w = ass_read_memory(lib, scr, strlen(scr), NULL); free(scr); haveHeader = 1; /* (all of it: script info, styles, events; off the lock) */
+      if (w) { ass_free_track(tr); tr = w; fprintf(stderr, "[ass] the file: %d styles, %d events\n", tr->n_styles, tr->n_events); } else { fprintf(stderr, "[ass] the file could not be read: plain lines\n"); pthread_mutex_lock(&A->mu); A->fail = 2; pthread_mutex_unlock(&A->mu); goto out; } }
     if (!haveHeader || nfw <= 0) { pthread_mutex_lock(&A->mu); if (!A->dead) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_nsec += 200000000; if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; } pthread_cond_timedwait(&A->cv, &A->mu, &ts); } pthread_mutex_unlock(&A->mu); continue; }
     if (!fontsDone) { fontsDone = 1; ass_set_fonts(rd, font, fam, ASS_FONTPROVIDER_NONE, NULL, 0); /* first lines in the bundled font at once */
       if (attach >= 0 && load_fonts(A, lib, attach)) { ass_set_fonts(rd, font, fam, ASS_FONTPROVIDER_NONE, NULL, 1); gen = ~0u; } }
-    int resized = nfw != fw || nfh != fh || nvw != vw || nvh != vh || nsc != scale;
+    /* a track that doesn't say it is Arabic but has Arabic lines: Noto Sans Arabic from then on (it carries the Latin
+       letters too); in Inter, which has none, every Arabic letter showed as a box. Once, on the first such line */
+    if (!ar) for (; arScan < tr->n_events; arScan++) if (has_arabic(tr->events[arScan].Text)) {
+        ar = 1; snprintf(font, sizeof font, "%s/fonts/NotoSansArabic.ttf", plat_asset_dir()); snprintf(fam, sizeof fam, "Noto Sans Arabic");
+        ass_set_fonts(rd, font, fam, ASS_FONTPROVIDER_NONE, NULL, 1); gen = ~0u; fprintf(stderr, "[ass] Arabic lines in a track that doesn't say so: Noto Sans Arabic\n"); break; }
+    double nl = assLine; int lineCh = nl != line; if (lineCh) { line = nl; ass_set_line_position(rd, line); } /* the viewer's subtitle position: dialogue raised, signs where the film put them */
+    int resized = nfw != fw || nfh != fh || nvw != vw || nvh != vh || nsc != scale || lineCh;
     if (resized) { fw = nfw; fh = nfh; vw = nvw; vh = nvh; scale = nsc; ass_set_frame_size(rd, fw, fh); if (vw > 0 && vh > 0) ass_set_storage_size(rd, vw, vh);
       /* the picture's own rectangle inside the frame: the script is laid out over it */
       float k = fw / 1920.0f; int l = (int)(vx * k), tp = (int)(vy * (fh / 1080.0f)), rr = fw - (int)((vx + vww) * k), bb = fh - (int)((vy + vhh) * (fh / 1080.0f));
       ass_set_margins(rd, tp > 0 ? tp : 0, bb > 0 ? bb : 0, l > 0 ? l : 0, rr > 0 ? rr : 0); ass_set_use_margins(rd, 0); ass_set_font_scale(rd, scale > 0 ? scale : 1); }
     long long now = llround(t * 1000);
     int jumped = lastNow >= 0 && now < lastNow - 50; /* (seeks come as a new gen) */
-    int force = g != gen || resized || jumped || lastNow < 0, need;
+    int smpCh = smp != lastSmp; lastSmp = smp;
+    int force = g != gen || resized || jumped || lastNow < 0 || smpCh, need;
     if (force || fed) need = 1;                                                         /* (a new event may show now) */
     else if (!playing) need = 0;
     else if (anim) need = now >= lastNow + ((long long)(1000 / fps) << level) - 2;       /* an animation: the picture's rate */
@@ -150,6 +165,10 @@ static void *run(void *arg) {
     if (need) {
       int changed = 0; double t0 = wall();
       ASS_Image *im = ass_render_frame(rd, tr, now, &changed);
+      if (smp && !im && tr->n_events > 0) { long long best = -1, bd = -1; /* the style being set and no line now: the file's nearest line, in its own style, with the viewer's size, place and brightness */
+        for (int i = 0; i < tr->n_events; i++) { ASS_Event *e = &tr->events[i]; if (e->Duration <= 0 || !e->Text || !e->Text[0]) continue; long long mid = e->Start + (e->Duration > 1000 ? 500 : e->Duration / 2), d = mid > now ? mid - now : now - mid; if (bd < 0 || d < bd) { bd = d; best = mid; } }
+        if (best >= 0) { im = ass_render_frame(rd, tr, best, &changed); changed = 2; } }
+      if (smpCh) changed = 2;
       { static int slowDev = -1; if (slowDev < 0) slowDev = getenv("SB_ASS_SLOW") ? atoi(getenv("SB_ASS_SLOW")) : 0; if (slowDev) { struct timespec z = { 0, slowDev * 1000000L }; nanosleep(&z, NULL); } } /* development: SB_ASS_SLOW=<ms> per render */
       double ms = (wall() - t0) * 1000;
       if (g != gen || resized) changed = 2;
@@ -177,14 +196,14 @@ static void *run(void *arg) {
     }
     /* sleep until the next change (or the next animation step), a new event, or a nudge from the main thread */
     double wait = 0.25;
-    if (playing) { long long due = anim ? lastNow + ((long long)(1000 / fps) << level) : nextAt; if (due >= 0) { double w = (due - now) / 1000.0 + 0.0005; if (w < wait) wait = w; } }
+    if (playing) { long long due = anim ? lastNow + ((long long)(1000 / fps) << level) : nextAt; if (due >= 0) { double w = (due - now) / 1000.0 / (rate > 0 ? rate : 1) + 0.0005; if (w < wait) wait = w; } }
     if (!need && wait < 0.002) wait = 0.002; /* (never a spin while the moment comes) */
     if (wait > 0.001) { pthread_mutex_lock(&A->mu); if (!A->dead && A->gen == gen) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); long long ns = ts.tv_nsec + (long long)(wait * 1e9); ts.tv_sec += ns / 1000000000; ts.tv_nsec = ns % 1000000000; pthread_cond_timedwait(&A->cv, &A->mu, &ts); } pthread_mutex_unlock(&A->mu); }
   }
 out:
   if (tr) ass_free_track(tr); if (rd) ass_renderer_done(rd); if (lib) ass_library_done(lib);
   pthread_mutex_lock(&A->mu); int gone = A->dead; pthread_mutex_unlock(&A->mu);
-  if (gone) { frame_free(A->pending); pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A); } /* (else the main thread frees it when it closes) */
+  if (gone) { frame_free(A->pending); free(A->script); pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A); } /* (else the main thread frees it when it closes) */
   else { pthread_mutex_lock(&A->mu); A->dead = 2; pthread_mutex_unlock(&A->mu); }
   return NULL;
 }
@@ -204,34 +223,37 @@ static void upload(int i) { /* a piece into the atlas: whole, or as tiles of up 
     AtlasSlot *s = &shown.s[i * 4 + shown.ns[i]]; if (atlas_put(b, w, h, -1, 1, s)) shown.ns[i]++; free(tmp);
   }
 }
-void asssubs_open(MkvSession *mkv, int n, const char *url, const char *lang) {
+static void start(MkvSession *mkv, int n, char *script, const char *url, const char *lang) {
   asssubs_close(); failSaid = 0;
-  Inst *A = calloc(1, sizeof *A); if (!A) return;
-  A->mkv = mkv; A->track = n; snprintf(A->url, sizeof A->url, "%s", url ? url : ""); snprintf(A->lang, sizeof A->lang, "%s", lang ? lang : ""); A->tAt = wall(); A->scale = 1;
+  Inst *A = calloc(1, sizeof *A); if (!A) { free(script); return; }
+  A->mkv = mkv; A->track = n; A->script = script; snprintf(A->url, sizeof A->url, "%s", url ? url : ""); snprintf(A->lang, sizeof A->lang, "%s", lang ? lang : ""); A->tAt = wall(); A->scale = 1; A->rate = 1;
   pthread_mutex_init(&A->mu, NULL); pthread_cond_init(&A->cv, NULL);
-  if (pthread_create(&A->th, NULL, run, A)) { pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A); return; }
+  if (pthread_create(&A->th, NULL, run, A)) { pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A->script); free(A); return; }
   pthread_detach(A->th); cur = A;
-  fprintf(stderr, "[ass] styled: track %d (%s)\n", n, lang && *lang ? lang : "?");
+  if (script) fprintf(stderr, "[ass] styled: a subtitle file (%s)\n", lang && *lang ? lang : "?"); else fprintf(stderr, "[ass] styled: track %d (%s)\n", n, lang && *lang ? lang : "?");
 }
+void asssubs_open(MkvSession *mkv, int n, const char *url, const char *lang) { start(mkv, n, NULL, url, lang); }
+void asssubs_open_script(const char *script, const char *lang) { char *c = script ? strdup(script) : NULL; if (c) start(NULL, -1, c, NULL, lang); }
 void asssubs_close(void) {
   shown_clear(); if (!cur) return;
   Inst *A = cur; cur = NULL;
   pthread_mutex_lock(&A->mu); int ended = A->dead == 2; A->dead = 1; pthread_cond_signal(&A->cv); pthread_mutex_unlock(&A->mu); /* it never touches the reader after this */
-  if (ended) { frame_free(A->pending); pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A); }
+  if (ended) { frame_free(A->pending); free(A->script); pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A); }
 }
 int asssubs_on(void) { return cur != NULL; }
 int asssubs_too_slow(void) {
   if (!cur || failSaid) return 0; pthread_mutex_lock(&cur->mu); int f = cur->fail; pthread_mutex_unlock(&cur->mu);
   if (f) failSaid = 1; return f;
 }
-void asssubs_tick(double t, int playing, double fps, float vx, float vy, float vw, float vh, int videoW, int videoH, float scale) {
+void asssubs_tick(double t, double rate, int playing, double fps, float vx, float vy, float vw, float vh, int videoW, int videoH, float scale) {
   Inst *A = cur; if (!A) return;
   float k = gfx_scale(); int fw = (int)(1920 * k + 0.5f), fh = (int)(1080 * k + 0.5f); if (fw > 1920) { fw = 1920; fh = 1080; } /* the drawable's pixels, at most full HD */
   pthread_mutex_lock(&A->mu);
-  double pred = A->t + (A->playing ? wall() - A->tAt : 0);
+  double pred = A->t + (A->playing ? (wall() - A->tAt) * A->rate : 0);
   int nudge = fabs(pred - t) > 0.3 || playing != A->playing || fw != A->fw || fh != A->fh || videoW != A->vw || videoH != A->vh || scale != A->scale || vx != A->vx || vy != A->vy || vw != A->vww || vh != A->vhh;
   if (fabs(pred - t) > 0.3) A->gen++; /* a seek (or a delay changed): everything again at once */
-  A->t = t; A->tAt = wall(); A->playing = playing; A->fps = fps; A->fw = fw; A->fh = fh; A->vw = videoW; A->vh = videoH; A->scale = scale; A->vx = vx; A->vy = vy; A->vww = vw; A->vhh = vh;
+  A->t = t; A->tAt = wall(); A->rate = rate > 0 ? rate : 1; A->playing = playing; A->fps = fps; A->fw = fw; A->fh = fh; A->vw = videoW; A->vh = videoH; A->scale = scale; A->vx = vx; A->vy = vy; A->vww = vw; A->vhh = vh;
+  if (A->line != assLine) { A->line = assLine; nudge = 1; } /* (the position changed: drawn again now, paused too) */
   if (nudge) pthread_cond_signal(&A->cv);
   Frame *f = A->pending; A->pending = NULL;
   pthread_mutex_unlock(&A->mu);
@@ -242,10 +264,14 @@ void asssubs_tick(double t, int playing, double fps, float vx, float vy, float v
   shown.s = calloc(shown.n ? shown.n * 4 : 1, sizeof *shown.s); shown.ns = calloc(shown.n ? shown.n : 1, sizeof *shown.ns);
   for (int i = 0; i < shown.n; i++) upload(i);
 }
+static float brightK = 1; void asssubs_brightness(float k) { brightK = k <= 0 ? 1 : k > 1 ? 1 : k; } /* the viewer's subtitle brightness: the colours toward black */
+void asssubs_sample(int on) { Inst *A = cur; if (!A) return; on = !!on; pthread_mutex_lock(&A->mu); if (A->sample != on) { A->sample = on; pthread_cond_signal(&A->cv); } pthread_mutex_unlock(&A->mu); }
+int asssubs_visible(void) { return cur && shown.n > 0 && shown.fw > 0; } /* a styled line on screen now */
 void asssubs_draw(void) {
   if (!cur || !shown.n || shown.fw <= 0) return;
   float kx = 1920.0f / shown.fw, ky = 1080.0f / shown.fh;
   for (int i = 0; i < shown.n; i++) { Piece *p = &shown.p[i]; uint32_t c = ((uint32_t)(255 - (p->color & 0xff)) << 24) | (p->color >> 8); if (!(c >> 24)) continue;
+    if (brightK < 0.999f) c = (c & 0xff000000u) | ((uint32_t)(((c >> 16) & 255) * brightK) << 16) | ((uint32_t)(((c >> 8) & 255) * brightK) << 8) | (uint32_t)((c & 255) * brightK);
     int tx = (p->w + TILE - 1) / TILE; if (tx > 2) tx = 2;
     for (int k = 0; k < shown.ns[i]; k++) { AtlasSlot *s = &shown.s[i * 4 + k];
       if (!atlas_valid(s)) { for (int j = 0; j < shown.ns[i]; j++) atlas_release(&shown.s[i * 4 + j]); upload(i); s = &shown.s[i * 4 + k]; if (k >= shown.ns[i] || !atlas_valid(s)) break; } /* its page was reused: in again */

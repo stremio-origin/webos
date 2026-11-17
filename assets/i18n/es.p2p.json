@@ -6,5 +6,6 @@
 "Low storage: small buffer": "Poco almacenamiento: búfer pequeño",
 "Waiting for the next pieces…": "Esperando las siguientes piezas…",
 "{n} MB/s": "{n} MB/s",
-"{n} KB/s": "{n} KB/s"
+"{n} KB/s": "{n} KB/s",
+"Low storage: plug in a USB drive": "Poco almacenamiento: Conecta una memoria USB"
 }

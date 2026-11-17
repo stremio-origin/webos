@@ -38,9 +38,9 @@ static const char *PK[] = { "Search on TV", "Search on your TV", "What you type 
   "Titles and descriptions", "Titles and descriptions in your language", "Paste your TMDB API key (or API Read Access Token). Get one at", "It stays on your TV.",
   "API key", "Save", "Checking\xe2\x80\xa6", "Saved. You can close this page.", "TMDB didn\xe2\x80\x99t accept this key.",
   "Ratings and reviews", "Ratings and reviews from Trakt", "Paste your Trakt Client ID. To get one:", "open", "sign in, then Settings \xe2\x80\xba Your API Apps \xe2\x80\xba New Application. Any name; as the redirect URI paste",
-  "then Save and copy the Client ID.", "Client ID", "Trakt didn\xe2\x80\x99t accept this id." };
+  "then Save and copy the Client ID.", "Client ID", "Trakt didn\xe2\x80\x99t accept this id.", "This code has changed. Scan the code on your TV again." };
 #define NPK (int)(sizeof PK / sizeof PK[0])
-static struct { char lang[4]; int rtl; char *t[NPK]; } str;
+static struct { char lang[8]; int rtl; char *t[NPK]; } str;
 
 static double mono(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
 static void make_token(void) {
@@ -94,6 +94,8 @@ static void head(Buf *b, const char *title) {
     ".go #w{animation:up .7s cubic-bezier(.3,.7,.3,1)}@keyframes up{0%{transform:none;opacity:1}45%{transform:translateY(-14vh) scale(1.06);opacity:.55}100%{transform:none;opacity:1}}"
     "</style></head><body><div id=\"w\"><div class=\"g\" id=\"g1\"></div><div class=\"g\" id=\"g2\"></div></div>");
 }
+static void stale_page(Buf *b) { /* an old code (the app started again since), or a mistyped address: say so, not a bare error */
+  head(b, pt("Search on TV")); b_s(b, "<h1>"); hx(b, pt("This code has changed. Scan the code on your TV again.")); b_s(b, "</h1></body></html>"); }
 static void search_page(Buf *b) {
   head(b, pt("Search on TV")); b_s(b, "<h1>"); hx(b, pt("Search on your TV")); b_s(b, "</h1><p>"); hx(b, pt("What you type shows up on the TV as you type.")); b_s(b, "</p>");
   b_s(b, "<input id=\"q\" autofocus autocomplete=\"off\" placeholder=\""); hx(b, pt("Film or series")); b_s(b, "\"><small id=\"s\"></small><script>"
@@ -167,7 +169,7 @@ static void handle(int fd) {
   if (!strncmp(target, "/t/", 3) && strlen(target) >= 19 && !strncmp(target + 3, tok, 16)) {
     rest = target + 19;
     if (*rest && strcmp(rest, "/q") && strcmp(rest, "/tmdb") && strcmp(rest, "/tmdb/set") && strcmp(rest, "/trakt") && strcmp(rest, "/trakt/set")) rest = NULL; }
-  if (!rest) { reply(fd, 404, NULL, NULL, 0); return; }
+  if (!rest) { if (!strncmp(target, "/t/", 3) || !strcmp(target, "/")) { Buf b = { 0 }; pthread_mutex_lock(&mu); stale_page(&b); pthread_mutex_unlock(&mu); reply(fd, 404, "Content-Type: text/html; charset=utf-8\r\n", b.p, b.n); free(b.p); } else reply(fd, 404, NULL, NULL, 0); return; }
   if (strcmp(rest, "/q") && strcmp(rest, "/tmdb/set") && strcmp(rest, "/trakt/set")) { pthread_mutex_lock(&mu); hits++; pthread_mutex_unlock(&mu); } /* a code was opened */
   if (!strcmp(rest, "/tmdb/set") || !strcmp(rest, "/trakt/set")) {
     char key[1024]; qparam(q, "key", key, sizeof key);
@@ -193,12 +195,15 @@ static void sock_opts(int fd) {
   int one = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
 }
-static int listen_on(void) {
+static int port = HTTPD_PORT; /* the one it listens on: the first free from HTTPD_PORT (another app can hold it) */
+static int listen_one(int pn);
+static int listen_on(void) { for (int i = 0; i < 20; i++) { int fd = listen_one(HTTPD_PORT + i); if (fd >= 0) { if (port != HTTPD_PORT + i) fprintf(stderr, "[httpd] port %d busy: on %d\n", HTTPD_PORT, HTTPD_PORT + i); port = HTTPD_PORT + i; return fd; } } return -1; }
+static int listen_one(int pn) {
   int fd = socket(AF_INET, SOCK_STREAM, 0); if (fd < 0) return -1;
   int one = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); fcntl(fd, F_SETFD, FD_CLOEXEC);
-  struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons(HTTPD_PORT); a.sin_addr.s_addr = htonl(INADDR_ANY);
+  struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((unsigned short)pn); a.sin_addr.s_addr = htonl(INADDR_ANY);
 #ifdef SB_MAC
-  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* the preview: this machine only (an open port made macOS ask for network access at every new build) */
+  if (!getenv("SB_PHONE_LAN")) a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* the preview: this machine only (an open port made macOS ask for network access at every new build); SB_PHONE_LAN=1 opens it to the phone */
 #endif
   if (bind(fd, (struct sockaddr *)&a, sizeof a) || listen(fd, 8)) { close(fd); return -1; }
   return fd;
@@ -228,27 +233,34 @@ int httpd_start(void) {
   deadline = mono() + IDLE_SEC; stopReq = 0;
   if (alive) { pthread_mutex_unlock(&mu); return 1; } /* on already (or still closing: it stays) */
   pthread_mutex_unlock(&mu);
-  int fd = listen_on(); if (fd < 0) { fprintf(stderr, "[httpd] port %d: %s\n", HTTPD_PORT, strerror(errno)); return 0; }
+  int fd = listen_on(); if (fd < 0) { fprintf(stderr, "[httpd] ports %d-%d: %s\n", HTTPD_PORT, HTTPD_PORT + 19, strerror(errno)); return 0; }
   pthread_mutex_lock(&mu); alive = 1; pthread_mutex_unlock(&mu);
   pthread_t t; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED); pthread_attr_setstacksize(&at, 128 * 1024);
   int bad = pthread_create(&t, &at, srv_main, (void *)(size_t)fd); pthread_attr_destroy(&at);
   if (bad) { close(fd); pthread_mutex_lock(&mu); alive = 0; pthread_mutex_unlock(&mu); return 0; }
   return 1;
 }
-/* the first IPv4 address that is up and not the loopback (nor a self-assigned 169.254 one) */
+/* the TV's address on its network: the one its own traffic leaves by (a datagram socket "connected" outward sends
+   nothing and says which address the route takes), else the first IPv4 address that is up and running and not the
+   loopback, a self-assigned 169.254 one or Wi-Fi Direct's 192.168.49 (a side interface many TVs keep up) */
 static int lan_ip(char *out, size_t cap) {
-  struct ifaddrs *ifs = NULL, *i; out[0] = 0; if (getifaddrs(&ifs)) return 0;
+  out[0] = 0;
+  { int s = socket(AF_INET, SOCK_DGRAM, 0); if (s >= 0) { struct sockaddr_in d; memset(&d, 0, sizeof d); d.sin_family = AF_INET; d.sin_port = htons(53); inet_pton(AF_INET, "8.8.8.8", &d.sin_addr);
+      struct sockaddr_in me; socklen_t ml = sizeof me; if (!connect(s, (struct sockaddr *)&d, sizeof d) && !getsockname(s, (struct sockaddr *)&me, &ml)) { unsigned h = ntohl(me.sin_addr.s_addr);
+        if (h && (h >> 24) != 127 && (h >> 16) != 0xa9fe) inet_ntop(AF_INET, &me.sin_addr, out, (socklen_t)cap); } close(s); } }
+  if (out[0]) return 1;
+  struct ifaddrs *ifs = NULL, *i; if (getifaddrs(&ifs)) return 0;
   for (i = ifs; i && !out[0]; i = i->ifa_next) {
-    if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || (i->ifa_flags & IFF_LOOPBACK) || !(i->ifa_flags & IFF_UP)) continue;
+    if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || (i->ifa_flags & IFF_LOOPBACK) || !(i->ifa_flags & IFF_UP) || !(i->ifa_flags & IFF_RUNNING)) continue;
     struct in_addr a = ((struct sockaddr_in *)i->ifa_addr)->sin_addr; unsigned h = ntohl(a.s_addr);
-    if ((h >> 16) == 0xa9fe || h == 0) continue;
+    if ((h >> 16) == 0xa9fe || (h >> 8) == 0xc0a831 || h == 0) continue;
     inet_ntop(AF_INET, &a, out, (socklen_t)cap); }
   freeifaddrs(ifs); return out[0] != 0;
 }
 int httpd_url(const char *suffix, char *out, size_t cap) {
   char ip[64]; out[0] = 0;
   if (!httpd_start() || !lan_ip(ip, sizeof ip)) return 0;
-  snprintf(out, cap, "http://%s:%d/t/%s%s", ip, HTTPD_PORT, tok, suffix ? suffix : ""); return 1;
+  snprintf(out, cap, "http://%s:%d/t/%s%s", ip, port, tok, suffix ? suffix : ""); return 1;
 }
 void httpd_url_shown(const char *url, char *out, size_t cap) {
   const char *t = strstr(url, "/t/"); if (!t) { snprintf(out, cap, "%s", url); return; }

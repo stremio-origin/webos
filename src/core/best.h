@@ -31,7 +31,7 @@ void best_speed_cancel(void);          /* stops the downloads; cb is not called 
 int  best_on(void);                    /* the setting */
 
 /* ---- the score (pure: no state, unit-testable) ---- */
-typedef struct { const Stream *s; double sc, need, cap; int mute; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it */
+typedef struct { const Stream *s; double sc, need, cap; int mute, nodec; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it (converted: a soft preference); nodec: its picture won't decode here (AV1 without the decoder): left out while anything else can play */
 /* 0 = the stream is left out (a cam, an uncached debrid file, a thin swarm, above the panel) */
 int  best_rate(const Stream *s, const TvCaps *c, double mbps, double durMin, BestRate *out);
 /* the pick among n streams: the panel's own resolution first, then lower ones, each only among streams the line
@@ -45,6 +45,13 @@ void best_stream_info(const Stream *s, char *out, size_t cap);
 const char *best_res_of(const char *label);
 void best_hdr_of(const char *label, char *out, size_t cap);
 void best_audio_of(const char *label, char *out, size_t cap);
+
+/* what a list shows of a stream: facts ("4K  ·  DV HDR10  ·  DTS-HD MA 7.1  ·  EN RU"), meta ("38.2 GB  ·  Direct",
+   "12.1 GB  ·  484 seeds"), the release's name (the file's, else the title's line most like one; may be empty), and
+   the one thing that matters most on this TV (warn, may be empty; out: it won't play here at all). c NULL = the kept
+   caps; mbps < 0 = the measured speed; durMin <= 0 = a film's */
+typedef struct { char facts[128], meta[96], rel[256], warn[160]; int out; } BestFacts;
+void best_facts(const Stream *s, const TvCaps *c, double mbps, double durMin, BestFacts *f);
 
 /* ---- choosing for Play ---- */
 /* Fetches the streams of type/vid and picks one: at once when every addon answered, else after up to 12 s

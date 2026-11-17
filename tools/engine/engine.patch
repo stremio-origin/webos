@@ -11,33 +11,36 @@ index fd78423..2a494ad 100644
      target_link_libraries(nuvio_engine PRIVATE $<BUILD_INTERFACE:torrent-rasterbar>)
      target_compile_definitions(nuvio_engine PRIVATE NUVIO_ENGINE_HAS_LIBTORRENT=1)
 diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
-index 8a04890..2c0d5b9 100644
+index 8a04890..40f243a 100644
 --- a/cmake/Dependencies.cmake
 +++ b/cmake/Dependencies.cmake
-@@ -73,6 +73,8 @@ function(nuvio_engine_add_libtorrent)
+@@ -73,6 +73,9 @@ function(nuvio_engine_add_libtorrent)
          "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-top-priority-first.patch"
          "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-metadata-pipeline.patch"
          "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-urgent-hedge.patch"
 +        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-drop-piece.patch"
 +        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-forget-all.patch"
++        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libtorrent-2.0.12-nuvio-reject-piece.patch"
      )
      set(
          nuvio_libtorrent_patch_files
-@@ -88,6 +90,8 @@ function(nuvio_engine_add_libtorrent)
+@@ -88,6 +91,9 @@ function(nuvio_engine_add_libtorrent)
          "src/piece_picker.cpp"
          "src/ut_metadata.cpp"
          "src/torrent.cpp"
 +        "src/torrent_handle.cpp"
 +        "src/torrent_handle.cpp"
++        "src/peer_connection.cpp"
      )
      set(
          nuvio_libtorrent_patch_sentinels
-@@ -103,6 +107,8 @@ function(nuvio_engine_add_libtorrent)
+@@ -103,6 +109,9 @@ function(nuvio_engine_add_libtorrent)
          "nuvio_top"
          "nuvio_metadata_pipeline"
          "nuvio_hedge_blocks"
 +        "nuvio_drop_piece"
 +        "nuvio_forget_all"
++        "nuvio_reject_safe"
      )
      list(LENGTH nuvio_libtorrent_patches nuvio_libtorrent_patch_count)
      math(EXPR nuvio_libtorrent_last_patch "${nuvio_libtorrent_patch_count} - 1")
@@ -231,6 +234,30 @@ index 0000000..adf816a
 + 	void torrent_handle::clear_piece_deadlines() const
 + 	{
 + #ifndef TORRENT_DISABLE_STREAMING
+diff --git a/cmake/patches/libtorrent-2.0.12-nuvio-reject-piece.patch b/cmake/patches/libtorrent-2.0.12-nuvio-reject-piece.patch
+new file mode 100644
+index 0000000..8c12362
+--- /dev/null
++++ b/cmake/patches/libtorrent-2.0.12-nuvio-reject-piece.patch
+@@ -0,0 +1,18 @@
++diff --git a/src/peer_connection.cpp b/src/peer_connection.cpp
++--- a/src/peer_connection.cpp
+++++ b/src/peer_connection.cpp
++@@ -2644,10 +2644,12 @@
++ 	void peer_connection::reject_piece(piece_index_t const index)
++ 	{
++ 		TORRENT_ASSERT(is_single_thread());
++-		for (auto i = m_requests.begin(), end(m_requests.end()); i != end; ++i)
+++		// nuvio_reject_safe: the end is read again after each erase (the cached
+++		// one ran past the end and the erase moved freed memory)
+++		for (auto i = m_requests.begin(); i != m_requests.end();)
++ 		{
++ 			peer_request const& r = *i;
++-			if (r.piece != index) continue;
+++			if (r.piece != index) { ++i; continue; }
++ 			write_reject_request(r);
++ 			i = m_requests.erase(i);
++ 
 diff --git a/include/nuvio_engine/nuvio_engine.h b/include/nuvio_engine/nuvio_engine.h
 index 10e59e7..404fd83 100644
 --- a/include/nuvio_engine/nuvio_engine.h

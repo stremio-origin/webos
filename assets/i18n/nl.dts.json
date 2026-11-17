@@ -2,5 +2,10 @@
 "DTS sound": "DTS-geluid",
 "Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV": "Auto zoekt uit wat deze tv afspeelt. Omzetten als je het niet zeker weet. Uit laat het aan de tv over",
 "Convert": "Omzetten",
-"Default audio language, DTS, interface sounds": "Standaard audiotaal, DTS, interfacegeluiden"
+"Default audio language, DTS, interface sounds": "Standaard audiotaal, DTS, interfacegeluiden",
+"Converting the sound for this TV…": "Geluid converteren voor deze tv…",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (geconverteerd)",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (geconverteerd)",
+"Playing the {t} track: this TV can’t play DTS": "Spoor {t} wordt afgespeeld: deze tv kan geen DTS afspelen",
+"Playing the {t} track: this TV can’t play TrueHD": "Spoor {t} wordt afgespeeld: deze tv kan geen TrueHD afspelen"
 }

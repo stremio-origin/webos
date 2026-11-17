@@ -1,7 +1,7 @@
 {
  "Search on TV": "Pesquisar na TV",
  "Search on your TV": "Pesquisar na sua TV",
- "What you type shows up on the TV as you type.": "O que você digita aparece na TV enquanto digita.",
+ "What you type shows up on the TV as you type.": "O que escreve aparece na TV à medida que escreve.",
  "Film or series": "Filme ou série",
  "Sent": "Enviado",
  "Can’t reach the TV": "Não foi possível acessar a TV",
@@ -9,9 +9,9 @@
  "It stays on your TV.": "Ela fica na sua TV.",
  "API key": "Chave de API",
  "Save": "Salvar",
- "Checking…": "Verificando…",
- "Saved. You can close this page.": "Salva. Você pode fechar esta página.",
+ "Checking…": "A verificar…",
+ "Saved. You can close this page.": "Guardado. Pode fechar esta página.",
  "TMDB didn’t accept this key.": "O TMDB não aceitou esta chave.",
  "In the app’s language, from TMDB. OK to change the key": "No idioma do app, do TMDB. OK para trocar a chave",
- "Only in English. OK to add a TMDB key from your phone": "Só em inglês. OK para adicionar uma chave do TMDB pelo celular"
+ "Only in English. OK to add a TMDB key from your phone": "Só em inglês. OK para adicionar uma chave do TMDB pelo telemóvel"
 }

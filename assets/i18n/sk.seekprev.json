@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Náhľady na posuvníku",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Obrázky z filmu nad lištou, keď sa po nej posúvate. Vypnuté: žiadne sa nevytvárajú",
+ "Previews for torrents": "Náhľady pre torrenty",
+ "Slower than debrid, up to 500 MB extra per stream.": "Pomalšie ako debrid, až 500 MB navyše na stream.",
+ "Previews {n}%": "Náhľady {n} %",
+ "Previews ready": "Náhľady pripravené",
+ "Uses more data, on mobile data too.": "Spotrebuje viac dát, aj na mobilných dátach.",
+ "Getting the seek bar’s previews ready… {n}%": "Pripravujeme náhľady na lište… {n} %",
+ "Play now": "Prehrať hneď",
+ "Load previews before playing": "Načítať náhľady pred prehrávaním",
+ "about {n} s left": "zostáva asi {n} s",
+ "about {n} min left": "zostáva asi {n} min",
+ "The film starts once this much of it has its previews; OK starts it at once": "Film sa spustí, keď bude mať toľko náhľadov; OK ho spustí hneď"
+}

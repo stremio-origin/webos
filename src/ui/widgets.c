@@ -1,4 +1,5 @@
 #include "ui/widgets.h"
+#include "ui/palette.h"
 #include "ui/sound.h"
 #include "ui/shared.h"
 #include "ui/gfx.h"
@@ -9,13 +10,16 @@
 #include "core/app.h"
 #include "core/keys.h"
 #include "core/i18n.h"
+#include "core/live.h"
+#include "ui/livewall.h"
 #include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdint.h>
-static char markId[64]; static double markAt; /* the title just marked as watched: its badge pops in (card_mark_pop) */
+static char markId[SB_ID]; static double markAt; /* the title just marked as watched: its badge pops in (card_mark_pop) */
 
 void glass_rrect(float x, float y, float w, float h, float r, uint32_t base, float sheenTop, float sheenBottom, float edge) {
   gfx_rrect(x, y, w, h, r, base);
@@ -211,7 +215,7 @@ int ph_picture(GLuint tex, float x, float y, float w, float h, float r, uint32_t
 int ph_hold(void) { static int h = -1; if (h < 0) h = getenv("SB_PH_HOLD") != NULL; return h; }
 
 /* ---- cards ---- */
-static char cardKey[80]; /* the card drawn now: "poster:<id>" (a poster flies to the title page's cover) */
+static char cardKey[SB_ID + 16]; /* the card drawn now: "poster:<id>" (a poster flies to the title page's cover) */
 static void card_art(const char *src, float x, float y, float w, float h, float r, int wide, int loadArt, int *shown) {
   *shown = 0;
   int fit = wide ? 1 : 0; GLuint tex = 0;                 /* posters fill the card as they are; wide art is cover-cropped */
@@ -232,13 +236,63 @@ void card_prep(CardPrep *cp, const Item *it, int wide, const char *artOverride) 
   if (c && se >= 0) snprintf(cp->lbl, sizeof cp->lbl, "%s  S%d E%d", it->name, se, ep); else snprintf(cp->lbl, sizeof cp->lbl, "%s", it->name);
   if (it->left > 0) { if (it->left < 1) snprintf(cp->left, sizeof cp->left, "%s", T("Less than a minute left")); else { char r[32]; sb_fmt_runtime((int)(it->left + 0.5f) < 1 ? 1 : (int)(it->left + 0.5f), r, sizeof r); snprintf(cp->left, sizeof cp->left, "%s", T1("{t} left", "t", r)); }
     cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; }
+  else if (it->cw && it->newEp) { char nn[12]; snprintf(nn, sizeof nn, "%d", it->newEp); snprintf(cp->left, sizeof cp->left, "%s", it->newEp > 1 ? T1("{n} new episodes", "n", nn) : T("New episode")); cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; }
+  else if (it->cw && c && it->progress <= 0) { snprintf(cp->left, sizeof cp->left, "%s", T("Next episode")); cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; } /* a series waiting at its next episode (part watched with no length known, Trakt's pause: its bar alone) */
+  else if (it->airAt > 0) { /* Upcoming: when it airs, by the TV's own day */
+    time_t now = time(NULL), at = (time_t)it->airAt; struct tm a, b; localtime_r(&now, &a); localtime_r(&at, &b);
+    a.tm_hour = b.tm_hour = 12; a.tm_min = b.tm_min = a.tm_sec = b.tm_sec = 0; int days = (int)((mktime(&b) - mktime(&a) + 43200) / 86400); char nd[12]; snprintf(nd, sizeof nd, "%d", days);
+    snprintf(cp->left, sizeof cp->left, "%s", days <= 0 ? T("Today") : days == 1 ? T("Tomorrow") : T1("In {n} days", "n", nd)); cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; }
 }
+/* Home's live row: each channel a round badge (its logo on a deep gradient of its own colours), All channels the one
+   marked LIVE (the accent's gradient, the live mark, a red LIVE chip), so a live row reads at a glance */
+static void logo_tint(const char *url, uint32_t *c1, uint32_t *c2) {
+  typedef struct { char url[300]; uint32_t a, b; int ok; } TC; static TC tc[128]; *c1 = RGB(44, 38, 64); *c2 = RGB(16, 14, 24); if (!url || !*url) return;
+  unsigned h = 2166136261u; for (const char *p = url; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u; TC *t = &tc[h & 127];
+  if (t->ok && !strcmp(t->url, url)) { *c1 = t->a; *c2 = t->b; return; }
+  Palette p; int r = img_palette(url, 64, 64, 1, &p); if (!r) return; snprintf(t->url, sizeof t->url, "%s", url); t->ok = 1; t->a = *c1; t->b = *c2;
+  if (r > 0) { const Swatch *v = p.vibrant.ok ? &p.vibrant : p.muted.ok ? &p.muted : NULL, *d = p.darkMuted.ok ? &p.darkMuted : p.dark.ok ? &p.dark : v;
+    if (v) t->a = hsl2rgb(v->h, fminf(v->s, 0.6f), 0.32f); if (d) t->b = hsl2rgb(d->h, fminf(d->s, 0.5f), 0.12f); }
+  *c1 = t->a; *c2 = t->b;
+}
+void card_draw_round(const Item *it, float x, float y, float d) {
+  float r = d / 2, cx = x + r, cy = y + r;
+  if (!strcmp(it->id, LIVE_ALL_ID)) { livewall_card(x, y, d, d, r, 0); return; } /* the one marked LIVE: the channels' own wall, panning */
+  /* a channel: a soft dark glass disc, its logo large on it, a faint glow of the logo's own colour behind */
+  const char *art = it->logo[0] ? it->logo : it->poster[0] ? it->poster : it->background; uint32_t c1, c2; logo_tint(art, &c1, &c2);
+  gfx_rrect(x, y, d, d, r, RGBA(26, 24, 36, 235)); gfx_rrect_v(x, y, d, d, r, col_alpha(c1, 0.55f), col_alpha(c2, 0.2f)); gfx_rrect_v(x, y, d, d, r, WHITE_A(16), WHITE_A(0));
+  float asp; GLuint t = art[0] ? img_get(art, (int)(d * 0.74f), (int)(d * 0.56f), &asp) : 0;
+  if (t && asp > 0) { float lw = d * 0.7f, lh = lw / asp; if (lh > d * 0.54f) { lh = d * 0.54f; lw = lh * asp; } gfx_image(t, cx - lw / 2, cy - lh / 2, lw, lh, 0, WHITE_A(255), 0, 0, 1, 1); }
+  else { /* no logo (yet): its initials on a colour of its own name, not text on black */
+    unsigned h = 2166136261u; for (const char *p = it->name; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+    uint32_t nc = hsl2rgb((float)(h % 360), 0.42f, 0.30f); gfx_rrect_v(x, y, d, d, r, col_alpha(nc, 0.9f), col_alpha(nc, 0.35f));
+    char in[8] = ""; int n = 0, w0 = 1; for (const char *p = it->name; *p && n < 3; p++) { unsigned char ch = (unsigned char)*p;
+      if (ch == ' ' || ch == '-' || ch == '_' || ch == '.') { w0 = 1; continue; } if (w0 && ch < 128 && isalnum(ch)) in[n++] = (char)toupper(ch); w0 = 0; }
+    if (!n) snprintf(in, sizeof in, "TV");
+    text_draw(in, cx, cy - text_line_height(46) / 2, 46, 800, WHITE_A(240), 1.0f, d * 0.8f, ALIGN_CENTER); }
+  if (live_pinned(it->id)) { float sx = cx + r * 0.7071f, sy = cy - r * 0.7071f; gfx_circle(sx, sy, 17, RGBA(12, 11, 17, 220)); icon_draw("star", sx - 11, sy - 11, 22, RGB(0xf5, 0xc5, 0x18)); } /* a favourite: its star on the rim */
+}
+/* a title whose poster (or wide art) can't be had: never an empty card. Its backdrop filling the card (a poster with
+   no backdrop either: a colour of its own name), darkened at the foot, the title over it in the app's type */
+void card_standin(const Item *it, float x, float y, float w, float h, float r, int wide, float foot) {
+  unsigned hh = 2166136261u; for (const char *p = it->name; *p; p++) hh = (hh ^ (unsigned char)*p) * 16777619u;
+  uint32_t nc = hsl2rgb((float)(hh % 360), 0.38f, 0.26f), nd = hsl2rgb((float)((hh / 360) % 360), 0.30f, 0.12f);
+  gfx_rrect_v(x, y, w, h, r, nc | 0xff000000u, nd | 0xff000000u); /* (the colour first: under the backdrop while it comes, and when there is none) */
+  char b[512]; const char *bg = wide ? sb_poster_of(it, b, sizeof b) : sb_bg_small(it, b, sizeof b); /* (a poster's stand-in: its backdrop; wide art's: its poster) */
+  if (bg && *bg && !img_shaped_failed(bg, (int)w, (int)h, r, 1)) { GLuint t = img_get_shaped(bg, (int)w, (int)h, r, 1); if (t) ph_picture(t, x, y, w, h, r, WHITE_A(170)); }
+  gfx_rrect_v(x, y + h * 0.35f, w, h * 0.65f, r, BLACK_A(0), BLACK_A(200));
+  const char *nm = it->name[0] ? it->name : it->id; float px = w < 300 ? 18 : 24, lh = (w < 300 ? 26 : 30) * 1.25f; int fs = w < 300 ? 26 : 30, nl = text_wrap_count(nm, w - 2 * px, 4, fs, 800, -0.3f); if (nl < 1) nl = 1;
+  text_draw_wrapped(nm, app_rtl() ? x + w - px : x + px, y + h - px - foot - nl * lh, w - 2 * px, 4, fs, 800, WHITE_A(245), -0.3f, ALIGN_START, lh);
+  gfx_ring(x, y, w, h, r, 1, WHITE_A(22));
+}
+/* the Live now band's last card: All channels, a quiet glass tile with the live mark and its words */
+static void allch_tile(float x, float y, float w, float h) { livewall_card(x, y, w, h, CARD_R, 0); }
 static int card_body(const Item *it, const CardPrep *cp, float x, float y, float w, float h, int wide, int label, int loadArt) {
   int shown; CardPrep own;
+  if (!strcmp(it->id, LIVE_ALL_ID)) { allch_tile(x, y, w, h); return 1; }
   if (!cp) { card_prep(&own, it, wide, NULL); cp = &own; } /* a card without its own: resolved here, as before */
   card_art(cp->art, x, y, w, h, CARD_R, wide, loadArt, &shown);
   gfx_clip_push(x, y, w, h);
-  if (shown < 0) text_draw_wrapped(it->name[0] ? it->name : it->id, app_rtl() ? x + w - 16 : x + 16, y + 16, w - 32, 6, 28, 400, WHITE_A(230), 0, ALIGN_START, 28 * 1.3f); /* the title shows only when the art failed */
+  if (shown < 0) { gfx_clip_pop(); card_standin(it, x, y, w, h, CARD_R, wide, 0); gfx_clip_push(x, y, w, h); } /* the art failed: its stand-in, never an empty card */
   if (label && !wide) { float lh = text_line_height(25), gh = 34 + lh + 13; gfx_rrect_v(x, y + h - gh, w, gh, 0, BLACK_A(0), BLACK_A(235)); text_draw(it->name, app_rtl() ? x + w - 15 : x + 15, y + h - 13 - lh, 25, 600, WHITE_A(255), 0, w - 30, ALIGN_START); }
   /* on a poster: watched, a disc with a check, always in the top corner; saved to the Library (not on the Library's own
      page) a disc of the same make with a bookmark, beside it: the accent lit from above, a fine light edge, a soft
@@ -255,12 +309,16 @@ static int card_body(const Item *it, const CardPrep *cp, float x, float y, float
     gfx_shadow(bx, by + 3, 42, 42, 21, 12, BLACK_A(120)); gfx_circle(bx + 21, by + 21, 21, ACC | 0xff000000u);
     gfx_rrect_v(bx, by, 42, 42, 21, WHITE_A(70), WHITE_A(0)); gfx_ring(bx, by, 42, 42, 21, 1.5f, WHITE_A(70));
     icon_draw("check", bx + 9, by + 9, 24, ACC_FG); gfx_scale_pop(); }
+  if (live_type(it->type)) { /* a channel: LIVE, small, on dark glass in the top corner */
+    static float lw; static unsigned lg; if (!lw || lg != i18n_gen()) { lg = i18n_gen(); lw = text_width(T("LIVE"), 20, 800, 1.2f); }
+    float cw = 12 + 10 + 8 + lw + 13, ch = 8 + text_line_height(20), cx = rtl ? x + w - 12 - cw : x + 12;
+    gfx_rrect(cx, y + 12, cw, ch, ch / 2, RGBA(12, 11, 17, 199)); gfx_circle(cx + 12 + 5, y + 12 + ch / 2, 5, RGB(0xef, 0x3b, 0x3b)); text_draw(T("LIVE"), cx + 12 + 10 + 8, y + 12 + 4, 20, 800, WHITE_A(255), 1.2f, 0, ALIGN_LEFT); }
   if (wide) {
     /* the name over a fade (12 15 26 padding: the inset progress line sits under it), the time left in a chip */
     float lh = text_line_height(26), gh = 12 + lh + 26;
     gfx_rrect_v(x, y + h - gh, w, gh, 0, BLACK_A(0), BLACK_A(224));
     text_draw(cp->lbl, app_rtl() ? x + w - 15 : x + 15, y + h - 26 - lh, 26, 600, WHITE_A(255), 0, w - 30, ALIGN_START);
-    if (it->left > 0) { float tw = cp->leftW, th = 10 + text_line_height(22), bx = app_rtl() ? x + 12 : x + w - 12 - tw;
+    if (cp->left[0]) { float tw = cp->leftW, th = 10 + text_line_height(22), bx = app_rtl() ? x + 12 : x + w - 12 - tw;
       gfx_rrect(bx, y + 12, tw, th, 11, RGBA(12, 11, 17, 199)); text_draw(cp->left, bx + 13, y + 12 + 5, 22, 700,
  WHITE_A(255), 0.2f, 0, ALIGN_LEFT); }
     if (it->progress > 0) { float bw = w - 28, pw = bw * (it->progress > 1 ? 1 : it->progress); /* inset and rounded, never edge to edge; the accent a touch lighter */
@@ -319,23 +377,27 @@ void lift_end(unsigned long long key, float x, float y, float w, float h, float 
     float p = (float)((app_now() - e->t0) / GLARE_DUR);
     /* the glare's one pass, then it rests, faint, near the far edge for as long as the focus stays: the focused card is
        plain to see */
-    if (e->on) { float q = ease_apply(EASE_IN_OUT, p < 0 ? 0 : p > 1 ? 1 : p), pos = -0.2f + 1.0f * q, al = 78 * q + 110 * sinf(3.14159f * q); /* bright as it crosses, settling to its faint rest */
-      gfx_glare(x, y, w, h, r, pos, WHITE_A((int)(al * k))); } }
+    if (e->on) { float q = ease_apply(EASE_IN_OUT, p < 0 ? 0 : p > 1 ? 1 : p), pos = -0.2f + 1.0f * q, al = 40 * q + 56 * sinf(3.14159f * q); /* soft as it crosses, settling to its faint rest (half what it was: it glared) */
+      gfx_glare(x, y, w, h, r, pos, WHITE_A((int)(al * k))); }
+    if (e->on) { gfx_ring(x, y, w, h, r, 2, col_alpha(col_mix(ACC2 | 0xff000000u, 0xffffffffu, 0.5f), 0.9f * k)); gfx_ring(x + 2, y + 2, w - 4, h - 4, r > 2 ? r - 2 : 0, 1, WHITE_A((int)(34 * k))); } } /* the selection's thin glassy edge, in the accent's light, as every selector */
   gfx_scale_pop();
 }
 /* a remote key drawn as on the remote, then what it does: OK, Back and Down round, the colour keys a small rounded block
    with two dots; y is the line's middle. Returns the width taken. */
-float key_hint(float x, float y, int key, const char *label, uint32_t col, int alignRight) {
-  float kw = key == K_RED || key == K_GREEN ? 42 : 38, kh = key == K_RED || key == K_GREEN ? 24 : 38, lw = label && *label ? 10 + text_width(label, 22, 600, 0) : 0, tot = kw + lw;
+float key_hint(float x, float y, int key, const char *label, uint32_t col, int alignRight) { return key_hint_s(x, y, key, label, col, alignRight, 1); }
+float key_hint_s(float x, float y, int key, const char *label, uint32_t col, int alignRight, float s) { /* s: every length and the words' size times s (a preview of a screen drawn small) */
+  int tpx = (int)(22 * s + 0.5f);
+  float kw = ((key == K_RED || key == K_GREEN || key == K_YELLOW || key == K_BLUE) ? 42 : 38) * s, kh = ((key == K_RED || key == K_GREEN || key == K_YELLOW || key == K_BLUE) ? 24 : 38) * s, lw = label && *label ? 10 * s + (tpx >= 7 ? text_width(label, tpx, 600, 0) : text_width(label, 22, 600, 0) * s) : 0, tot = kw + lw;
   float kx = alignRight ? x - tot : x, ky = y - kh / 2, a = ((col >> 24) & 255) / 255.0f;
-  if (key == K_RED || key == K_GREEN) { uint32_t c = key == K_RED ? RGB(0xef, 0x3b, 0x3b) : RGB(0x2f, 0xd6, 0x6b);
-    gfx_rrect(kx, ky, kw, kh, 7, col_alpha(c | 0xff000000u, a)); gfx_rrect_v(kx, ky, kw, kh, 7, WHITE_A((int)(50 * a)), WHITE_A(0));
-    gfx_circle(kx + kw / 2 - 7, y, 2.4f, RGBA(60, 0, 0, (int)(150 * a))); gfx_circle(kx + kw / 2 + 7, y, 2.4f, RGBA(60, 0, 0, (int)(150 * a))); }
-  else { gfx_circle(kx + kw / 2, y, kw / 2, WHITE_A((int)(30 * a))); gfx_ring(kx, ky, kw, kh, kw / 2, 1.5f, WHITE_A((int)(90 * a)));
+  if ((key == K_RED || key == K_GREEN || key == K_YELLOW || key == K_BLUE)) { uint32_t c = key == K_RED ? RGB(0xef, 0x3b, 0x3b) : key == K_YELLOW ? RGB(0xf5, 0xc5, 0x18) : key == K_BLUE ? RGB(0x3b, 0x7c, 0xef) : RGB(0x2f, 0xd6, 0x6b);
+    gfx_rrect(kx, ky, kw, kh, 7 * s, col_alpha(c | 0xff000000u, a)); gfx_rrect_v(kx, ky, kw, kh, 7 * s, WHITE_A((int)(50 * a)), WHITE_A(0));
+    gfx_circle(kx + kw / 2 - 7 * s, y, 2.4f * s, RGBA(60, 0, 0, (int)(150 * a))); gfx_circle(kx + kw / 2 + 7 * s, y, 2.4f * s, RGBA(60, 0, 0, (int)(150 * a))); }
+  else { gfx_circle(kx + kw / 2, y, kw / 2, WHITE_A((int)(30 * a))); gfx_ring(kx, ky, kw, kh, kw / 2, 1.5f * (s < 1 ? fmaxf(s, 0.67f) : 1), WHITE_A((int)(90 * a)));
     /* the key's mark: drawn as a shape (not a font's glyph), so it sits exactly in the middle at any size */
-    const char *ic = key == K_OK ? "k_ok" : key == K_DOWN ? "k_down" : key == K_UP ? "k_up" : key == K_RIGHT ? "k_right" : key == K_LEFT ? "k_left" : "k_back"; float is = key == K_OK ? 22 : 20;
+    const char *ic = key == K_OK ? "k_ok" : key == K_DOWN ? "k_down" : key == K_UP ? "k_up" : key == K_RIGHT ? "k_right" : key == K_LEFT ? "k_left" : "k_back"; float is = (key == K_OK ? 22 : 20) * s;
     icon_draw(ic, kx + kw / 2 - is / 2, y - is / 2, is, col); }
-  if (lw > 0) text_draw(label, kx + kw + 10, y - text_line_height(22) / 2.0f, 22, 600, col, 0, 0, ALIGN_LEFT);
+  if (lw > 0) { if (tpx >= 7) text_draw(label, kx + kw + 10 * s, y - text_line_height(tpx) / 2.0f, tpx, 600, col, 0, 0, ALIGN_LEFT);
+    else { float bw = text_width(label, 22, 600, 0) * s, bh = fmaxf(1.5f, tpx * 0.62f); gfx_rrect(kx + kw + 10 * s, y - bh / 2, bw, bh, bh / 2, col_alpha(col, 0.6f)); } } /* (too small to read: a bar its length) */
   return tot;
 }
 int focus_pops(double *last) { double now = app_now(), was = *last; *last = now; return !app_key_held() && now - was > 0.3; }
@@ -446,3 +508,29 @@ void pill_to(Pill *p, float x, float y, float w, float h) {
 }
 void pill_hide(Pill *p) { if (p->shown) { p->shown = 0; tween_to(&p->a, 0, 0.2f, EASE_OUT); } }
 void pill_tick(Pill *p, float dt) { tween_tick(&p->x, dt); tween_tick(&p->y, dt); tween_tick(&p->w, dt); tween_tick(&p->h, dt); tween_tick(&p->a, dt); }
+
+/* a channel's state as a mark, only once a try has said it: LIVE (st 1: a stream of it played or answered with real
+   media; the red pill breathing, a ring leaving it) or off air (st -1: the broadcast sign struck through, greyed, "Off
+   air" under it); while it is being tried (st 0), a small turning arc and "Checking…" (never LIVE on trust). One fades
+   into the next through k3 (the caller's, kept between frames). sc scales it (1: 36 tall); rtl: x is its right edge.
+   Returns its top row's width */
+float live_mark(float x, float y, float sc, int rtl, float *k3, int st) {
+  float sp = fminf(1, app_dt() * 7); k3[0] += ((st == 1) - k3[0]) * sp; k3[1] += ((st == -1) - k3[1]) * sp; k3[2] += ((st == 0) - k3[2]) * sp;
+  double now = app_now(); int px = (int)(19 * sc + 0.5f); float lw = text_width(T("LIVE"), px, 800, 2.4f * sc);
+  float ch = 36 * sc, cw = (16 + 10 + 10) * sc + lw + 18 * sc, pu = 0.5f + 0.5f * sinf((float)now * 2.6f), rp = (float)fmod(now / 1.8, 1), is = 36 * sc;
+  float x0 = rtl ? x - cw : x, dx = x0 + (16 + 5) * sc, tx = x0 + (16 + 10 + 10) * sc, ty = y + ch / 2 - text_line_height(px) / 2;
+  if (k3[0] > 0.01f) { gfx_opacity_push(k3[0]);
+    gfx_ring(x0 - 8 * rp, y - 8 * rp, cw + 16 * rp, ch + 16 * rp, ch / 2 + 8 * rp, 2.0f, RGBA(0xff, 0x3b, 0x3b, (int)(110 * (1 - rp) * (1 - rp))));
+    gfx_rrect_v(x0, y, cw, ch, ch / 2, RGB(0xf2, 0x3a, 0x3a), RGB(0xc8, 0x1e, 0x1e));
+    gfx_circle(dx, y + ch / 2, (5 + 4 * pu) * sc, WHITE_A((int)(80 * (1 - pu)))); gfx_circle(dx, y + ch / 2, 5 * sc, WHITE_A(255));
+    text_draw(T("LIVE"), tx, ty, px, 800, WHITE_A(255), 2.4f * sc, 0, ALIGN_LEFT); gfx_opacity_pop(); }
+  if (k3[2] > 0.01f) { gfx_opacity_push(k3[2]); /* being tried: a small turning arc and the word, in the mark's place */
+    float ccx = rtl ? x - 10 * sc : x + 10 * sc, ccy = y + ch / 2, ph = (float)fmod(now / 0.9, 1) * 6.2832f; for (int q = 0; q <= 8; q++) { float an = ph - 2.356f + 1.5708f * q / 8; gfx_circle(ccx + cosf(an) * 8 * sc, ccy + sinf(an) * 8 * sc, 1.6f * sc, WHITE_A(170)); }
+    int cp = (int)(18 * sc + 0.5f); text_draw(T("Checking…"), rtl ? x - 28 * sc : x + 28 * sc, ccy - text_line_height(cp) / 2, cp, 600, WHITE_A(150), 0.3f, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT); gfx_opacity_pop(); }
+  if (k3[1] > 0.01f) { gfx_opacity_push(k3[1]); uint32_t g = WHITE_A(120); float ix = rtl ? x - is : x;
+    icon_draw("wn_live", ix, y, is, g);
+    for (int i = 0; i <= 14; i++) { float t = i / 14.f; gfx_circle(ix + 4 * sc + (is - 8 * sc) * t, y + is - 4 * sc - (is - 8 * sc) * t, 3.4f * sc, RGB(10, 9, 15)); } /* the strike, cut out of the sign */
+    for (int i = 0; i <= 14; i++) { float t = i / 14.f; gfx_circle(ix + 4 * sc + (is - 8 * sc) * t, y + is - 4 * sc - (is - 8 * sc) * t, 1.6f * sc, g); }
+    text_draw(T("Off air"), x, y + is + 6 * sc, (int)(18 * sc + 0.5f), 600, WHITE_A(140), 0.3f, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT); gfx_opacity_pop(); }
+  return k3[1] > 0.5f ? is : cw;
+}

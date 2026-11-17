@@ -23,7 +23,9 @@
      "no" while a film plays. */
 #include "core/video.h"
 #include "platform/plat.h"
+#include "platform/webos/ssreq.h"
 #include <SDL2/SDL.h>
+#include <math.h>
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -52,7 +54,7 @@ static int (*acbCustomWindow)(long, long, long, long, long, long, long, long, lo
 static int (*acbConnect)(long, int, long *); static int (*acbVideoData)(long, const char *, long *); static int (*acbAudioData)(long, const char *, long *);
 static const char *(*sdlExpCreate)(int); static SDL_bool (*sdlExpSet)(const char *, SDL_Rect *, SDL_Rect *); static SDL_bool (*sdlExpCrop)(const char *, SDL_Rect *, SDL_Rect *, SDL_Rect *);
 
-static LSHandle *bus; static void *loop; static long acb; static char expWin[64]; static int ready;
+static LSHandle *bus; static void *loop; static long acb; static char expWin[64]; static int ready, acbOs; /* acbOs: webOS 3/4 (the ACB library is there) */
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static volatile unsigned session;
 /* shared with the glib thread (under mu) */
@@ -60,17 +62,24 @@ static struct {
   char mediaId[64]; VidState st; int live, loaded, ended, error, playing, pausedByUs, audioUnsup;
   char err[160]; double pos, dur, bufEnd, fps; int w, h, rate; long bits; char hdr[24], scan[24];
   VidTrack aud[16]; int naud; VidTrack txt[24]; int ntxt; int curAud, curTxt;
-  int bindWanted, died;
+  int bindWanted, died, diedBehind;
 } S;
 static char url[8192];
 static struct { int on; char base[4096]; double off, dur; } timed; /* video_load_timed: seeks are loads, times offset */
 /* the requested plane, in layout units; the crop pair (-1 = none) */
 static int winX, winY, winW = 1920, winH = 1080; static int cropSX = -1, cropSY, cropSW, cropSH, cropDX, cropDY, cropDW, cropDH; static int noCrop;
+/* the place asked for, as one: written by the drawing thread, read whole by whoever tells the TV (planeMu); ACB's
+   window calls one at a time (acbWinMu: the plane thread and a load's bind) */
+static pthread_mutex_t planeMu = PTHREAD_MUTEX_INITIALIZER, acbWinMu = PTHREAD_MUTEX_INITIALIZER;
+typedef struct { int wx, wy, ww, wh, csx, csy, csw, csh, cdx, cdy, cdw, cdh; } PlaneReq;
+static PlaneReq plane_snap(void) { pthread_mutex_lock(&planeMu); PlaneReq r = { winX, winY, winW, winH, cropSX, cropSY, cropSW, cropSH, cropDX, cropDY, cropDW, cropDH }; pthread_mutex_unlock(&planeMu); return r; }
+static void plane_no_crop(void) { pthread_mutex_lock(&planeMu); noCrop = 1; cropSX = -1; pthread_mutex_unlock(&planeMu); }
 static int surfW = 1920, surfH = 1080;
 /* the main thread's own (seek debounce, recovery) */
 static int seekWait; static Uint32 seekWaitAt; /* a seek sent, its seekDone not yet seen */
 static double seekTarget = -1; static Uint32 seekAt; static int seekRefusedTries; static Uint32 seekRetryAt;
-static struct { int on; double at; int aud, txt; } resume;
+static struct { int on; double at; int aud, txt, pause; } resume; /* pause: paused again once loaded (a film that died behind another app, paused: #69) */
+extern int app_behind(void); /* core/away.c */
 
 static void log_payload(const char *what, const char *p) { if (!p) return; size_t n = strlen(p); while (n && (p[n - 1] == '\n' || p[n - 1] == ' ')) n--; fprintf(stderr, "[video] %s %.*s\n", what, (int)(n > 600 ? 600 : n), p); }
 static bool log_reply(LSHandle *h, LSMessage *m, void *u) { (void)h; (void)u; log_payload("reply", lsPayload(m)); return true; }
@@ -97,16 +106,55 @@ static void str_in(const char *p, const char *end, const char *key, char *out, s
 }
 static const char *obj_end(const char *o) { int d = 0, inStr = 0; for (; *o; o++) { if (inStr) { if (*o == '\\' && o[1]) o++; else if (*o == '"') inStr = 0; continue; } if (*o == '"') inStr = 1; else if (*o == '{') d++; else if (*o == '}') { if (--d == 0) return o; } } return NULL; }
 static SDL_Rect to_surface(int x, int y, int w, int h) { SDL_Rect r = { x * surfW / 1920, y * surfH / 1080, w * surfW / 1920, h * surfH / 1080 }; return r; }
-/* the ACB path (webOS 3/4) reads a partial rectangle in the TV's own video space, 1280x720 on the sets measured, not in
-   the drawable's pixels: a 1920-wide rectangle there falls outside it and the picture blanks while the sound plays.
-   A full-screen one is flagged as such and is not affected. SB_PLANE=WxH overrides (development) */
-static SDL_Rect to_plane(int x, int y, int w, int h) {
-  static int pw, ph; if (!pw) { const char *e = getenv("SB_PLANE"); if (!e || sscanf(e, "%dx%d", &pw, &ph) != 2 || pw <= 0 || ph <= 0) { pw = 1280; ph = 720; } fprintf(stderr, "[video] partial rectangles in a %dx%d video space\n", pw, ph); }
-  SDL_Rect r = { x * pw / 1920, y * ph / 1080, w * pw / 1920, h * ph / 1080 }; return r;
+/* the ACB path (webOS 3/4): a partial rectangle (a letterboxed film, a crop) is given in the drawable's pixels, as the
+   window is (it was given in a 1280x720 space, and on a webOS 4.5 set with a 1920x1080 drawable the film drew at two
+   thirds, in the upper-left). Its edges are rounded so two neighbouring rectangles leave no gap and the whole screen
+   lands exactly on the surface; the rectangle is already kept inside the screen. A full-screen one is flagged as such */
+/* a partial rectangle (a letterboxed film, a crop) on the ACB path goes in the TV's own video space, which is its
+   display mode: asked of the TV the first time one is needed (once; nothing at start). Under 1920 wide (1280x720 on a
+   webOS 4.0 set, release 4.4.3 measured: a rectangle in the drawable's 1920x1080 pixels there blanked the picture
+   while the sound played) the rectangle is scaled to it with a plain window; 1920x1080 (webOS 4.5, release 4.10) in
+   the drawable's pixels, the whole frame as the window's source. No answer: the release decides (4.10 and later the
+   drawable's pixels, else 1280x720). A full-screen one is flagged as such and is not affected. SB_PLANE=WxH forces a
+   space (development) */
+static int plane_new = -1, plane_w = 1280, plane_h = 720;
+static void plane_rule(void) {
+  if (plane_new >= 0) return; const char *e = getenv("SB_PLANE"); const char *how;
+  if (e && sscanf(e, "%dx%d", &plane_w, &plane_h) == 2 && plane_w > 0 && plane_h > 0) { plane_new = 0; how = "SB_PLANE"; }
+  else { SDL_DisplayMode dm = { 0 }; int major = 0, minor = 0; const char *d = plat_device_name(), *v = d ? strstr(d, "webOS ") : NULL; if (v) sscanf(v + 6, "%d.%d", &major, &minor);
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.w > 0 && dm.h > 0) { plane_new = dm.w >= 1900; plane_w = dm.w; plane_h = dm.h; how = "the TV's display mode"; }
+    else { plane_new = major > 4 || (major == 4 && minor >= 10); plane_w = 1280; plane_h = 720; how = "the release (no display mode)"; }
+    fprintf(stderr, "[video] display mode %dx%d, release %d.%d\n", dm.w, dm.h, major, minor); }
+  if (plane_new) fprintf(stderr, "[video] partial rectangles in the %dx%d surface, the whole frame as their source (%s)\n", surfW, surfH, how);
+  else fprintf(stderr, "[video] partial rectangles in a %dx%d video space (%s)\n", plane_w, plane_h, how);
 }
-static int screensaverHeld(void) { return S.mediaId[0] && S.playing && !S.pausedByUs && !S.ended && !S.error; }
+/* a rectangle in the plane's space: its edges rounded (not its size: a moving edge never wobbles a pixel back and forth)
+   and set on even pixels outward (odd sizes give some scalers a coloured column at the edge) */
+static SDL_Rect even_rect(int x0, int y0, int x1, int y1, int W, int H) {
+  x0 -= x0 & 1; y0 -= y0 & 1; x1 += x1 & 1; y1 += y1 & 1;
+  if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > W) x1 = W; if (y1 > H) y1 = H;
+  SDL_Rect r = { x0, y0, x1 - x0 > 0 ? x1 - x0 : 2, y1 - y0 > 0 ? y1 - y0 : 2 }; return r; }
+static SDL_Rect to_plane(int x, int y, int w, int h) {
+  plane_rule();
+  if (!plane_new) return even_rect((x * 2 * plane_w + 1920) / 3840, (y * 2 * plane_h + 1080) / 2160, ((x + w) * 2 * plane_w + 1920) / 3840, ((y + h) * 2 * plane_h + 1080) / 2160, plane_w, plane_h);
+  return even_rect((x * 2 * surfW + 1920) / 3840, (y * 2 * surfH + 1080) / 2160, ((x + w) * 2 * surfW + 1920) / 3840, ((y + h) * 2 * surfH + 1080) / 2160, surfW, surfH);
+}
+/* the TV's screen saver kept off while a film is loaded: playing, buffering, seeking, changing tracks, or paused (the app's
+   own screen saver comes over a paused film); let through once it has ended or failed. Playing alone let it in at
+   a pause of the stream, and the TV then took the decoder away mid-film */
+static int screensaverHeld(void) { return S.mediaId[0] && !S.ended && !S.error; }
 
 /* ---- the video plane on webOS 3/4 ---- */
+/* the plain window: once the frame's size is known it goes as a custom window with the whole frame as its source (the
+   form a letterboxed film is measured to show in on these sets), before that as a plain one */
+static int acb_window(const PlaneReq *q, long *task, const char **how) {
+  SDL_Rect d = to_plane(q->wx, q->wy, q->ww, q->wh); int full = q->wx == 0 && q->wy == 0 && q->ww == 1920 && q->wh == 1080;
+  pthread_mutex_lock(&mu); int fw = S.w, fh = S.h; pthread_mutex_unlock(&mu);
+  plane_rule();
+  if (plane_new && fw > 0 && fh > 0 && acbCustomWindow && !noCrop) { *how = "whole frame"; int r = acbCustomWindow(acb, 0, 0, fw, fh, d.x, d.y, d.w, d.h, full, task); if (r) return r;
+    fprintf(stderr, "[video] the whole-frame window was refused: a plain one\n"); }
+  *how = "window"; return acbWindow(acb, d.x, d.y, d.w, d.h, full, task);
+}
 static void acb_callback(long h, long task, long event, long appState, long playState, int reply) { (void)h; (void)task; fprintf(stderr, "[video] acb event=%ld app=%ld play=%ld reply=%d\n", event, appState, playState, reply); }
 static void video_data_json(char *vd, size_t n, const char *mid) {
   int w, h, rate; long bits; char hdr[24], scan[24];
@@ -132,25 +180,46 @@ static void *bind_plane(void *u) {
     if (acbAudioData) { char ad[160]; snprintf(ad, sizeof ad, "{\"context\":\"%s\",\"audio\":{\"immersive\":\"none\"}}", mid); fprintf(stderr, "[video] bind audioData=%d\n", acbAudioData(acb, ad, &task)); } }
   sleep_ms(300);
   if (!ALIVE()) return NULL;
-  if (cropSX >= 0 && acbCustomWindow) { SDL_Rect d = to_plane(cropDX, cropDY, cropDW, cropDH); fprintf(stderr, "[video] bind crop=%d\n", acbCustomWindow(acb, cropSX, cropSY, cropSW, cropSH, d.x, d.y, d.w, d.h, cropDX == 0 && cropDY == 0 && cropDW == 1920 && cropDH == 1080, &task)); }
-  else { SDL_Rect d = to_plane(winX, winY, winW, winH); fprintf(stderr, "[video] bind window=%d\n", acbWindow(acb, d.x, d.y, d.w, d.h, winX == 0 && winY == 0 && winW == 1920 && winH == 1080, &task)); }
+  { PlaneReq q = plane_snap(); pthread_mutex_lock(&acbWinMu);
+    if (q.csx >= 0 && acbCustomWindow) { SDL_Rect d = to_plane(q.cdx, q.cdy, q.cdw, q.cdh); fprintf(stderr, "[video] bind crop=%d\n", acbCustomWindow(acb, q.csx, q.csy, q.csw, q.csh, d.x, d.y, d.w, d.h, q.cdx == 0 && q.cdy == 0 && q.cdw == 1920 && q.cdh == 1080, &task)); }
+    else { const char *how; int r = acb_window(&q, &task, &how); fprintf(stderr, "[video] bind %s=%d\n", how, r); }
+    pthread_mutex_unlock(&acbWinMu); }
   if (!ALIVE()) return NULL; fprintf(stderr, "[video] bind playing=%d\n", acbState(acb, 1, S.pausedByUs ? 3 : 2, &task));
 #undef ALIVE
   return NULL;
 }
-static void apply_plane(void) { /* the window or the crop, now (after the bind, or on the "playing" event) */
+/* telling the TV where the picture goes. The exported window (webOS 5+) is a Wayland request: at once, on this thread.
+   ACB (webOS 3/4) is a call into the TV's media service that held the drawing thread 5-15 ms each: a thread of its
+   own does it, always with the newest place asked for (a preview growing to the screen asks every frame; the ones
+   it had no time for are skipped, never queued) */
+static void apply_plane_now(const PlaneReq *q);
+static void plane_timed(const PlaneReq *q) { Uint32 t0 = SDL_GetTicks(); apply_plane_now(q); Uint32 d = SDL_GetTicks() - t0; static Uint32 logAt, n, worst, sum; /* (a line a second at most, when slow) */
+  n++; sum += d; if (d > worst) worst = d; if (SDL_GetTicks() - logAt >= 1000) { if (worst >= 4) fprintf(stderr, "[video] plane calls: %u in the last second, %u ms in all, worst %u ms\n", n, sum, worst); logAt = SDL_GetTicks(); n = sum = worst = 0; } }
+static pthread_cond_t planeCv = PTHREAD_COND_INITIALIZER; static int planeWant, planeThr;
+static void *plane_thread(void *u) { (void)u;
+  for (;;) { pthread_mutex_lock(&planeMu); while (!planeWant) pthread_cond_wait(&planeCv, &planeMu); planeWant = 0; pthread_mutex_unlock(&planeMu);
+    PlaneReq q = plane_snap(); pthread_mutex_lock(&acbWinMu); plane_timed(&q); pthread_mutex_unlock(&acbWinMu); }
+  return NULL; }
+static void apply_plane(void) {
+  if (expWin[0] || !acb) { PlaneReq q = plane_snap(); plane_timed(&q); return; }
+  pthread_mutex_lock(&planeMu);
+  if (!planeThr) { pthread_t th; if (pthread_create(&th, NULL, plane_thread, NULL) == 0) { pthread_detach(th); planeThr = 1; } else planeThr = -1; }
+  if (planeThr > 0) { planeWant = 1; pthread_cond_signal(&planeCv); pthread_mutex_unlock(&planeMu); return; }
+  pthread_mutex_unlock(&planeMu); { PlaneReq q = plane_snap(); plane_timed(&q); } /* (no thread: here, as before) */
+}
+static void apply_plane_now(const PlaneReq *q) { /* the window or the crop, now (after the bind, or on the "playing" event) */
   long task = 0;
   if (expWin[0]) {
     SDL_Rect org = { 0, 0, S.w > 0 ? S.w : 1920, S.h > 0 ? S.h : 1080 };
-    if (cropSX >= 0 && sdlExpCrop) { SDL_Rect src = { cropSX, cropSY, cropSW, cropSH }, dst = to_surface(cropDX, cropDY, cropDW, cropDH); if (sdlExpCrop(expWin, &org, &src, &dst)) return; noCrop = 1; cropSX = -1; }
-    SDL_Rect dst = to_surface(winX, winY, winW, winH); if (sdlExpSet) sdlExpSet(expWin, &org, &dst); /* the whole frame as the source, never NULL (some TVs drop the Wayland connection) */
+    if (q->csx >= 0 && sdlExpCrop) { SDL_Rect src = { q->csx, q->csy, q->csw, q->csh }, dst = to_surface(q->cdx, q->cdy, q->cdw, q->cdh); if (sdlExpCrop(expWin, &org, &src, &dst)) return; plane_no_crop(); }
+    SDL_Rect dst = to_surface(q->wx, q->wy, q->ww, q->wh); if (sdlExpSet) sdlExpSet(expWin, &org, &dst); /* the whole frame as the source, never NULL (some TVs drop the Wayland connection) */
     return;
   }
   if (!acb || !S.mediaId[0]) return;
-  if (cropSX >= 0 && acbCustomWindow) { SDL_Rect d = to_plane(cropDX, cropDY, cropDW, cropDH); int r = acbCustomWindow(acb, cropSX, cropSY, cropSW, cropSH, d.x, d.y, d.w, d.h, cropDX == 0 && cropDY == 0 && cropDW == 1920 && cropDH == 1080, &task);
-    fprintf(stderr, "[video] plane crop %d,%d %dx%d -> %d,%d %dx%d: %d\n", cropSX, cropSY, cropSW, cropSH, d.x, d.y, d.w, d.h, r); if (r) return; noCrop = 1; cropSX = -1; }
-  SDL_Rect d = to_plane(winX, winY, winW, winH); int r = acbWindow(acb, d.x, d.y, d.w, d.h, winX == 0 && winY == 0 && winW == 1920 && winH == 1080, &task);
-  fprintf(stderr, "[video] plane window %d,%d %dx%d: %d\n", d.x, d.y, d.w, d.h, r);
+  if (q->csx >= 0 && acbCustomWindow) { SDL_Rect d = to_plane(q->cdx, q->cdy, q->cdw, q->cdh); int r = acbCustomWindow(acb, q->csx, q->csy, q->csw, q->csh, d.x, d.y, d.w, d.h, q->cdx == 0 && q->cdy == 0 && q->cdw == 1920 && q->cdh == 1080, &task);
+    fprintf(stderr, "[video] plane crop %d,%d %dx%d -> %d,%d %dx%d: %d\n", q->csx, q->csy, q->csw, q->csh, d.x, d.y, d.w, d.h, r); if (r) return; plane_no_crop(); }
+  SDL_Rect d = to_plane(q->wx, q->wy, q->ww, q->wh); const char *how; int r = acb_window(q, &task, &how);
+  fprintf(stderr, "[video] plane %s %d,%d %dx%d: %d\n", how, d.x, d.y, d.w, d.h, r);
 }
 
 /* ---- the pipeline's events ---- */
@@ -212,6 +281,8 @@ static bool on_event(LSHandle *h, LSMessage *m, void *ctx) {
   return true;
 }
 static void start_load(void);
+static volatile int startSilent; /* (video_start_silent) */
+void video_start_silent(int on) { startSilent = on; }
 static int txtPending = -2;         /* a subtitle choice made before the pipeline had loaded: sent once it has (-2 none) */
 static bool on_load(LSHandle *h, LSMessage *m, void *ctx) {
   (void)h; const char *p = lsPayload(m); log_payload("load", p);
@@ -222,24 +293,25 @@ static bool on_load(LSHandle *h, LSMessage *m, void *ctx) {
   char b[128];
   snprintf(b, sizeof b, "{\"connectionId\":\"%s\"}", mid); call("notifyForeground", b, NULL, NULL);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", mid); call("subscribe", b, on_event, ctx);
+  if (startSilent) { snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"volume\":0}", mid); call("setVolume", b, NULL, NULL); } /* (held for its previews: silent from its first sound) */
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", mid); call("play", b, NULL, NULL); /* the pipeline picks its default tracks itself (choosing before sourceInfo can stall it) */
   return true;
 }
 /* the TV asks before its screen saver starts; the answer goes back with the request's own timestamp */
 static int ss_answer(const char *p, char *out, size_t cap) {
-  if (!p || !strstr(p, "\"state\":\"Active\"")) return 0;
-  const char *t = strstr(p, "\"timestamp\":"); if (!t) return 0; t += 12; while (*t == ' ') t++;
-  char ts[64]; int k = 0; while (*t && *t != ',' && *t != '}' && k < 63) ts[k++] = *t++; ts[k] = 0; /* sent back exactly as it came */
-  pthread_mutex_lock(&mu); int hold = screensaverHeld(); pthread_mutex_unlock(&mu);
-  snprintf(out, cap, "{\"clientName\":\"%s\",\"ack\":%s,\"timestamp\":%s}", SB_APP_ID, hold ? "false" : "true", ts);
-  fprintf(stderr, "[video] screen saver asked: %s\n", hold ? "held (a film plays)" : "let through");
+  char ts[64]; if (!ssreq_active(p, ts, sizeof ts)) { if (p && strstr(p, "state")) fprintf(stderr, "[video] screen saver request not about starting: %.100s\n", p); return 0; } /* (read whatever its spacing: it came pretty-printed) */
+  pthread_mutex_lock(&mu); int hold = screensaverHeld(); int pl = S.playing, pz = S.pausedByUs; pthread_mutex_unlock(&mu);
+  if (hold && pz && app_behind()) hold = 0; /* (#69: behind another app, its own screen saver never shows over a paused film: the TV's comes) */
+  extern volatile int saver_tv_hold; int own = 0; if (!hold && saver_tv_hold && !app_behind()) hold = own = 1; /* the app's own screen saver is on (Settings): it comes, never the TV's over it; Off: the TV's as before */
+  snprintf(out, cap, "{\"clientName\":\"%s\",\"ack\":%s,\"timestamp\":%s}", SB_APP_ID, hold ? "false" : "true", ts); /* the timestamp sent back exactly as it came */
+  fprintf(stderr, "[video] screen saver asked: %s\n", !hold ? "let through" : own ? "held (the app's own screen saver comes instead)" : pz ? "held (a film is paused: the app's own screen saver comes over it)" : pl ? "held (a film plays)" : "held (a film is loading, buffering or seeking)");
   return 1;
 }
 static int failed(const char *p) { const char *v = p ? strstr(p, "\"returnValue\"") : NULL; if (!v) return 0; v += 13; while (*v == ' ' || *v == ':') v++; return !strncmp(v, "false", 5); }
 #define SS_RESPONSE "luna://com.webos.service.tvpower/power/responseScreenSaverRequest"
 #define SS_REGISTER "luna://com.webos.service.tvpower/power/registerScreenSaverRequest"
 /* 1: the media handle may not reach the power service (a developer-mode role lets com.webos.media.client.*
-   names talk to com.webos.media only): video_pump asks again through the app's own luna handle */
+   names talk to com.webos.media only): video_pump asks again on a luna handle of the app's own name */
 static volatile int ssRefused;
 static bool on_screensaver(LSHandle *h, LSMessage *m, void *u) {
   (void)h; (void)u; const char *p = lsPayload(m);
@@ -249,7 +321,7 @@ static bool on_screensaver(LSHandle *h, LSMessage *m, void *u) {
 }
 static void on_screensaver_app(const char *p, void *ud) { /* main thread, from plat_luna_pump */
   (void)ud; if (failed(p)) { log_payload("screen saver request refused:", p); return; }
-  char b[256]; if (ss_answer(p, b, sizeof b)) plat_luna_send(SS_RESPONSE, b);
+  char b[256]; if (ss_answer(p, b, sizeof b)) plat_luna_send_app(SS_RESPONSE, b); /* from the handle the request came to */
 }
 
 static void *loop_thread(void *u) { (void)u; gLoopRun(loop); return NULL; }
@@ -262,7 +334,7 @@ int video_init(const char *ignored) {
   SYM(L, lsRegister, "LSRegister"); SYM(L, lsAttach, "LSGmainAttach"); SYM(L, lsCall, "LSCall"); SYM(L, lsPayload, "LSMessageGetPayload");
   *(void **)(&lsErrInit) = dlsym(L, "LSErrorInit"); *(void **)(&lsErrFree) = dlsym(L, "LSErrorFree");
   SYM(G, gLoopNew, "g_main_loop_new"); SYM(G, gLoopRun, "g_main_loop_run");
-  void *A = dlopen("libAcbAPI.so.1", RTLD_NOW);
+  void *A = dlopen("libAcbAPI.so.1", RTLD_NOW); acbOs = A != NULL;
   if (A) {
     SYM(A, acbCreate, "AcbAPI_create"); SYM(A, acbInit, "AcbAPI_initialize"); SYM(A, acbSink, "AcbAPI_setSinkType"); SYM(A, acbMedia, "AcbAPI_setMediaId");
     SYM(A, acbState, "AcbAPI_setState"); SYM(A, acbWindow, "AcbAPI_setDisplayWindow"); SYM(A, acbConnect, "AcbAPI_connectDass"); SYM(A, acbVideoData, "AcbAPI_setMediaVideoData");
@@ -301,23 +373,44 @@ static void stop_session(void) {
   seekTarget = -1; seekRefusedTries = 0; seekRetryAt = 0; seekWait = 0; hold = 0; lastCT = -1;
   if (mid[0]) { char b[128]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", mid); call("unload", b, NULL, NULL); }
 }
-void video_unload(void) { resume.on = 0; timed.on = 0; url[0] = 0; stop_session(); }
+void video_unload(void) { resume.on = 0; resume.pause = 0; S.diedBehind = 0; timed.on = 0; url[0] = 0; stop_session(); }
+/* an HLS playlist's address: .m3u8 / .m3u at the end of its path, or .m3u8 anywhere in it (as the player tells HLS);
+   our own converted streams (127.0.0.1 /h/) stay as they are */
+static int hls_address(const char *u) {
+  if (!strncmp(u, "http://127.0.0.1:", 17) && strstr(u, "/h/")) return 0;
+  const char *q = strpbrk(u, "?#"); size_t n = q ? (size_t)(q - u) : strlen(u);
+  return (n > 5 && !strncasecmp(u + n - 5, ".m3u8", 5)) || (n > 4 && !strncasecmp(u + n - 4, ".m3u", 4)) || strstr(u, ".m3u8") != NULL;
+}
 static void start_load(void) {
   if (!ready && !video_init(NULL)) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "no media service"); pthread_mutex_unlock(&mu); return; }
   stop_session(); txtPending = -2; pthread_mutex_lock(&mu); S.st = VID_LOADING; S.curTxt = -1; if (timed.on) { S.pos = timed.off; S.dur = timed.dur; } pthread_mutex_unlock(&mu); unsigned mine = session;
-  cropSX = -1; noCrop = 0;
+  pthread_mutex_lock(&planeMu); cropSX = -1; noCrop = 0; pthread_mutex_unlock(&planeMu);
   char payload[8192 + 512]; const char *win = expWin[0] ? expWin : "window_id_dummy";
-  int n = snprintf(payload, sizeof payload, "{\"payload\":{\"option\":{\"useSeekableRanges\":true,\"appId\":\"%s\",\"bufferControl\":{\"userBufferCtrl\":false},\"windowId\":\"%s\"}},\"uri\":\"%s\",\"type\":\"media\"}", SB_APP_ID, win, url);
-  if (n >= (int)sizeof payload) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "address too long"); pthread_mutex_unlock(&mu); return; }
+  static int forceType = -1; if (forceType < 0) forceType = getenv("SB_HLS_TYPE") != NULL; /* development: the HLS name on webOS 3/4 too (an HLS film failed there at once with 601) */
+  const char *tr = (!acbOs || forceType) && hls_address(url) ? "\"mediaTransportType\":\"HLS\"," : ""; /* (#81: beside "option", where LG's mediaOption puts it; inside it, the TV never read it) webOS 5+: an HLS playlist named as one, as the TV's web engine does (left
+     to guess, a live one buffers and never completes its load); webOS 3/4 load as before */
+  char uj[8192]; size_t uo = 0; /* the address as a JSON string: a quote, backslash or control character in it (a debrid link's raw file name) made the payload invalid and the load failed */
+  const char *c = url; for (; *c && uo + 7 < sizeof uj; c++) { unsigned char ch = (unsigned char)*c;
+    if (ch == '"' || ch == '\\') { uj[uo++] = '\\'; uj[uo++] = (char)ch; } else if (ch < 0x20) uo += (size_t)snprintf(uj + uo, sizeof uj - uo, "\\u%04x", ch); else uj[uo++] = (char)ch; }
+  uj[uo] = 0;
+  int n = snprintf(payload, sizeof payload, "{\"payload\":{%s\"option\":{\"useSeekableRanges\":true,\"appId\":\"%s\",\"bufferControl\":{\"userBufferCtrl\":false},\"windowId\":\"%s\"}},\"uri\":\"%s\",\"type\":\"media\"}", tr, SB_APP_ID, win, uj);
+  if (*c || n >= (int)sizeof payload) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "address too long"); pthread_mutex_unlock(&mu); return; }
   if (expWin[0]) apply_plane(); /* the exported window gets its frame and place before the load */
   if (!call("load", payload, on_load, (void *)(uintptr_t)mine)) { pthread_mutex_lock(&mu); S.st = VID_ERROR; S.error = 1; snprintf(S.err, sizeof S.err, "no media service"); pthread_mutex_unlock(&mu); }
 }
-void video_load(const char *u) { resume.on = 0; timed.on = 0; snprintf(url, sizeof url, "%s", u ? u : ""); start_load(); }
-void video_load_timed(const char *base, double durSec) {
+static int liveSrc;
+void video_set_live(int on) { liveSrc = on; }
+/* a live broadcast played again after a pause: loaded again where the broadcast is now (the TV went on from the paused
+   moment, behind the broadcast), its audio and subtitle tracks kept */
+void video_live_rejoin(void) { resume.pause = 0;
+  if (!url[0]) return; pthread_mutex_lock(&mu); int aud = S.curAud, txt = S.curTxt; S.pausedByUs = 0; pthread_mutex_unlock(&mu);
+  fprintf(stderr, "[video] a live broadcast played again after a pause: joined where it is now\n"); resume.on = 1; resume.at = 0; resume.aud = aud; resume.txt = txt; start_load(); }
+void video_load(const char *u) { liveSrc = 0; resume.on = 0; resume.pause = 0; timed.on = 0; snprintf(url, sizeof url, "%s", u ? u : ""); start_load(); }
+void video_load_timed(const char *base, double durSec) { resume.pause = 0;
   resume.on = 0; timed.on = 1; timed.off = 0; timed.dur = durSec; snprintf(timed.base, sizeof timed.base, "%s", base); snprintf(url, sizeof url, "%s?t=0", base); start_load();
 }
 static void simple(const char *method) { char mid[64]; pthread_mutex_lock(&mu); snprintf(mid, sizeof mid, "%s", S.mediaId); pthread_mutex_unlock(&mu); if (!mid[0]) return; char b[160]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", mid); call(method, b, NULL, NULL); }
-void video_play(void) { pthread_mutex_lock(&mu); S.pausedByUs = 0; if (S.st == VID_PAUSED) S.st = VID_PLAYING; pthread_mutex_unlock(&mu); simple("play"); }
+void video_play(void) { resume.pause = 0; pthread_mutex_lock(&mu); S.pausedByUs = 0; if (S.st == VID_PAUSED) { S.st = VID_PLAYING; S.pos = pos_now(); posAt = SDL_GetTicks() / 1000.0; S.playing = 1; } pthread_mutex_unlock(&mu); simple("play"); }
 /* the stream's own volume (0-100), reached over easeMs (the media service's own ease: no steps of ours) */
 int video_has_media(void) { pthread_mutex_lock(&mu); int h = S.mediaId[0] != 0; pthread_mutex_unlock(&mu); return h; }
 void video_set_volume(int pct, int easeMs) {
@@ -327,7 +420,7 @@ void video_set_volume(int pct, int easeMs) {
   else snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"volume\":%d}", mid, pct);
   call("setVolume", b, NULL, NULL);
 }
-void video_pause(void) { pthread_mutex_lock(&mu); S.pausedByUs = 1; S.st = VID_PAUSED; pthread_mutex_unlock(&mu); simple("pause"); }
+void video_pause(void) { pthread_mutex_lock(&mu); S.pos = pos_now(); posAt = SDL_GetTicks() / 1000.0; S.playing = 0; S.pausedByUs = 1; S.st = VID_PAUSED; pthread_mutex_unlock(&mu); simple("pause"); } /* (the time no longer guessed on from here: only the TV's own reports move it, so a pause it ignores shows) */
 /* presses add up: the shown position moves at once, the pipeline gets one seek 350 ms after the last (four
    seeks in under a second were followed by a dead pipeline) */
 void video_seek(double sec) { if (sec < 0) sec = 0; pthread_mutex_lock(&mu); S.pos = sec; posAt = SDL_GetTicks() / 1000.0; hold_on(); pthread_mutex_unlock(&mu); seekTarget = sec; seekAt = SDL_GetTicks() + 350; }
@@ -371,12 +464,17 @@ void video_select_text(int idx) {
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"text\",\"index\":%d}", mid, idx); call("selectTrack", b, NULL, NULL);
 }
 void video_set_surface(int w, int h) { if (w > 0 && h > 0) { surfW = w; surfH = h; fprintf(stderr, "[video] plane rectangles in a %dx%d surface\n", w, h); } }
+VidPlaneCaps video_plane_caps(void) {
+  VidPlaneCaps c = acbOs ? (VidPlaneCaps){ 0, 80, 40, 0 } : (VidPlaneCaps){ 1, 20, 0, 0 }; /* ACB: a bus call the sink applies later; the exported window: a Wayland request with our frame */
+  const char *e; if ((e = getenv("SB_GROW_LEAD"))) c.leadMs = atoi(e); if ((e = getenv("SB_GROW_STEP"))) { c.stepMs = atoi(e); c.perFrame = c.stepMs <= 0; } if ((e = getenv("SB_GROW")) && !strcmp(e, "cut")) c.cut = 1;
+  return c; }
 void video_set_window(float x, float y, float w, float h) {
-  int ix = (int)x, iy = (int)y, iw = (int)w, ih = (int)h;
+  int ix = (int)lroundf(x), iy = (int)lroundf(y), iw = (int)lroundf(x + w) - ix, ih = (int)lroundf(y + h) - iy; /* (edges rounded, then the size) */
   if (ix < 0) { iw += ix; ix = 0; } if (iy < 0) { ih += iy; iy = 0; } if (ix + iw > 1920) iw = 1920 - ix; if (iy + ih > 1080) ih = 1080 - iy; /* inside the screen, always */
   if (iw < 1 || ih < 1) return;
-  if (ix == winX && iy == winY && iw == winW && ih == winH && cropSX < 0) return;
-  winX = ix; winY = iy; winW = iw; winH = ih; cropSX = -1;
+  pthread_mutex_lock(&planeMu);
+  if (ix == winX && iy == winY && iw == winW && ih == winH && cropSX < 0) { pthread_mutex_unlock(&planeMu); return; }
+  winX = ix; winY = iy; winW = iw; winH = ih; cropSX = -1; pthread_mutex_unlock(&planeMu);
   pthread_mutex_lock(&mu); int have = S.mediaId[0] != 0; pthread_mutex_unlock(&mu);
   if (have || expWin[0]) apply_plane();
 }
@@ -386,28 +484,34 @@ int video_set_crop(int sx, int sy, int sw, int sh, float dx, float dy, float dw,
   int ix = (int)dx, iy = (int)dy, iw = (int)dw, ih = (int)dh;
   if (ix < 0) { iw += ix; ix = 0; } if (iy < 0) { ih += iy; iy = 0; } if (ix + iw > 1920) iw = 1920 - ix; if (iy + ih > 1080) ih = 1080 - iy;
   if (sw < 2 || sh < 2 || iw < 1 || ih < 1) return 0;
-  if (sx == cropSX && sy == cropSY && sw == cropSW && sh == cropSH && ix == cropDX && iy == cropDY && iw == cropDW && ih == cropDH) return 1;
-  cropSX = sx; cropSY = sy; cropSW = sw; cropSH = sh; cropDX = ix; cropDY = iy; cropDW = iw; cropDH = ih; winX = ix; winY = iy; winW = iw; winH = ih;
+  pthread_mutex_lock(&planeMu);
+  if (sx == cropSX && sy == cropSY && sw == cropSW && sh == cropSH && ix == cropDX && iy == cropDY && iw == cropDW && ih == cropDH) { pthread_mutex_unlock(&planeMu); return 1; }
+  cropSX = sx; cropSY = sy; cropSW = sw; cropSH = sh; cropDX = ix; cropDY = iy; cropDW = iw; cropDH = ih; winX = ix; winY = iy; winW = iw; winH = ih; pthread_mutex_unlock(&planeMu);
   pthread_mutex_lock(&mu); int have = S.mediaId[0] != 0; pthread_mutex_unlock(&mu);
   if (have) apply_plane();
   return !noCrop;
 }
 void video_pump(void) {
   if (ssRefused == 1) { ssRefused = 2; char b[160]; snprintf(b, sizeof b, "{\"subscribe\":true,\"clientName\":\"%s\"}", SB_APP_ID);
-    fprintf(stderr, "[video] screen saver requests through the app's luna handle: %s\n", plat_luna_subscribe(SS_REGISTER, b, on_screensaver_app, NULL) ? "asked" : "not possible"); }
+    fprintf(stderr, "[video] screen saver requests through the app's luna handle: %s\n", plat_luna_subscribe_app(SS_REGISTER, b, on_screensaver_app, NULL) ? "asked" : "not possible"); }
   int bind = 0, again = 0, died = 0; double pos = 0; int aud = 0, txt = -1, loaded = 0;
   pthread_mutex_lock(&mu);
   if (S.bindWanted & 1) bind = acb != 0; if (S.bindWanted & 2) again = 1; S.bindWanted = 0;
-  if (S.died) { S.died = 0; died = 1; pos = S.pos; aud = S.curAud; txt = S.curTxt; }
+  int diedPaused = 0; if (S.died && !app_behind()) { S.died = 0; died = 1; pos = S.pos; aud = S.curAud; txt = S.curTxt; diedPaused = S.pausedByUs && S.diedBehind; S.diedBehind = 0; } /* (#69: the TV took the decoder for the app in front: loaded again once back, never against that app) */
+  else if (S.died && !S.diedBehind) { S.diedBehind = 1; fprintf(stderr, "[video] the pipeline died behind another app: loaded again once in front\n"); }
   loaded = S.loaded;
   pthread_mutex_unlock(&mu);
   if (bind) { pthread_t th; if (!pthread_create(&th, NULL, bind_plane, (void *)(uintptr_t)session)) pthread_detach(th); } /* every loadCompleted binds the plane again */
   else if (again) apply_plane();
-  if (died && url[0]) { fprintf(stderr, "[video] the pipeline died: loading the same source again at %.0f s\n", pos); resume.on = 1; resume.at = pos; resume.aud = aud; resume.txt = txt; start_load(); return; }
+  if (died && url[0] && liveSrc) { fprintf(stderr, "[video] the pipeline died: a live broadcast, joined again where it is now\n"); resume.on = 1; resume.at = 0; resume.aud = aud; resume.txt = txt; start_load(); return; } /* (the old moment may be gone from its window) */
+  if (died && url[0]) { fprintf(stderr, "[video] the pipeline died: loading the same source again at %.0f s\n", pos); resume.on = 1; resume.at = pos; resume.aud = aud; resume.txt = txt; resume.pause = diedPaused; start_load(); return; }
   if (txtPending != -2 && loaded && !resume.on) video_select_text(txtPending);
   if (resume.on && loaded) { /* tracks first, then the position: a track change restarts the decode */
     resume.on = 0; if (resume.aud > 0) video_select_audio(resume.aud); if (resume.txt >= 0) video_select_text(resume.txt); if (resume.at > 1) { seek_now(resume.at); }
+    if (resume.pause && !resume.on) { resume.pause = 0; video_pause(); } /* (it was paused for the other app: it stays paused; a converted stream's seek loads again first) */
   }
   if (seekTarget >= 0 && SDL_TICKS_PASSED(SDL_GetTicks(), seekAt)) { double t = seekTarget; seekTarget = -1; seek_now(t); }
   if (seekRetryAt && SDL_TICKS_PASSED(SDL_GetTicks(), seekRetryAt)) { seekRetryAt = 0; double t = video_time(); fprintf(stderr, "[video] seek refused: again (%d)\n", seekRefusedTries); seek_now(t); }
 }
+
+int video_edge_colors(uint32_t *out4) { (void)out4; return 0; } /* (the picture is on the TV's own plane: the app never sees it) */

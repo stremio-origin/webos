@@ -8,11 +8,16 @@
 #define CINEMETA "https://v3-cinemeta.strem.io"
 #define STREMIO_API "https://api.strem.io"
 
+/* the longest title id and video id kept (#81: an addon's 64-character event id lost its last character in 64 bytes,
+   and its streams were asked for under the cut id); a video id is the title's and ":season:episode" after it */
+#define SB_ID 128
+#define SB_VID 160
 /* a catalog entry / library card */
 typedef struct {
-  char id[64], type[16], name[256], poster[512], background[512], logo[512], description[1024], metaLine[96];
-  char videoId[80]; float progress, left; int cw;
+  char id[SB_ID], type[16], name[256], poster[512], background[512], logo[512], description[1024], metaLine[96];
+  char videoId[SB_VID]; float progress, left; int cw;
   int ep; char epName[256];      /* an episode card on a title page: its menu offers the streams */
+  int newEp; double airAt;       /* Continue Watching: new episodes out since it was watched; Upcoming: when it airs */
 } Item;
 typedef struct { Item *items; int n; int total; /* total: the metas in the answer (a page may hold more than kept); -1: the source did not answer */ } ItemList;
 
@@ -31,7 +36,8 @@ void sb_login(const char *email, const char *password, SbCb cb, void *ud);
 void sb_finish_login(const char *authKey, SbCb cb, void *ud);   /* QR sign-in: fetches the user */
 void sb_logout(void);
 void sb_forget_local(void);   /* this TV signs out (its kept account, addons, library), the session itself left alone */
-void sb_sync_addons(void (*cb)(int changed, void *ud), void *ud);
+void sb_sync_addons(void (*cb)(int changed, void *ud), void *ud); /* changed: 1 the list changed, 0 the same, -1 the account didn't answer, -2 signed out */
+void sb_addon_sync_counts(int *added, int *removed); /* the last sync's addons in and out */
 void sb_pull_library(void (*cb)(int changed, void *ud), void *ud);
 void sb_sync_soon(int force);          /* pull if the last one was a while ago (core/sync.c: boards rebuild when it changed) */
 unsigned sb_lib_sync_age(void);        /* ms since the last library pull began (huge when none yet) */
@@ -42,9 +48,12 @@ void sb_addon_key(const cJSON *addon, char *out, size_t cap);  /* its manifest i
 /* ---- catalogs ---- */
 int  sb_home_defs(CatalogDef *out, int max);
 int  sb_disc_defs(CatalogDef *out, int max);
+int  sb_disc_defs_f(CatalogDef *out, int max, const char *type, const char *genre); /* Discover filtered: type "" / movie / series, genre "" for any */
+int  sb_disc_genres(char (*out)[48], int max, const char *type); /* the genres the installed catalogs of that type offer */
 /* cached copy first (cb with cached=1), then the fresh one if it differs; the list is malloc'd for the callback owner */
 void sb_catalog(const CatalogDef *def, void (*cb)(ItemList *list, int cached, void *ud), void *ud);
 void sb_catalog_url(const char *url, const char *type, int n, void (*cb)(ItemList *list, int cached, void *ud), void *ud);
+void sb_catalog_recheck(const char *url, const char *type, int n, void (*cb)(ItemList *list, int cached, void *ud), void *ud); /* a big list asked past cacheMaxAge: only a change or gone comes back */
 /* the next page of a catalog that pages: everything from item `skip` on (never cached). list NULL: the request failed
    (it can be asked again); list->n 0: the end. more: the answer's hasMore (1 / 0), -1 when it did not say */
 void sb_catalog_page(const CatalogDef *def, int skip, void (*cb)(ItemList *list, int more, void *ud), void *ud);
@@ -71,16 +80,24 @@ cJSON *lib_get(const char *id);         /* the account's item or NULL (belongs t
 int  lib_has(const char *id);           /* in the Library (not removed) */
 void lib_toggle(const Item *it);
 int  lib_cw_items(ItemList *out);       /* Continue Watching, newest first */
-typedef struct { char vid[80]; float pct, leftMin; } CwInfo;
+typedef struct { char vid[SB_VID]; float pct, leftMin; } CwInfo;
 int  lib_cw_info(const Item *it, CwInfo *out);
+float lib_trakt_resume(const char *id, const char *vid); /* Trakt's pause of that video, the newer than the library's: where (0..1), 0 none */
 int  lib_item_watched(const Item *it);  /* the badge */
 int  lib_is_marked_watched(const Item *it);
 void lib_toggle_watched(const Item *it, const cJSON *videos);
+void lib_set_watched(const Item *it, const cJSON *videos, int on); /* by hand: a film, a show (videoId empty or its id) or an episode; the rules and Continue Watching place in stremio.c */
+void lib_episode_watched(const Item *it, const cJSON *videos); /* it->videoId and every aired one before it watched, the series' place on to the next aired one (videos NULL: the cached list) */
 int  lib_movie_watched(const cJSON *lit);
 int  lib_series_watched(const cJSON *lit, const cJSON *videos);
 void lib_set_eps_watched(cJSON *lit, const cJSON *videos, const char **epIds, int n, int on);
 void lib_set_movie_watched(cJSON *lit, int on);
-void lib_ep_watched_map(const cJSON *lit, const cJSON *videos, int *outFlags);  /* flags[i] per videos[i] */
+#define WATCH_MAX 4096 /* the episodes a series' watched marks cover (One Piece is past 1100) */
+void lib_ep_watched_map(const cJSON *lit, const cJSON *videos, int *outFlags);  /* flags[i] per videos[i], WATCH_MAX at most */
+int  lib_ep_rank(const cJSON *videos, const char *vid, int *season); /* its place in (season, episode) order, -1 unknown */
+int  lib_unwatch_after(cJSON *lit, const cJSON *videos, const char *vid); /* the episodes after it unwatched (specials kept); how many */
+int  lib_mark_through(cJSON *lit, const cJSON *videos, const char *vid); /* vid and every aired episode before it watched (specials kept); how many */
+int  lib_caught_up(cJSON *lit, const cJSON *videos, const char *vid); /* vid the newest aired episode: every aired one watched (specials kept); how many, 0 if not the newest */
 cJSON *lib_new_item(const Item *it);
 void lib_save(cJSON *lit);              /* mtime, store, push */
 /* force = push to the account now (pause, close, end); otherwise at most once a minute */
@@ -114,10 +131,15 @@ void sb_remember_stream(const char *id, const char *vid, const Stream *s);
 /* from: where it came from (the stream itself, a subtitles addon, the OpenSubtitles fallback); addon: that source's
    name; label: the addon's own label for it ("" when none); order: the addon's place in the list */
 enum { SUB_STREAM = 0, SUB_ADDON = 1, SUB_FALLBACK = 2 };
-typedef struct { char lang[24], name[64], url[1024]; int n; char addon[64], label[96]; int from, order; char rel[96]; int hm; double fps; } SubEntry; /* rel: the file's own name when told; hm: found by the video's hash; fps: the frame rate it was timed for (0 unknown) */
+typedef struct { char lang[24], name[64], url[1024]; int n; char addon[64], label[96]; int from, order; char rel[96]; int hm, forced; double fps; } SubEntry; /* rel: the file's own name when told; hm: found by the video's hash; forced: only the lines in another language and the signs (its flag, else its name); fps: the frame rate it was timed for (0 unknown) */
 /* the subtitles a stream object carried (stream.subtitles), kept from its addon's answer; *out malloc'd (NULL when none) */
 int  sb_stream_subs(const Stream *s, SubEntry **out);
 
 /* ---- search ---- */
 void sb_suggest(const char *q, void (*cb)(ItemList *list, char names[6][128], int nnames, void *ud), void *ud);
+/* Discover as the official app's: its types, a type's catalogs (the addon's name in addon[]), a catalog's genres, the catalog asked with one */
+int  sb_disc_types(char (*out)[16], int max);
+int  sb_disc_cats(const char *type, CatalogDef *out, char (*addon)[64], int max);
+int  sb_disc_cat_genres(const CatalogDef *d, char (*out)[48], int max, int *required);
+void sb_disc_with_genre(CatalogDef *d, const char *genre);
 #endif

@@ -17,13 +17,14 @@
 #include "ui/widgets.h"
 #include "ui/sound.h"
 #include "core/hit.h"
+#include "core/coll.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <stddef.h>
 
-#define NF 6
+#define NF 7
 #define NB (NF + 1)          /* the categories, then the sort */
 #define COLS 5
 #define MAXSHOW 200
@@ -36,12 +37,13 @@
 #define ROW0_Y (GRID_TOP + 36)
 #define RAIL_X 48.0f
 #define RAIL_Y 410.0f
-static const char *F_LB[NF] = { "All", "Movies", "Series", "In progress", "Watched", "Not watched" };
-static const char *F_IC[NF] = { "lib_all", "lib_movie", "lib_series", "lib_prog", "lib_seen", "lib_new" };
+static const char *F_LB[NF] = { "All", "Movies", "Series", "Collections", "In progress", "Watched", "Not watched" }; /* (what it holds first, then how far it is watched) */
+static const char *F_IC[NF] = { "lib_all", "lib_movie", "lib_series", "lib_coll", "lib_prog", "lib_seen", "lib_new" };
+#define F_COLL 3 /* the collections the Library's films are in, one poster each */
 static const char *S_KEY[4] = { "added", "watched", "az", "year" };
 static const char *S_LB[4] = { "Recently added", "Recently watched", "A\xe2\x80\x93Z", "Newest" };
 
-typedef struct { Item it; int year, cw, done; double added, seen; float pct, left; char poster[512]; } LibIt; /* poster: the address the card draws */
+typedef struct { Item it; int year, cw, done; double added, seen; float pct, left; char poster[512]; char ckey[24]; int nIn, nAll, det; } LibIt; /* ckey: a collection's card (nIn: its films in the Library; det: its own pictures and words in) */ /* poster: the address the card draws */
 /* the head's words: its facts (they can come a moment later than the title, then they crossfade in place); mp and
    lftW: the meta line and the time left, measured when the facts are made */
 typedef struct { int left; float pct; char meta[200], gen[200], bits[120], lft[80], desc[1024]; int measured; float lftW; MetaParts mp; } Facts;
@@ -49,7 +51,7 @@ typedef struct { int left; float pct; char meta[200], gen[200], bits[120], lft[8
 typedef struct { Item it; int on; char logo[512]; Facts f; } Head;
 static struct {
   Tween sortDot; /* the lit dot of the sort pill (glides to the order chosen) */
-  int built; unsigned ver; LibIt *all; int nall; int *items; int n; int counts[NF];
+  int built; unsigned ver; LibIt *all; int nall, nreal, capall; unsigned collVer; int *items; int n; int counts[NF];
   int zone; /* 0 the rail, 1 the grid */ int tab, ri, idx;
   /* the rail: each button glides to its place, its label fades in as it opens; three pills (current, sort, focus) */
   float lw[NB]; char lbl[NB][96], cnt[NF][12]; Tween bx[NB], la[NB], bw[NB]; /* bw: each button's width, gliding as it opens into a pill with its name */ Pill pc, ps, pf; Timer1 press; Nudge nudge; int laid;
@@ -57,7 +59,7 @@ static struct {
   Tween gridY, fsc, osc; int fcur, fold; Timer1 ringPop, gridIn; Tween ringA;   /* the focused poster lifts (1.05), the one left settles back */
   /* the head: what is shown, what it replaces (held until the crossfade is over), and what comes next */
   Head cur, prev; Facts fprev; Timer1 headIn, factsIn; char hLogo[512];
-  char wantId[64], shownId[64]; int wantIdx, wantStage; double wantAt, logoDeadline, metaDeadline;
+  char wantId[SB_ID], shownId[SB_ID]; int wantIdx, wantStage; double wantAt, logoDeadline, metaDeadline;
   LibIt remIt; int remIdx; double remAt; /* one just taken out: it fades and shrinks where it was while the ones after move back a place */
 } L;
 
@@ -69,8 +71,8 @@ static double iso_ms(const cJSON *v) {
   return 0;
 }
 static void load(void) {
-  free(L.all); L.all = NULL; L.nall = 0; cJSON *lib = store_node("lib"); if (!cJSON_IsObject(lib)) return;
-  int cap = cJSON_GetArraySize(lib); if (!cap) return; L.all = calloc(cap, sizeof *L.all);
+  free(L.all); L.all = NULL; L.nall = L.nreal = L.capall = 0; L.collVer = 0; cJSON *lib = store_node("lib"); if (!cJSON_IsObject(lib)) return;
+  int cap = cJSON_GetArraySize(lib); if (!cap) return; L.capall = cap * 2; L.all = calloc((size_t)L.capall, sizeof *L.all); /* (room for a collection card per film at most) */
   const cJSON *x; cJSON_ArrayForEach(x, lib) {
     if (js_bool(x, "removed", 0) || !js_str(x, "name", "")[0]) continue;
     LibIt *o = &L.all[L.nall++]; Item *it = &o->it; const cJSON *st = js_obj(x, "state");
@@ -85,10 +87,31 @@ static void load(void) {
     o->done = lib_item_watched(it);
     sb_poster_of(it, o->poster, sizeof o->poster);
   }
+  L.nreal = L.nall;
+}
+/* the collections the Library's films and shows are in: one card each, its titles kept in the Library counted. A card
+   shows once its collection's details are in and it has two titles or more (never one that turns out to be none);
+   made again whenever more is known */
+static int coll_cards(void) {
+  int before = L.nall - L.nreal; L.nall = L.nreal;
+  static struct { char key[24]; int n; char name[160], poster[400], bd[400], ov[600]; } LD[256]; static int nld; int asks = 0;
+  for (int j = 0; j < L.nreal; j++) { const LibIt *o = &L.all[j]; char key[24]; const char *nm; if (coll_of(o->it.type, o->it.id, key, sizeof key, &nm) != 1) continue;
+    int li = -1; for (int i = 0; i < nld; i++) if (!strcmp(LD[i].key, key)) { li = i; break; }
+    if (li < 0) { if (nld >= 256) continue; int kn = asks < 8 ? coll_known(key) : 0; /* (eight on their way at a time: the collections' own small store never drops one; those kept on disk come at once) */
+      if (kn == 0) { asks++; continue; } const Coll *d = kn > 0 ? coll_get(key) : NULL;
+      li = nld++; if (!d) { snprintf(LD[li].key, sizeof LD[li].key, "%s", key); LD[li].n = 0; continue; } /* (not a collection: remembered, no card) */ snprintf(LD[li].key, sizeof LD[li].key, "%s", key); LD[li].n = d->n; snprintf(LD[li].name, sizeof LD[li].name, "%s", d->name[0] ? d->name : nm); snprintf(LD[li].poster, sizeof LD[li].poster, "%s", d->poster); snprintf(LD[li].bd, sizeof LD[li].bd, "%s", d->backdrop); snprintf(LD[li].ov, sizeof LD[li].ov, "%s", d->overview); }
+    if (LD[li].n < 2) continue;
+    LibIt *c = NULL; for (int k = L.nreal; k < L.nall; k++) if (!strcmp(L.all[k].ckey, key)) { c = &L.all[k]; break; }
+    if (!c) { if (L.nall >= L.capall) continue; c = &L.all[L.nall++]; memset(c, 0, sizeof *c); snprintf(c->ckey, sizeof c->ckey, "%s", key); c->det = 1; snprintf(c->it.type, sizeof c->it.type, "collection"); snprintf(c->it.id, sizeof c->it.id, "coll:%s", key);
+      snprintf(c->it.name, sizeof c->it.name, "%s", LD[li].name); snprintf(c->poster, sizeof c->poster, "%s", LD[li].poster[0] ? LD[li].poster : o->poster); snprintf(c->it.poster, sizeof c->it.poster, "%s", c->poster);
+      snprintf(c->it.background, sizeof c->it.background, "%s", LD[li].bd[0] ? LD[li].bd : o->it.background); snprintf(c->it.description, sizeof c->it.description, "%s", LD[li].ov); c->year = o->year; c->nAll = LD[li].n; }
+    c->nIn++; if (o->year && (!c->year || o->year < c->year)) c->year = o->year; if (o->added > c->added) c->added = o->added; if (o->seen > c->seen) c->seen = o->seen; }
+  return L.nall - L.nreal != before || asks;
 }
 static int pass(const LibIt *o, int f) {
+  if (o->ckey[0] || f == F_COLL) return o->ckey[0] && f == F_COLL; /* (a collection's card: under Collections only) */
   switch (f) { case 0: return 1; case 1: return !strcmp(o->it.type, "movie"); case 2: return !strcmp(o->it.type, "series");
-    case 3: return o->cw; case 4: return o->done; default: return !o->done && !o->cw; }
+    case 4: return o->cw; case 5: return o->done; default: return !o->done && !o->cw; } /* (3: Collections, above) */
 }
 static int sort_key(void) { const char *s = store_get("libSort", "added"); for (int i = 0; i < 4; i++) if (!strcmp(s, S_KEY[i])) return i; return 0; }
 static int g_sk;
@@ -140,6 +163,7 @@ static void head_facts(const Item *h, const cJSON *m, Facts *F) {
     snprintf(F->meta, sizeof F->meta, "%s %s %s%s", rel, rt, *ir ? "IMDb " : "", ir);
     const cJSON *gs = js_arr(m, "genres"); if (gs) { int n = 0; const cJSON *g; cJSON_ArrayForEach(g, gs) { if (n >= 3 || !cJSON_IsString(g)) break; size_t l = strlen(F->gen); snprintf(F->gen + l, sizeof F->gen - l, "%s%s", n ? T(", ") : "", T(g->valuestring)); n++; } }
     snprintf(F->desc, sizeof F->desc, "%s", js_str(m, "description", "")); }
+  else if (o && o->ckey[0]) { char n[16], m[16]; snprintf(n, sizeof n, "%d", o->nIn); snprintf(m, sizeof m, "%d", o->nAll); snprintf(F->bits, sizeof F->bits, "%s  \xc2\xb7  %s  \xc2\xb7  %s", T("Collection"), T1("{n} titles", "n", m), T1("{n} in your Library", "n", n)); snprintf(F->desc, sizeof F->desc, "%s", o->it.description); }
   else if (o) { char y[16] = ""; if (o->year) snprintf(y, sizeof y, "%d", o->year); snprintf(F->bits, sizeof F->bits, "%s%s%s", T(!strcmp(o->it.type, "series") ? "Series" : "Movie"), y[0] ? "  \xc2\xb7  " : "", y); }
   if (o && o->cw) { if (o->left < 1) snprintf(F->lft, sizeof F->lft, "%s", T("Less than a minute left")); else { char r[32]; int mn = (int)(o->left + 0.5f); sb_fmt_runtime(mn < 1 ? 1 : mn, r, sizeof r); snprintf(F->lft, sizeof F->lft, "%s", T1("{t} left", "t", r)); } F->left = 1; F->pct = o->pct; }
   else if (o && o->done) snprintf(F->lft, sizeof F->lft, "%s", T("Watched"));
@@ -151,8 +175,8 @@ static void on_head_meta(cJSON *m, void *ud) { (void)ud; if (!m || SCR != SCR_LI
   L.fprev = L.cur.f; L.cur.f = F; timer_start(&L.factsIn, 0.35f); }
 /* a title's details asked once: its answer is on its way (the meta call itself does not merge requests) */
 static void meta_once(const Item *it) {
-  static char asked[16][64]; static double askedAt[16]; static int an; double now = app_now();
-  if (sb_meta_cached(it->type, it->id)) return;
+  static char asked[16][SB_ID]; static double askedAt[16]; static int an; double now = app_now();
+  if (!strcmp(it->type, "collection") || sb_meta_cached(it->type, it->id)) return; /* (a collection: its words are its own) */
   for (int i = 0; i < 16; i++) if (!strcmp(asked[i], it->id) && now - askedAt[i] < 15) return;
   snprintf(asked[an], sizeof asked[an], "%s", it->id); askedAt[an] = now; an = (an + 1) % 16;
   sb_meta(it->type, it->id, on_head_meta, NULL);
@@ -206,7 +230,7 @@ static void paint(void) { rail_paint(0); head_want();
   int row = L.zone == 1 ? L.idx / COLS : 0; tween_to(&L.gridY, -row * LROWH, 0.32f, EASE_OUT); }
 static void enter(const void *p) {
   (void)p; int keep = L.built && L.ver == lib_version(); if (!L.built) L.zone = 1; /* the first visit opens on the grid */ L.built = 1;
-  if (!keep) { L.ver = lib_version(); load(); render(); }
+  if (!keep) { L.ver = lib_version(); load(); coll_cards(); L.collVer = coll_version(); render(); }
   L.pc.dur = L.ps.dur = L.pf.dur = GLIDE_DUR; L.cur.on = L.cur.on && L.shownId[0]; L.prev.on = 0; L.headIn.on = L.factsIn.on = 0; rail_paint(1);
   if (!L.n) { L.zone = 0; L.ri = L.tab; }
   L.fcur = L.fold = -1; paint(); tween_set(&L.gridY, L.gridY.to);
@@ -216,7 +240,7 @@ static void enter(const void *p) {
    backdrop, logo and details */
 int lib_warm(void) {
   if (SCR == SCR_LIB) return 1;
-  if (!L.built) { L.zone = 1; L.built = 1; L.ver = lib_version(); load(); render(); return 0; }
+  if (!L.built) { L.zone = 1; L.built = 1; L.ver = lib_version(); load(); coll_cards(); L.collVer = coll_version(); render(); return 0; }
   int ok = 1;
   if (img_budget_mb() < 80) { const LibIt *o = at(0); if (o) head_ahead(0); return !o || sb_meta_cached(o->it.type, o->it.id) != NULL; } /* a small picture budget: the data only (see board_warm) */
   for (int i = 0; i < COLS * 2 && i < L.n; i++) { const char *src = at(i)->poster; if (!src[0]) continue;
@@ -250,9 +274,13 @@ static int key(int k) {
 static void tick(float dt) {
   if (L.built && L.ver != lib_version()) { L.ver = lib_version();
     int nw = L.n; LibIt *was = nw ? malloc(sizeof(LibIt) * (size_t)nw) : NULL; if (was) for (int i = 0; i < nw; i++) was[i] = *at(i); /* the grid as it was, to find one taken out */
-    load(); render();
+    load(); coll_cards(); L.collVer = coll_version(); render();
     if (was && L.n == nw - 1) for (int i = 0; i < nw; i++) { int in = 0; for (int j = 0; j < L.n && !in; j++) in = !strcmp(at(j)->it.id, was[i].it.id); if (!in) { L.remIt = was[i]; L.remIdx = i; L.remAt = app_now(); break; } }
     free(was); if (!L.n) { L.zone = 0; L.ri = L.tab; } paint(); } /* the library changed (the card menu, a sync) */
+  if (L.built && L.collVer != coll_version()) { L.collVer = coll_version(); int grew = coll_cards(); /* more known about the collections */
+    if (L.tab == F_COLL && grew) { char fid[SB_ID] = ""; const LibIt *f = at(L.idx); if (f) snprintf(fid, sizeof fid, "%s", f->it.id); int had = L.n; render(); if (had) L.gridIn.on = 0; /* (the cards there stay put: only the new one comes) */
+      for (int i = 0; fid[0] && i < L.n; i++) if (!strcmp(at(i)->it.id, fid)) { L.idx = i; break; } paint(); }
+    else if (grew) { int c = 0; for (int j = 0; j < L.nall; j++) if (pass(&L.all[j], F_COLL)) c++; L.counts[F_COLL] = c; snprintf(L.cnt[F_COLL], sizeof L.cnt[F_COLL], "%d", c); rail_paint(0); } }
   for (int i = 0; i < NB; i++) { tween_tick(&L.bx[i], dt); tween_tick(&L.la[i], dt); tween_tick(&L.bw[i], dt); }
   pill_tick(&L.pc, dt); pill_tick(&L.ps, dt); pill_tick(&L.pf, dt); timer_tick(&L.press, dt); nudge_tick(&L.nudge, dt);
   tween_tick(&L.gridY, dt); tween_tick(&L.sortDot, dt); tween_tick(&L.fsc, dt); tween_tick(&L.osc, dt); tween_tick(&L.ringA, dt); timer_tick(&L.ringPop, dt); timer_tick(&L.gridIn, dt); timer_tick(&L.headIn, dt); timer_tick(&L.factsIn, dt);
@@ -266,7 +294,7 @@ static void draw_card(const LibIt *o, float x, float y, int load) {
   const char *src = o->poster; GLuint t = src[0] && (load || img_shaped_loaded(src, (int)LW, (int)LH, CARD_R, 0)) ? img_get_shaped(src, (int)LW, (int)LH, CARD_R, 0) : 0;
   int failed = !t && (!src[0] || img_shaped_failed(src, (int)LW, (int)LH, CARD_R, 0));
   if (!failed) ph_picture(t, x, y, LW, LH, CARD_R, WHITE_A(255)); /* the waiting look until the poster has faded in over it (corners are in the picture) */
-  else { ph_surface(x, y, LW, LH, CARD_R); text_draw_wrapped(o->it.name, app_rtl() ? x + LW - 16 : x + 16, y + 16, LW - 32, 6, 28, 400, WHITE_A(230), 0, ALIGN_START, 28 * 1.3f); } /* the title only when the art failed */
+  else card_standin(&o->it, x, y, LW, LH, CARD_R, 0, 0); /* the art failed: its stand-in, never an empty card */
   if (o->done) { float bx = app_rtl() ? x + 12 : x + LW - 12 - 46; gfx_shadow(bx, y + 14, 46, 46, 23, 10, BLACK_A(140)); gfx_circle(bx + 23, y + 12 + 23, 23, acc_a(0.96f)); icon_draw("check", bx + 9, y + 12 + 9, 28, WHITE_A(255)); }
   if (o->cw) { gfx_rrect(x + 12, y + LH - 12 - 5, LW - 24, 5, 2.5f, WHITE_A(64)); float pw = (LW - 24) * clampf(o->pct, 0, 1); if (pw > 1) gfx_rrect(app_rtl() ? x + LW - 12 - pw : x + 12, y + LH - 12 - 5, pw, 5, 2.5f, WHITE_A(255)); }
 }
@@ -351,8 +379,8 @@ static void draw(void) {
       float ia = 1, iy = 0; if (L.gridIn.on) { float t = L.gridIn.t - (c < 4 ? c * 0.03f : 0.12f); float k = clampf(t / 0.3f, 0, 1); k = 1 - powf(1 - k, 5); ia = k; iy = 26 * (1 - k); }
       ia *= 1 - (isF ? 0.15f : 0.81f) * melt; /* (melting with a trailer: the focused one stays clear) */
       if (ia < 1) gfx_opacity_push(ia);
-      float hold = isF ? app_hold_progress() : 0; unsigned long long lk = lift_key(&L, i);
-      gfx_offset_push(isF ? gx : 0, (isF ? gyn : 0) + iy); lift_begin(lk, isF, hold, x, y0, LW, LH, CARD_R);
+      int coll = !strcmp(o->it.type, "collection"); float hold = isF && !coll ? app_hold_progress() : 0; unsigned long long lk = lift_key(&L, i); /* (a collection: no hold's trace, it has no menu) */
+      gfx_offset_push(isF ? gx + app_card_shake_dx() : 0, (isF ? gyn : 0) + iy); lift_begin(lk, isF, hold, x, y0, LW, LH, CARD_R);
       draw_card(o, x, y0, isF || near); if (hold > 0) hold_trace_draw(x, y0, LW, LH, CARD_R, ease_apply(EASE_IN_OUT, hold));
       { static int mk = -1; if (isF && btr_playing() && melt > 0.9f) mk = i; if (melt > 0.01f && i == mk) board_playing_mark(x, y0, LH, melt); } /* its trailer playing: the mark, as on Home (it stays on that poster and goes with it) */
       lift_end(lk, x, y0, LW, LH, CARD_R); gfx_offset_pop();
@@ -363,4 +391,6 @@ static int origin(float *x, float *y) {
   if (L.zone != 1 || !L.n || topNav.active) return 0; int c = L.idx % COLS, r = L.idx / COLS;
   *x = col_x(c) + LW / 2; *y = ROW0_Y + r * LROWH + L.gridY.v + LH / 2; return 1;
 }
-Screen libScreen = { enter, NULL, key, tick, draw, focused, NULL, NULL, origin };
+/* OK on a card: a collection opens its page, a title as anywhere */
+static void lib_open(const Item *it) { if (!strcmp(it->type, "collection")) { DetailParams p; memset(&p, 0, sizeof p); p.it = *it; app_go(SCR_SIM, &p, 0); return; } app_open_item(it); }
+Screen libScreen = { enter, NULL, key, tick, draw, focused, lib_open, NULL, origin };

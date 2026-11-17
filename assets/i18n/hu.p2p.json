@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Kevés peer ({n}) · {r}","Getting the file list…":"Fájllista lekérése…","Low storage: small buffer":"Kevés tárhely: kis puffer","Low storage: streaming from memory":"Kevés tárhely: streamelés a memóriából","Slow source: {r} for a {v} video":"Lassú forrás: {r} egy {v} videóhoz","Waiting for the next pieces…":"A következő darabokra várunk…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Kevés tárhely: Csatlakoztasson USB-meghajtót"
+}

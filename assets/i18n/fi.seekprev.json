@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Esikatselukuvat aikajanalla",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Kuvia elokuvasta palkin yllä, kun siirryt siinä. Pois: kuvia ei tehdä",
+ "Previews for torrents": "Esikatselut torrenteille",
+ "Slower than debrid, up to 500 MB extra per stream.": "Hitaampi kuin debrid, enintään 500 Mt lisää per striimi.",
+ "Previews {n}%": "Esikatselut {n} %",
+ "Previews ready": "Esikatselut valmiina",
+ "Uses more data, on mobile data too.": "Käyttää enemmän dataa, myös mobiilidataa.",
+ "Getting the seek bar’s previews ready… {n}%": "Valmistellaan aikajanan esikatselukuvia… {n} %",
+ "Play now": "Toista nyt",
+ "Load previews before playing": "Lataa esikatselukuvat ennen toistoa",
+ "about {n} s left": "noin {n} s jäljellä",
+ "about {n} min left": "noin {n} min jäljellä",
+ "The film starts once this much of it has its previews; OK starts it at once": "Elokuva alkaa, kun näin suuri osa siitä on esikatseltu; OK aloittaa heti"
+}

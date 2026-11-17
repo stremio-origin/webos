@@ -36,4 +36,22 @@ typedef struct {
   int         (*run)(SbdSrc *s, int seg, double from, sbd_write w, void *ud, volatile int *stop, sbd_stats *st, char *err, int errn);
   void        (*close)(SbdSrc *s);
 } sbd_api;
+
+/* Seek previews, optional: only a library built with its video decoders has it (looked up as "sbd_prev_get" after
+   loading; absent: no previews, the sound conversion above unchanged either way). One keyframe in, one small picture
+   out: no demuxer, the frame's bytes as the file holds them (Matroska: length-prefixed NAL units, the track's
+   CodecPrivate as extradata). Not thread-safe per decoder: one caller per handle. */
+#define SBD_PREV_VERSION 1
+typedef struct {
+  int   (*api)(void);
+  /* codecId as Matroska names it ("V_MPEG4/ISO/AVC", "V_MPEGH/ISO/HEVC") or plain ("h264", "hevc"). extra: avcC / hvcC
+     (frames length-prefixed, as MKV and MP4 hold them) or start-code parameter sets (frames with start codes), or none
+     (the parameter sets inside each frame). NULL: not one it decodes, or no memory */
+  void *(*open)(const char *codecId, const unsigned char *extra, int extraLen);
+  /* the keyframe decoded (loop filter off, one thread) and box-averaged to w x h RGB (w*h*3 bytes at rgb); srcW/srcH
+     its coded size, dar its display aspect (0 unknown), dark 1 when nearly black. 0 a picture, < 0 none (the
+     decoder is flushed either way: the next frame can follow) */
+  int   (*frame)(void *dec, const unsigned char *data, int len, int w, int h, unsigned char *rgb, int *srcW, int *srcH, float *dar, int *dark);
+  void  (*close)(void *dec);
+} sbd_prev_api;
 #endif

@@ -1,0 +1,3 @@
+{"Getting the file list…":"Λήψη της λίστας αρχείων…","Slow source: {r} for a {v} video":"Αργή πηγή: {r} για βίντεο {v}","Few peers ({n}) · {r}":"Λίγοι peers ({n}) · {r}","Low storage: streaming from memory":"Λίγος χώρος: ροή από τη μνήμη","Low storage: small buffer":"Λίγος χώρος: μικρό buffer","Waiting for the next pieces…":"Αναμονή για τα επόμενα κομμάτια…","{n} MB/s":"{n} MB/s","{n} KB/s":"{n} KB/s",
+"Low storage: plug in a USB drive": "Λίγος χώρος: Συνδέστε μονάδα USB"
+}

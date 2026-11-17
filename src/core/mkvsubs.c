@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "core/mkvsubs.h"
+volatile int mkvWantCues; /* (set by the player before a film opens: its seek previews want the keyframe index even with no text track) */
 #include "core/net.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -15,7 +16,7 @@
 /* ---- tuning (the same numbers as the web app's reader) ---- */
 #define HEAD_BYTES (64 * 1024)          /* first read: SeekHead, Info and Tracks live here */
 #define CUES_FIRST (256 * 1024)         /* first read of the Cues; a 2 h film's index is ~100-400 KB */
-#define CUES_MAX (8 * 1024 * 1024)
+#define CUES_MAX (16 * 1024 * 1024)   /* (a remux with many picture-subtitle tracks passes 8 MB) */
 #define BLOCK_BYTES 512                 /* a BlockGroup header + one line of dialogue */
 #define MERGE_BYTES (256 * 1024)        /* blocks this close in one Cluster share one Range */
 #define AHEAD_S 90.0
@@ -99,13 +100,14 @@ typedef struct {
   int dvProfile, dvEl;               /* Dolby Vision (its BlockAdditionMapping): the profile (0 none), an enhancement layer */
   unsigned char *priv; long privLen; int compAlgo; unsigned char *compSet; long compSetLen; int hasComp;
 } Track;
-typedef struct { double t, d; long long cl; long rel; int num; } Point;
+typedef struct { double t, d; long long cl; long rel; int num; long len; } Point; /* (len: an MP4 keyframe's exact size; cl its place) */
 typedef struct { long long cl; double t; } ClusterT;
 typedef struct {
-  long long segStart, segEnd, size, cuesPos, tracksPos, chapPos, firstCluster, attachPos; double tscale, duration;
+  long long segStart, segEnd, size, cuesPos, tracksPos, chapPos, firstCluster, attachPos, seek2Pos; double tscale, duration; /* seek2Pos: a second SeekHead (near the end) */
   Track tr[64]; int ntr; int haveTracks;
   MkvChapter ch[64]; int nch; int haveChapters;
   Point *pts; int npts; ClusterT *cls; int ncls;
+  Point *vk; int nvk; /* the video track's keyframes from the Cues (time, its Cluster, the block in it), in time order */
 } Info;
 
 /* ---- lines ---- */
@@ -113,7 +115,7 @@ typedef struct { double s, e; char *t; int an; float x, y; uint32_t color; unsig
 typedef struct { Track *tr; Line *l; int *pidx; long long *skey; int n, cap; AssHdr *hdr; int state; int total, done; int scan; char **raw; unsigned *rser, nser; int rawOn; } TState; /* raw / rser: the events as the file has them, with the order they came in (only while rawOn: shown styled) */ /* state: 0 pending 1 harvesting 2 complete */
 
 struct MkvSession {
-  char *url; int p2p; pthread_t th; pthread_mutex_t mu; pthread_cond_t cv; int dead, refs;
+  char *url, *keyUrl; int p2p, mp4, keysOnly; pthread_t th; pthread_mutex_t mu; pthread_cond_t cv; int dead, refs;
   int state; char err[32];
   double pos, posAt, buffered; double jumpAt; int moving;
   int sel, wantN, listed;
@@ -128,17 +130,19 @@ struct MkvSession {
   struct { int on; long long pos, clStart, end, need; int inCl; long long raw; double ts; } cur;
   struct { long long cl; double t; } *scanned; int nscanned, capscanned;
   long long *seen; int nseen, capseen;
+  struct { int tried, hit, miss, off, nd, ne; float dur[16]; long err[16]; long bytes; } aim; /* keyframes read where they most likely lie (no place in the index): how well that goes in this file */
 };
 
 static double mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static int net_err(int e) { return e == NR_NET || e == NR_TIMEOUT || e == NR_BUSY; }
 
 /* reads exactly [start, start+len): some CDNs end a response early, so the rest is asked for while each follow-up brings bytes (3 empty ones end it) */
-static int range_full(MkvSession *s, long long start, long len, unsigned char **out, long *got, long long *total) {
+static int range_with(MkvSession *s, NetRange *net, long long start, long len, unsigned char **out, long *got, long long *total) {
   unsigned char *acc = malloc(len); long have = 0; int empty = 0, err = NR_OK; long long tot = -1;
   while (have < len && !s->dead) {
     unsigned char *b; long g; long long t; int st;
-    err = net_range_get(s->net, s->url, start + have, len - have, &b, &g, &t, &st, TIMEOUT_MS);
+    int kr = net != s->net && s->keyUrl; /* (a preview's read: the engine's low-priority address, a piece may take a while) */
+    err = net_range_get(net, kr ? s->keyUrl : s->url, start + have, len - have, &b, &g, &t, &st, kr ? 60000 : TIMEOUT_MS);
     if (t > 0) tot = t;
     if (g > 0) { memcpy(acc + have, b, g); have += g; empty = 0; free(b); } else empty++;
     if (have >= len || (tot > 0 && start + have >= tot)) { err = NR_OK; break; }
@@ -146,9 +150,10 @@ static int range_full(MkvSession *s, long long start, long len, unsigned char **
     if (empty >= 3) break;
   }
   if (total) *total = tot;
-  if (!have) { free(acc); *out = NULL; *got = 0; return err ? err : NR_NET; }
+  if (!have) { if (getenv("SB_MKVDBG") || mkvWantCues) fprintf(stderr, "[mkv] range %lld+%ld: nothing (err %d, file %lld bytes)\n", start, len, err, tot); free(acc); *out = NULL; *got = 0; return err ? err : NR_NET; }
   *out = acc; *got = have; return NR_OK;
 }
+static int range_full(MkvSession *s, long long start, long len, unsigned char **out, long *got, long long *total) { return range_with(s, s->net, start, len, out, got, total); }
 static int range_once(MkvSession *s, long long start, long len, unsigned char **out, long *got) {
   long long t; int st; return net_range_get(s->net, s->url, start, len, out, got, &t, &st, TIMEOUT_MS);
 }
@@ -241,6 +246,7 @@ static int each_seek(void *c_, unsigned id, long d, long long sz, long at) { Ctx
 static int each_seekhead(void *c_, unsigned id, long d, long long sz, long at) { Ctx *c = c_; (void)at; if (id != ID_SEEK || sz < 0) return 0;
   Ctx k = *c; k.which = 0; k.pos = -1; each(c->b, c->n, d, d + (long)sz, each_seek, &k); if (k.pos < 0) return 0;
   Info *i = c->info; long long abs = i->segStart + k.pos;
+  if ((unsigned)k.which == ID_SEEKHEAD && abs != i->segStart && i->seek2Pos < 0) i->seek2Pos = abs; /* (another SeekHead: its entries may hold the index) */
   if ((unsigned)k.which == ID_CUES) i->cuesPos = abs; else if ((unsigned)k.which == ID_TRACKS && i->tracksPos < 0) i->tracksPos = abs; else if ((unsigned)k.which == ID_CHAPTERS && i->chapPos < 0) i->chapPos = abs; else if ((unsigned)k.which == ID_ATTACHMENTS && i->attachPos < 0) i->attachPos = abs;
   return 0; }
 static int each_info(void *c_, unsigned id, long d, long long sz, long at) { Ctx *c = c_; (void)at; if (sz < 0) return 0;
@@ -262,14 +268,14 @@ static int parse_head(Info *i, cu8 *b, long n) {
   int sl = read_size(b, n, il, &sz); if (!sl || sz < 0) return 0;
   long o = il + sl + (long)sz; il = read_id(b, n, o, &id); if (!il || id != ID_SEGMENT) return 0;
   sl = read_size(b, n, o + il, &sz); if (!sl) return 0;
-  i->segStart = o + il + sl; i->segEnd = sz < 0 ? -1 : i->segStart + sz; i->tscale = 1000000; i->cuesPos = i->tracksPos = i->chapPos = i->firstCluster = i->attachPos = -1;
+  i->segStart = o + il + sl; i->segEnd = sz < 0 ? -1 : i->segStart + sz; i->tscale = 1000000; i->cuesPos = i->tracksPos = i->chapPos = i->firstCluster = i->attachPos = i->seek2Pos = -1;
   Ctx c = { b, n, i, NULL, NULL, 0, 0 }; each(b, n, (long)i->segStart, n, each_segment, &c);
   i->duration = i->duration * i->tscale / 1e9;
   return 1;
 }
 
 /* ---- Cues ---- */
-typedef struct { Ctx c; long long time; struct { int trk; long long cl; long rel; long long dur; } p[8]; int np; Point *pts; int npts, cap; ClusterT *cls; int ncls, capc; const unsigned char *want; } CueCtx;
+typedef struct { Ctx c; long long time; struct { int trk; long long cl; long rel; long long dur; } p[8]; int np; Point *pts; int npts, cap; ClusterT *cls; int ncls, capc; const unsigned char *want; int vtrk; Point *vk; int nvk, vcap; } CueCtx;
 static int each_ctp(void *c_, unsigned id, long d, long long sz, long at) { CueCtx *q = c_; (void)at; if (sz < 0) return 0;
   int k = q->np - 1;
   if (id == ID_CUETRACK) q->p[k].trk = (int)read_uint(q->c.b, d, sz); else if (id == ID_CUECLUSTER) q->p[k].cl = (long long)read_uint(q->c.b, d, sz);
@@ -287,6 +293,9 @@ static int each_cues(void *c_, unsigned id, long d, long long sz, long at) { Cue
   for (int j = 0; j < q->np; j++) {
     if (q->p[j].cl >= 0) { /* every Cluster's time, for scan mode */
       if (!q->ncls || q->cls[q->ncls - 1].cl != q->c.info->segStart + q->p[j].cl) { if (q->ncls == q->capc) { q->capc = q->capc ? q->capc * 2 : 1024; q->cls = realloc(q->cls, q->capc * sizeof *q->cls); } q->cls[q->ncls].cl = q->c.info->segStart + q->p[j].cl; q->cls[q->ncls].t = q->time * scale; q->ncls++; } }
+    if (q->vtrk > 0 && q->p[j].trk == q->vtrk && q->p[j].cl >= 0) { /* the video's keyframes, kept apart (seeks land on one) */
+      if (q->nvk == q->vcap) { int nc = q->vcap ? q->vcap * 2 : 1024; Point *np = realloc(q->vk, nc * sizeof *np); if (np) { q->vk = np; q->vcap = nc; } }
+      if (q->nvk < q->vcap) { Point *v = &q->vk[q->nvk++]; v->t = q->time * scale; v->d = -1; v->cl = q->c.info->segStart + q->p[j].cl; v->rel = q->p[j].rel; v->num = q->vtrk; } }
     if (q->p[j].trk <= 0 || q->p[j].trk > 255 || !q->want[q->p[j].trk] || q->p[j].cl < 0) continue;
     if (q->npts == q->cap) { q->cap = q->cap ? q->cap * 2 : 1024; q->pts = realloc(q->pts, q->cap * sizeof *q->pts); }
     Point *p = &q->pts[q->npts++]; p->t = q->time * scale; p->d = q->p[j].dur >= 0 ? q->p[j].dur * scale : -1; p->cl = q->c.info->segStart + q->p[j].cl; p->rel = q->p[j].rel; p->num = q->p[j].trk;
@@ -295,8 +304,23 @@ static int each_cues(void *c_, unsigned id, long d, long long sz, long at) { Cue
 static int cmp_pt(const void *a, const void *b) { const Point *x = a, *y = b; if (x->t != y->t) return x->t < y->t ? -1 : 1; if (x->cl != y->cl) return x->cl < y->cl ? -1 : 1; return x->rel < y->rel ? -1 : x->rel > y->rel; }
 static int cmp_cl(const void *a, const void *b) { const ClusterT *x = a, *y = b; return x->cl < y->cl ? -1 : x->cl > y->cl; }
 /* NR_OK with info->pts filled (may be 0 points), 1 = no usable index, or a net error */
+/* where the index is, when the head didn't say: a second SeekHead (near the end), else the file's last 4 MB searched for
+   it; and an index said to be past the server's size read anyway (some servers report a size cut short) */
+static void find_cues(MkvSession *s) {
+  Info *i = &s->info; long long end = i->segEnd > 0 ? i->segEnd : i->size;
+  fprintf(stderr, "[mkv] index: at %lld, second SeekHead %lld, Segment end %lld, server size %lld\n", i->cuesPos, i->seek2Pos, i->segEnd, i->size);
+  if (i->cuesPos < 0 && i->seek2Pos >= 0) { unsigned char *b; long n; if (!range_full(s, i->seek2Pos, HEAD_BYTES, &b, &n, NULL)) { unsigned id; long long sz; int il = read_id(b, n, 0, &id), sl = il ? read_size(b, n, il, &sz) : 0;
+      if (il && sl && id == ID_SEEKHEAD && sz > 0) { Ctx c; memset(&c, 0, sizeof c); c.b = b; c.n = n; c.info = i; long d = il + sl; each(b, n, d, d + sz < n ? d + (long)sz : n, each_seekhead, &c); } free(b); }
+    if (i->cuesPos >= 0) fprintf(stderr, "[mkv] index found through the second SeekHead\n"); }
+  if (i->cuesPos < 0 && end > (8 << 20)) { long want = 4 << 20; unsigned char *b; long n; if (!range_full(s, end - want, want, &b, &n, NULL)) { /* the last 4 MB: the index's ID with a plausible size, its first child a CuePoint */
+      for (long o = n - 8; o >= 0 && i->cuesPos < 0; o--) { if (b[o] != 0x1C || b[o + 1] != 0x53 || b[o + 2] != 0xBB || b[o + 3] != 0x6B) continue; long long sz; int sl = read_size(b, n, o + 4, &sz); if (!sl || sz <= 0 || sz > CUES_MAX) continue;
+        unsigned c; if (read_id(b, n, o + 4 + sl, &c) && c == ID_CUEPOINT && end - want + o + 4 + sl + sz <= end + 16) i->cuesPos = end - want + o; }
+      free(b); }
+    if (i->cuesPos >= 0) fprintf(stderr, "[mkv] index found at the file's end (%lld)\n", i->cuesPos); } }
 static int load_cues(MkvSession *s) {
+  if (s->info.cuesPos < 0 && !getenv("SB_MKV_NOCUES")) find_cues(s);
   Info *i = &s->info; if (i->cuesPos < 0 || getenv("SB_MKV_NOCUES")) return 1; /* SB_MKV_NOCUES: development, try the scan path */
+  if (i->size > 0 && i->cuesPos >= i->size) { fprintf(stderr, "[mkv] the index is said to be at %lld, past the server's size (%lld, Segment end %lld): read anyway\n", i->cuesPos, i->size, i->segEnd); i->size = i->segEnd > i->cuesPos ? i->segEnd : -1; } /* (the server's size may be cut short: the header's own end, else none) */ /* (a header that doesn't match what the server sends: never a read of a negative length) */
   long first = CUES_FIRST; if (i->size > 0 && i->cuesPos + first > i->size) first = (long)(i->size - i->cuesPos);
   unsigned char *b; long n; int e = range_full(s, i->cuesPos, first, &b, &n, NULL); if (e) return e;
   unsigned id; long long sz; int il = read_id(b, n, 0, &id);
@@ -306,11 +330,14 @@ static int load_cues(MkvSession *s) {
   if (d + sz > n) { free(b); e = range_full(s, i->cuesPos, d + (long)sz, &b, &n, NULL); if (e) return e; if (n < d + sz) { free(b); return 1; } }
   unsigned char want[256] = { 0 }; for (int k = 0; k < i->ntr; k++) if (i->tr[k].type == 17 && i->tr[k].kind && i->tr[k].num > 0 && i->tr[k].num < 256) want[i->tr[k].num] = 1;
   CueCtx q; memset(&q, 0, sizeof q); q.c.b = b; q.c.n = n; q.c.info = i; q.want = want;
+  for (int k = 0; k < i->ntr && !q.vtrk; k++) if (i->tr[k].type == 1 && i->tr[k].num > 0 && i->tr[k].num < 256) q.vtrk = i->tr[k].num; /* (the first video track) */
   each(b, n, d, d + (long)sz, each_cues, &q); free(b);
   qsort(q.pts, q.npts, sizeof *q.pts, cmp_pt); qsort(q.cls, q.ncls, sizeof *q.cls, cmp_cl);
   /* one entry per Cluster (the first time seen wins, as the points come in time order per Cluster) */
   int w = 0; for (int k = 0; k < q.ncls; k++) if (!w || q.cls[w - 1].cl != q.cls[k].cl) q.cls[w++] = q.cls[k]; q.ncls = w;
   i->pts = q.pts; i->npts = q.npts; i->cls = q.cls; i->ncls = q.ncls;
+  if (q.nvk) { qsort(q.vk, q.nvk, sizeof *q.vk, cmp_pt); int u = 0; for (int k = 0; k < q.nvk; k++) if (!u || q.vk[u - 1].t != q.vk[k].t) q.vk[u++] = q.vk[k]; q.nvk = u; }
+  pthread_mutex_lock(&s->mu); free(i->vk); i->vk = q.vk; i->nvk = q.nvk; pthread_mutex_unlock(&s->mu); /* (read by the player) */
   return NR_OK;
 }
 
@@ -601,6 +628,13 @@ static int block_track(cu8 *b, long n, long o, unsigned id, int il, int sl) {
   if (id == ID_BLOCKGROUP) { unsigned c; int cl = read_id(b, n, d, &c); long long cs; int csl = cl ? read_size(b, n, d + cl, &cs) : 0; if (!cl || c != ID_BLOCK || !csl) return -1; d += cl + csl; }
   long long tv; int tl = read_size(b, n, d, &tv); return tl ? (int)tv : -1;
 }
+/* a block's header alone (enough of it is in b even when its payload runs past the end): its track, its timestamp
+   relative to the Cluster, and for a SimpleBlock its keyframe flag (-1 not said: a BlockGroup); 0 the header not here */
+static int block_head(cu8 *b, long n, long o, unsigned id, int il, int sl, int *trk, int *tc, int *key) {
+  long d = o + il + sl;
+  if (id == ID_BLOCKGROUP) { unsigned c; int cl = read_id(b, n, d, &c); long long cs; int csl = cl ? read_size(b, n, d + cl, &cs) : 0; if (!cl || c != ID_BLOCK || !csl) return 0; d += cl + csl; }
+  long long tv; int tl = read_size(b, n, d, &tv); if (!tl || d + tl + 3 > n) return 0;
+  *trk = (int)tv; *tc = (int16_t)((b[d + tl] << 8) | b[d + tl + 1]); *key = id == ID_SIMPLEBLOCK ? (b[d + tl + 2] & 0x80) != 0 : -1; return 1; }
 static int scan_locate(MkvSession *s, double target) {
   Info *i = &s->info;
   if (i->ncls) { int a = 0, z = i->ncls; while (a < z) { int m = (a + z) >> 1; if (i->cls[m].t <= target) a = m + 1; else z = m; }
@@ -700,6 +734,8 @@ static int probe(MkvSession *s) {
   int sub = 0;
   for (int k = 0; k < i->ntr; k++) { Track *t = &i->tr[k]; if (t->type != 17) continue; t->n = sub++;
     const char *c = t->codec; t->kind = t->encrypted ? 0 : (!strcmp(c, "S_TEXT/UTF8") || !strcmp(c, "S_TEXT/ASCII") || !strcmp(c, "S_TEXT/WEBVTT")) ? 1 : (!strcmp(c, "S_TEXT/ASS") || !strcmp(c, "S_TEXT/SSA") || !strcmp(c, "S_ASS") || !strcmp(c, "S_SSA")) ? 2 : 0; }
+  { char l[300] = ""; size_t o = 0; for (int k = 0; k < i->ntr && o + 40 < sizeof l; k++) { Track *t = &i->tr[k]; if (t->type != 17) continue; o += snprintf(l + o, sizeof l - o, "%s%s %s%s", o ? ", " : "", t->codec, t->lang, t->encrypted ? " (encrypted)" : t->hasComp ? " (compressed)" : ""); }
+    fprintf(stderr, "[mkv] %d tracks; subtitles: %s\n", i->ntr, l[0] ? l : "none"); } /* (what the file carries, for a text track missed) */
   return NR_OK;
 }
 static void read_chapters(MkvSession *s) {
@@ -714,23 +750,93 @@ static void read_chapters(MkvSession *s) {
 static void session_free(MkvSession *s) {
   for (int k = 0; k < s->nts; k++) { for (int a = 0; a < s->ts[k].n; a++) { free(s->ts[k].l[a].t); if (s->ts[k].rawOn) free(s->ts[k].raw[a]); } free(s->ts[k].l); free(s->ts[k].pidx); free(s->ts[k].skey); free(s->ts[k].hdr); free(s->ts[k].raw); free(s->ts[k].rser); }
   for (int k = 0; k < s->info.ntr; k++) { free(s->info.tr[k].priv); free(s->info.tr[k].compSet); }
-  free(s->info.pts); free(s->info.cls); free(s->all); free(s->status); free(s->tries); free(s->scanned); free(s->seen);
-  net_range_free(s->net); pthread_mutex_destroy(&s->mu); pthread_cond_destroy(&s->cv); free(s->url); free(s);
+  free(s->info.pts); free(s->info.cls); free(s->info.vk); free(s->all); free(s->status); free(s->tries); free(s->scanned); free(s->seen);
+  net_range_free(s->net); pthread_mutex_destroy(&s->mu); pthread_cond_destroy(&s->cv); free(s->url); free(s->keyUrl); free(s);
 }
+/* ---- MP4: the video track's keyframes from its moov (stss, stts, stsc, stsz, stco/co64, the edit list), for the seek
+   previews: each keyframe's exact place and size, its codec's setup (avcC/hvcC) as Matroska's CodecPrivate ---- */
+static uint32_t mp_u32(const unsigned char *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+static uint64_t mp_u64(const unsigned char *p) { return (uint64_t)mp_u32(p) << 32 | mp_u32(p + 4); }
+/* the first child box of this type inside b..n: its payload (after the header) */
+static int mp_find(const unsigned char *b, long n, const char *type, const unsigned char **out, long *on) {
+  long o = 0;
+  while (o + 8 <= n) { uint64_t sz = mp_u32(b + o); long h = 8; if (sz == 1) { if (o + 16 > n) return 0; sz = mp_u64(b + o + 8); h = 16; } else if (sz == 0) sz = (uint64_t)(n - o);
+    if (sz < (uint64_t)h || sz > (uint64_t)(n - o)) return 0;
+    if (!memcmp(b + o + 4, type, 4)) { *out = b + o + h; *on = (long)sz - h; return 1; }
+    o += (long)sz; }
+  return 0; }
+static int mp_cmp_t(const void *a, const void *b) { double x = ((const Point *)a)->t, y = ((const Point *)b)->t; return x < y ? -1 : x > y; }
+/* one trak: 1 and the keyframes when it is H.264/HEVC video */
+static int mp_trak(MkvSession *s, const unsigned char *tk, long tn) {
+  const unsigned char *md, *hd, *mh, *mi, *st, *x; long mdn, hdn, mhn, min, stn, xn;
+  if (!mp_find(tk, tn, "mdia", &md, &mdn) || !mp_find(md, mdn, "hdlr", &hd, &hdn) || hdn < 12 || memcmp(hd + 8, "vide", 4)) return 0;
+  if (!mp_find(md, mdn, "mdhd", &mh, &mhn) || mhn < 24) return 0;
+  uint32_t scale = mh[0] == 1 ? (mhn >= 24 ? mp_u32(mh + 20) : 0) : mp_u32(mh + 12); if (!scale) return 0;
+  if (!mp_find(md, mdn, "minf", &mi, &min) || !mp_find(mi, min, "stbl", &st, &stn)) return 0;
+  /* the codec and its setup */
+  if (!mp_find(st, stn, "stsd", &x, &xn) || xn < 16) return 0;
+  const unsigned char *en = x + 8; long enn = xn - 8; uint32_t esz = mp_u32(en); if (esz < 8 + 78 || esz > (uint32_t)enn) return 0;
+  const char *codec = !memcmp(en + 4, "avc1", 4) || !memcmp(en + 4, "avc3", 4) ? "V_MPEG4/ISO/AVC" : !memcmp(en + 4, "hvc1", 4) || !memcmp(en + 4, "hev1", 4) ? "V_MPEGH/ISO/HEVC" : NULL; if (!codec) return 0;
+  const unsigned char *cc; long ccn; if (!mp_find(en + 8 + 78, (long)esz - 8 - 78, codec[6] == '4' ? "avcC" : "hvcC", &cc, &ccn) || ccn <= 0) return 0;
+  /* the tables */
+  const unsigned char *tts, *tss, *tsc, *tsz, *tco; long ttn, tsn, tcn, tzn, ton; int co64 = 0;
+  if (!mp_find(st, stn, "stts", &tts, &ttn) || !mp_find(st, stn, "stss", &tss, &tsn) || !mp_find(st, stn, "stsc", &tsc, &tcn) || !mp_find(st, stn, "stsz", &tsz, &tzn)) return 0;
+  if (!mp_find(st, stn, "stco", &tco, &ton)) { if (!mp_find(st, stn, "co64", &tco, &ton)) return 0; co64 = 1; }
+  if (ttn < 8 || tsn < 8 || tcn < 8 || tzn < 12 || ton < 8) return 0;
+  uint32_t nts = mp_u32(tts + 4), nss = mp_u32(tss + 4), nsc = mp_u32(tsc + 4), fixed = mp_u32(tsz + 4), nsamp = mp_u32(tsz + 8), nch = mp_u32(tco + 4);
+  if ((uint64_t)nts * 8 + 8 > (uint64_t)ttn || (uint64_t)nss * 4 + 8 > (uint64_t)tsn || (uint64_t)nsc * 12 + 8 > (uint64_t)tcn || (!fixed && (uint64_t)nsamp * 4 + 12 > (uint64_t)tzn) ||
+      (uint64_t)nch * (co64 ? 8 : 4) + 8 > (uint64_t)ton || !nss || !nsc || !nch || !nsamp) return 0;
+  const unsigned char *cts = NULL; long ctn = 0; uint32_t nct = 0; if (mp_find(st, stn, "ctts", &cts, &ctn) && ctn >= 8) { nct = mp_u32(cts + 4); if ((uint64_t)nct * 8 + 8 > (uint64_t)ctn) nct = 0; } /* (display times: a B-frame film's keyframes shown later than decoded) */
+  /* where it starts: the edit list's first media time */
+  double t0 = 0; { const unsigned char *ed, *el; long edn, eln; if (mp_find(tk, tn, "edts", &ed, &edn) && mp_find(ed, edn, "elst", &el, &eln) && eln >= 8 && mp_u32(el + 4) >= 1) {
+      int64_t mt = el[0] == 1 ? (eln >= 24 ? (int64_t)mp_u64(el + 16) : -1) : (eln >= 16 ? (int32_t)mp_u32(el + 12) : -1); if (mt > 0) t0 = (double)mt / scale; } }
+  Point *vk = malloc(sizeof *vk * nss); if (!vk) return 0; int nvk = 0;
+  uint32_t ci2 = 0, cleft = nct ? mp_u32(cts + 8) : 0; uint32_t ti = 0, tleft = nts ? mp_u32(tts + 8) : 0, si = 0, sci = 0, ci = 0, left; uint64_t dts = 0, off = co64 ? mp_u64(tco + 8) : mp_u32(tco + 8);
+  left = mp_u32(tsc + 8 + 4); if (nsc > 1 && mp_u32(tsc + 8 + 12) <= 1) left = mp_u32(tsc + 8 + 12 + 4); if (!left) { free(vk); return 0; }
+  for (uint32_t i = 0; i < nsamp && si < nss; i++) {
+    uint32_t sz = fixed ? fixed : mp_u32(tsz + 12 + 4 * (uint64_t)i);
+    if (mp_u32(tss + 8 + 4 * (uint64_t)si) == i + 1) { Point *p = &vk[nvk++]; memset(p, 0, sizeof *p); p->t = ((double)dts + (ci2 < nct ? (double)(int32_t)mp_u32(cts + 8 + 8 * (uint64_t)ci2 + 4) : 0)) / scale - t0; if (p->t < 0) p->t = 0; p->cl = (long long)off; p->rel = 0; p->len = (long)sz; p->num = 1; si++; }
+    else while (si < nss && mp_u32(tss + 8 + 4 * (uint64_t)si) < i + 1) si++;
+    if (ci2 < nct && (cleft == 0 || --cleft == 0)) { while (++ci2 < nct && !(cleft = mp_u32(cts + 8 + 8 * (uint64_t)ci2))) {} }
+    off += sz; dts += ti < nts ? mp_u32(tts + 8 + 8 * (uint64_t)ti + 4) : 0; if (ti < nts && (tleft == 0 || --tleft == 0)) { while (++ti < nts && !(tleft = mp_u32(tts + 8 + 8 * (uint64_t)ti))) {} } /* (an empty run skipped) */
+    if (--left == 0) { if (++ci >= nch) break; while (sci + 1 < nsc && mp_u32(tsc + 8 + 12 * (uint64_t)(sci + 1)) <= ci + 1) sci++; left = mp_u32(tsc + 8 + 12 * (uint64_t)sci + 4); if (!left) break;
+      off = co64 ? mp_u64(tco + 8 + 8 * (uint64_t)ci) : mp_u32(tco + 8 + 4 * (uint64_t)ci); } }
+  if (nvk < 4) { free(vk); return 0; }
+  qsort(vk, nvk, sizeof *vk, mp_cmp_t);
+  lock(s); Info *f = &s->info; Track *t = &f->tr[0]; memset(t, 0, sizeof *t); t->num = 1; t->type = 1; snprintf(t->codec, sizeof t->codec, "%s", codec);
+  t->priv = malloc(ccn); if (t->priv) { memcpy(t->priv, cc, ccn); t->privLen = ccn; } f->ntr = 1; f->haveTracks = 1; free(f->vk); f->vk = vk; f->nvk = nvk; s->mp4 = 1; unlock(s);
+  return 1; }
+/* the file as MP4: its moov found among the top boxes (a few small reads past the media data), read whole, its video
+   track's keyframes listed. 1 done */
+static int mp4_load(MkvSession *s) {
+  long long o = 0, total = -1; unsigned char *b = NULL; long n = 0;
+  for (int k = 0; k < 64 && !s->dead; k++) {
+    if (range_full(s, o, 16, &b, &n, &total) || n < 8) { free(b); return 0; } uint64_t sz = mp_u32(b); char ty[5]; memcpy(ty, b + 4, 4); ty[4] = 0;
+    if (sz == 1) { if (n < 16) { free(b); return 0; } sz = mp_u64(b + 8); } else if (sz == 0 && total > o) sz = (uint64_t)(total - o); free(b); b = NULL;
+    if (k == 0 && strcmp(ty, "ftyp") && strcmp(ty, "moov") && strcmp(ty, "free") && strcmp(ty, "mdat")) return 0; /* (not MP4) */
+    if (sz < 8) return 0;
+    if (!strcmp(ty, "moov")) { if (sz > (32u << 20)) return 0; /* (a long film's moov is a few MB; more is not worth a small phone's memory) */ if (range_full(s, o, (long)sz, &b, &n, NULL) || n < (long)sz) { free(b); return 0; }
+      const unsigned char *bd = b + 8; long bn = n - 8; if (mp_u32(b) == 1) { bd += 8; bn -= 8; } int ok = 0;
+      for (long q = 0; q + 8 <= bn && !ok;) { uint64_t bs = mp_u32(bd + q); if (bs < 8 || bs > (uint64_t)(bn - q)) break; if (!memcmp(bd + q + 4, "trak", 4)) ok = mp_trak(s, bd + q + 8, (long)bs - 8); q += (long)bs; }
+      free(b); if (ok) fprintf(stderr, "[mkv] MP4: %d video keyframes from its moov (%llu KB at %lld)\n", s->info.nvk, (unsigned long long)(sz >> 10), o); return ok; }
+    o += (long long)sz; if (total > 0 && o >= total) return 0; }
+  return 0; }
 static void *session_main(void *arg) { plat_thread_background(5);
   MkvSession *s = arg; int e = 0;
   static const double retry[] = { 0.5, 1.5, 3, 5 };
   s->net = net_range_new(); if (!s->net) { fallback(s, "net"); goto out; }
   for (int a = 0;; a++) { e = probe(s); if (s->dead) goto out; if (e > 0 && net_err(e) && a < 4) { wait_for(s, retry[a]); continue; } break; } /* a network hiccup (debrid CDN, the engine still starting) is retried */
+  if (e == -1 && (mkvWantCues || s->keysOnly) && !s->dead) mp4_load(s); /* (an MP4: its keyframes for the seek previews; its subtitles stay the player's) */
   if (e) { fallback(s, e == -1 ? "notmkv" : e == -2 ? "notracks" : errname(e)); goto out; }
   int any = 0;
   lock(s);
-  for (int k = 0; k < s->info.ntr; k++) { Track *t = &s->info.tr[k]; if (t->type != 17 || !t->kind || s->nts >= 64) continue; any = 1;
+  int local = !strncmp(s->url, "file://", 7) || s->keysOnly; /* (keysOnly: another copy of the film, read for its keyframes alone) */ /* (a file on the phone, a download: its index and chapters only; its subtitles stay the player's own, as before) */
+  for (int k = 0; k < s->info.ntr; k++) { Track *t = &s->info.tr[k]; if (local || t->type != 17 || !t->kind || s->nts >= 64) continue; any = 1;
     TState *x = &s->ts[s->nts++]; memset(x, 0, sizeof *x); x->tr = t; if (t->kind == 2) { x->hdr = malloc(sizeof *x->hdr); parse_ass_header(x->hdr, (const char *)t->priv); } }
   if (s->wantN >= 0) { TState *w = ts_by_n(s, s->wantN); s->sel = w ? w->tr->num : -1; }
   s->listed = 1; /* the tracks can be listed and chosen now: their lines follow once the index is read */
   unlock(s);
-  if (!any) { read_chapters(s); fallback(s, "notext"); goto out; }
+  if (!any) { read_chapters(s); if (getenv("SB_SEEKSNAP") || getenv("SB_PREVSPIKE") || mkvWantCues || s->keysOnly) { int ce; for (int a = 0;; a++) { ce = load_cues(s); if (s->dead) goto out; if (net_err(ce) && a < 4) { wait_for(s, retry[a]); continue; } break; } /* (a network hiccup reading far into a big file: tried again, as the subtitles' index is) */ if (ce == NR_OK) { int nr = 0; for (int j = 0; j < s->info.nvk; j++) if (s->info.vk[j].rel < 0) nr++; fprintf(stderr, "[mkv] no text tracks; %d video keyframes from the index (%d without a place in their Cluster)\n", s->info.nvk, nr); } else fprintf(stderr, "[mkv] no text tracks; the index not read (%d, at %lld)\n", ce, (long long)s->info.cuesPos); } fallback(s, "notext"); goto out; } /* (SB_SEEKSNAP, development: the keyframes even with no text to read; one read of the index) */
   read_chapters(s);
   for (int a = 0;; a++) { e = load_cues(s); if (s->dead) goto out; if (net_err(e) && a < 4) { wait_for(s, retry[a]); continue; } break; }
   if (e != NR_OK && e != 1) { fallback(s, errname(e)); goto out; }
@@ -744,7 +850,7 @@ static void *session_main(void *arg) { plat_thread_background(5);
   s->status = calloc(s->nall + 1, 1); s->tries = calloc(s->nall + 1, 1);
   s->state = MKV_HARVESTING; s->prunedAt = mono();
   unlock(s);
-  fprintf(stderr, "[mkv] %d text track(s), %d index points%s\n", s->nts, s->nall, s->hasScan ? ", scanning near the playhead for the rest" : "");
+  { int nr = 0; for (int j = 0; j < s->info.nvk; j++) if (s->info.vk[j].rel < 0) nr++; fprintf(stderr, "[mkv] %d text track(s), %d index points, %d video keyframes (%d without a place in their Cluster)%s\n", s->nts, s->nall, s->info.nvk, nr, s->hasScan ? ", scanning near the playhead for the rest" : ""); }
   int g[96];
   while (!s->dead) {
     lock(s); if (mono() - s->prunedAt > PRUNE_EVERY) prune(s); unlock(s);
@@ -781,7 +887,7 @@ static void *session_main(void *arg) { plat_thread_background(5);
       s->fails++;
       if (e == NR_NORANGE || e == NR_HTTP) { int have = 0; for (int k = 0; k < s->nts; k++) have += s->ts[k].n; if (!have || s->fails > 6) { unlock(s); fallback(s, errname(e)); break; } }
       int calm = e == NR_BUSY || (e == NR_TIMEOUT && !s->p2p); /* the server asks for calm: 10 s doubling to 60; else 0.5..8 s (a torrent's timeout is a piece still coming) */
-      s->backoffMs = calm ? fmin(60000, fmax(10000, s->backoffMs * 2)) : fmin(8000, fmax(500, s->backoffMs * 2));
+      s->backoffMs = calm ? fmin(15000, fmax(4000, s->backoffMs * 2)) : fmin(8000, fmax(500, s->backoffMs * 2)); /* (a busy server: 4 s doubling to 15, was 10 to 60: the lines at the playhead waited a minute) */
       s->backoffUntil = mono() + s->backoffMs / 1000;
     } else { s->fails = 0; s->backoffMs = 0; }
     check_complete(s);
@@ -794,14 +900,16 @@ out:
 }
 
 /* ---- the player's side ---- */
-MkvSession *mkv_open(const char *url, double startPos, int p2p) {
-  MkvSession *s = calloc(1, sizeof *s); if (!s) return NULL;
+static MkvSession *open_as(const char *url, double startPos, int p2p, int keysOnly) {
+  MkvSession *s = calloc(1, sizeof *s); if (!s) return NULL; s->keysOnly = keysOnly;
   s->url = strdup(url); s->p2p = p2p; s->pos = startPos > 0 ? startPos : 0; s->posAt = mono(); s->buffered = -1; s->sel = -1; s->wantN = -1; s->refs = 2;
   pthread_mutex_init(&s->mu, NULL); pthread_cond_init(&s->cv, NULL);
   if (pthread_create(&s->th, NULL, session_main, s)) { s->refs = 1; s->state = MKV_FALLBACK; snprintf(s->err, sizeof s->err, "thread"); return s; }
   pthread_detach(s->th);
   return s;
 }
+MkvSession *mkv_open(const char *url, double startPos, int p2p) { return open_as(url, startPos, p2p, 0); }
+MkvSession *mkv_open_keys(const char *url) { return open_as(url, 0, 0, 1); } /* (its keyframe index and video track alone: no subtitle lines read) */
 void mkv_close(MkvSession *s) {
   if (!s) return;
   lock(s); s->dead = 1; pthread_cond_signal(&s->cv); int last = --s->refs == 0; unlock(s);
@@ -873,12 +981,200 @@ int mkv_track_status(MkvSession *s, int n) {
   else if (t && s->state == MKV_HARVESTING) {
     double now = now_pos(s), lo = now - BEHIND_S, hi = now + READY_AHEAD_S;
     for (int i = 0; i < t->n && !r; i++) if (t->l[i].e >= lo && t->l[i].s <= hi) r = 1;
-    if (!r && t->scan) r = s->cur.on && s->cur.ts > hi;
+    if (!r && t->scan) r = s->cur.on && s->cur.ts > now + 3; /* scanned past the playhead (no index): nothing before it can be missing; the scan reads on ahead (it waited for the whole look-ahead, which a big file without an index took minutes to cover: the subtitle seemed to load for ever) */
     else if (!r) { int a = 0, z = s->nall; while (a < z) { int m = (a + z) >> 1; if (s->all[m].t < lo) a = m + 1; else z = m; }
       r = 1; for (int i = a; i < s->nall && s->all[i].t <= hi; i++) if (s->all[i].num == t->tr->num && s->status[i] != 2) { r = 0; break; } } /* a point read without its line is not covered: the TV keeps drawing there */
   }
   unlock(s); return r;
 }
+/* the video keyframe nearest t within tol s (the Cues' own): 1 and *out, else 0 (no index yet, none near, no video cues) */
+int mkv_key_near(MkvSession *s, double t, double tol, double *out) {
+  if (!s) return 0; lock(s); int r = 0; const Point *v = s->info.vk; int n = s->info.nvk;
+  if (n) { int lo = 0, hi = n - 1; while (lo < hi) { int m = (lo + hi) / 2; if (v[m].t < t) lo = m + 1; else hi = m; } /* first at or after t */
+    double best = -1, bd = tol + 1; for (int k = lo - 1; k <= lo; k++) if (k >= 0 && k < n) { double d = fabs(v[k].t - t); if (d < bd) { bd = d; best = v[k].t; } }
+    if (best >= 0 && bd <= tol) { *out = best; r = 1; } }
+  unlock(s); return r;
+}
+/* the video keyframe at or before t, within tol s: 1 and *out, else 0 */
+int mkv_key_before(MkvSession *s, double t, double tol, double *out) {
+  if (!s) return 0; lock(s); int r = 0; const Point *v = s->info.vk; int n = s->info.nvk;
+  if (n) { int lo = 0, hi = n; while (lo < hi) { int m = (lo + hi) / 2; if (v[m].t <= t + 1e-6) lo = m + 1; else hi = m; } /* lo: the first after t */
+    if (lo > 0 && t - v[lo - 1].t <= tol) { *out = v[lo - 1].t; r = 1; } }
+  unlock(s); return r;
+}
+/* seek previews: the first video track's codec and CodecPrivate (a copy, freed by the caller): 1 when its frames can be
+   handed on as stored (no compression, or header stripping put back here), 0 not (zlib, encryption), -1 no video / not read yet */
+int mkv_video_track(MkvSession *s, char *codec, int cap, unsigned char **priv, long *privLen) {
+  if (!s) return -1; lock(s); int r = -1; *priv = NULL; *privLen = 0;
+  if (s->listed || s->info.haveTracks) for (int k = 0; k < s->info.ntr; k++) { const Track *t = &s->info.tr[k]; if (t->type != 1) continue;
+    snprintf(codec, cap, "%s", t->codec); if (t->priv && t->privLen > 0) { *priv = malloc(t->privLen); if (*priv) { memcpy(*priv, t->priv, t->privLen); *privLen = t->privLen; } }
+    r = t->encrypted ? 0 : (!t->hasComp || t->compAlgo == 3) ? 1 : 0; break; }
+  unlock(s); return r;
+}
+/* keyframe k's frame bytes, read through the caller's own handle: the block at its Cluster + CueRelativePosition (the
+   first read `guess` bytes, a second for the rest of a bigger frame), checked a key block of the video track, header
+   stripping put back. 0 and *frame (malloc'd), < 0: -1 a read failed, -2 no relative position (not read: a Cluster
+   scan is a later step), -3 not a key block / laced / unreadable, -4 over maxBytes */
+/* a cue with no relative position (many remuxes): its Cluster's headers walked from its start to the video keyframe at
+   the cue's time, payloads skipped, never downloaded (each read starts at the next header); at most 4 reads. 0 and
+   *rel (the block's offset from the Cluster's data, as a cue gives it), -1 a read failed, -3 not found */
+static int walk_cluster(MkvSession *s, NetRange *net, const Point *v, long guess, long *rel, long *bytes, int *reqs, const unsigned char *pre, long pren) { /* pre: the cluster's first bytes, already read (a batch's part) */
+  double scale = s->info.tscale / 1e9; long long bufAt = v->cl, dataAt = -1, clTs = -1; unsigned char *b = NULL; long n = 0, o = 0; int clHdr = 0;
+  for (int rq = 0; rq < 8; rq++) {
+    free(b); b = NULL; if (rq == 0 && pre && pren > 0) { b = malloc(pren); if (!b) return -1; memcpy(b, pre, pren); n = pren; } else { int e = range_with(s, net, bufAt, guess, &b, &n, NULL); (*reqs)++; if (e) return -1; *bytes += n; } o = 0;
+    if (!clHdr) { unsigned id; int il = read_id(b, n, 0, &id); long long csz; int sl = il ? read_size(b, n, il, &csz) : 0; if (!il || id != ID_CLUSTER || !sl) { free(b); return -3; } o = il + sl; dataAt = bufAt + o; clHdr = 1; }
+    for (;;) {
+      unsigned id; int il = read_id(b, n, o, &id); long long sz; int sl = il ? read_size(b, n, o + il, &sz) : 0;
+      if (!il || !sl) break;                                   /* (its header cut: the next read starts at it) */
+      if (sz < 0 || id == ID_CLUSTER) { free(b); return -3; }  /* (the next Cluster, or a size we can't step over) */
+      long d = o + il + sl; long long end = d + sz;
+      if (id == ID_TIMESTAMP) { if (end > n) break; clTs = (long long)read_uint(b, d, sz); }
+      else if (id == ID_SIMPLEBLOCK || id == ID_BLOCKGROUP) { int trk, tc, key; if (!block_head(b, n, o, id, il, sl, &trk, &tc, &key)) break; /* (its header cut: the next read starts at it) */
+        if (trk == v->num && clTs >= 0) { double bt = (clTs + tc) * scale; /* the cue's own block: its time within a tick, and a keyframe where the block says (never a block taken unchecked because its payload runs past what was read) */
+          if (fabs(bt - v->t) <= scale + 0.002 && key != 0) { *rel = (long)(bufAt + o - dataAt); free(b); return 0; }
+          if (bt > v->t + 1) { free(b); return -3; } } } /* (past its time: not in this Cluster) */
+      if (end > n && end - n <= (1L << 20)) { long need = (long)(end - o) + 262144; if (guess < need) guess = need < (2L << 20) ? need : (2L << 20); break; } /* (a block running past what was read: read on from it, one longer read, rather than a request per block) */
+      o = (long)end; if (o >= n) break; } /* (a big payload: stepped over, never downloaded) */
+    bufAt += o; if (guess < (1L << 20)) guess *= 2; }
+  free(b); return -3; }
+/* ---- a keyframe the index gives no place for, read where it most likely lies ----
+   Walking its Cluster from the start costs the whole stretch before it (about 1 MB a picture where keyframes sit deep).
+   Instead: the Cluster's first bytes give its time and size (256 bytes); the keyframe's offset is estimated from how
+   far into the Cluster its time is (the local byte rate from the index around it, and, once learnt in this file, the
+   Cluster's size over how long its Clusters last); a modest window there is searched for the block itself: the
+   element's ID, its size, the video track's number and the exact timestamp relative to the Cluster (and the keyframe
+   flag of a SimpleBlock), with the element after it checked when it is in hand. A window without it still holds
+   other blocks, found the same way and proven by the blocks that follow them: their timestamps say which way and
+   how far, for one more window. Then the block's own bytes are read exactly. Anything else: the old way (-5). */
+static int aim_hdr(cu8 *b, long n, long o, const unsigned char *trks, int *t, int *tc, int *key, long *total) {
+  if (o >= n || (b[o] != ID_SIMPLEBLOCK && b[o] != ID_BLOCKGROUP)) return 0; long long sz; int sl = read_size(b, n, o + 1, &sz); if (!sl || sz < 5 || sz > 4 * 1024 * 1024) return 0;
+  if (!block_head(b, n, o, b[o], 1, sl, t, tc, key)) return 0; if (*t <= 0 || *t > 255 || !trks[*t]) return 0; *total = 1 + sl + (long)sz; return 1; }
+static int aim_next_ok(cu8 *b, long n, long p) { if (p >= n) return 1; unsigned c = b[p]; /* what may follow a block in a Cluster (or the Cluster itself) */
+  return c == ID_SIMPLEBLOCK || c == ID_BLOCKGROUP || c == ID_TIMESTAMP || c == 0xAB || c == 0xA7 || c == 0xBF || c == 0xEC || c == 0x1F || c == 0x1C || c == 0x12 || c == 0x11 || c == 0x16 || c == 0x10 || c == 0x19; }
+static int aim_frame(const Track *tr, int num, cu8 *b, long n, unsigned char **frame, long *flen) {
+  Block blk; if (!read_block(b, n, 0, num, &blk) || blk.len < 0 || !blk.payload || blk.plen <= 0) return -3;
+  long ol; unsigned char *d = decode_payload(tr, blk.payload, blk.plen, &ol); if (!d) return -3; *frame = d; *flen = ol; return 0; }
+static int cmp_long(const void *a, const void *b) { long x = *(const long *)a, y = *(const long *)b; return x < y ? -1 : x > y; }
+static int cmp_float(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return x < y ? -1 : x > y; }
+static void aim_give_up(MkvSession *s, MkvAim *a) { lock(s); if (a->k < s->info.nvk && s->info.vk[a->k].cl == a->cl && s->info.vk[a->k].rel < 0) s->info.vk[a->k].rel = -2; /* (this one: the old way from now on) */
+  s->aim.miss++; if (!s->aim.off && s->aim.tried >= 12 && s->aim.miss * 2 > s->aim.tried) { s->aim.off = 1; fprintf(stderr, "[mkv] keyframes not found where expected (%d of %d): their Clusters read from the start in this file\n", s->aim.miss, s->aim.tried); } unlock(s); }
+int mkv_aim_start(MkvSession *s, int k, MkvAim *a) { memset(a, 0, sizeof *a); if (!s) return 0; lock(s);
+  int ok = k >= 0 && k < s->info.nvk && !s->dead && !s->mp4 && !s->aim.off && s->info.vk[k].rel == -1;
+  if (ok) { const Point *v = s->info.vk; int n = s->info.nvk, i0 = k >= 2 ? k - 2 : 0, i1 = k + 2 < n ? k + 2 : n - 1; a->k = k; a->cl = v[k].cl; a->num = v[k].num; a->t = v[k].t; a->at = a->cl; a->len = 256;
+    double dt = v[i1].t - v[i0].t; long long db = v[i1].cl - v[i0].cl; a->rate = dt > 0.5 && db > 0 ? (double)db / dt : s->info.duration > 0 && s->info.size > 0 ? s->info.size / s->info.duration : 750000; /* (bytes a second around it) */
+    s->aim.tried++; }
+  unlock(s); return ok; }
+void mkv_aim_end(MkvAim *a) { free(a->part); a->part = NULL; }
+/* the bytes asked for (a->at, a->len): 0 the frame, 1 ask again (a->at, a->len), -1 a read came short, -3 / -4 as mkv_key_read, -5 not found this way */
+int mkv_aim_feed(MkvSession *s, MkvAim *a, const unsigned char *b, long n, long maxBytes, unsigned char **frame, long *flen) {
+  *frame = NULL; *flen = 0; double scale; unsigned char trks[256]; const Track *tr = NULL; memset(trks, 0, sizeof trks);
+  lock(s); scale = s->info.tscale / 1e9; for (int j = 0; j < s->info.ntr; j++) { int nu = s->info.tr[j].num; if (nu > 0 && nu < 256) trks[nu] = 1; if (nu == a->num) tr = &s->info.tr[j]; } s->aim.bytes += n; unlock(s);
+  if (!tr || !b || n <= 0) return -1; long o = 0, fo = -1, ftot = 0;
+  if (a->stage == 0) { /* the Cluster's first bytes: its time, its size, where its blocks start */
+    unsigned id; int il = read_id(b, n, 0, &id); long long csz; int sl = il ? read_size(b, n, il, &csz) : 0; if (!il || id != ID_CLUSTER || !sl) { aim_give_up(s, a); return -5; }
+    o = il + sl; a->dataAt = a->cl + o; a->clEnd = csz > 0 ? a->dataAt + csz : -1; a->clTs = -1;
+    for (;;) { long long sz; il = read_id(b, n, o, &id); sl = il ? read_size(b, n, o + il, &sz) : 0; if (!il || !sl || sz < 0) break;
+      if (id == ID_TIMESTAMP) { if (o + il + sl + sz > n || sz > 8) break; a->clTs = (long long)read_uint(b, o + il + sl, sz); }
+      else if (id == ID_SIMPLEBLOCK || id == ID_BLOCKGROUP) break; else if (id == ID_CLUSTER) { o = n; break; }
+      o += il + sl + (long)sz; if (o >= n) break; }
+    if (a->clTs < 0 || o >= n) { aim_give_up(s, a); return -5; } /* (o: its first block) */
+    long long ticks = llround(a->t / scale) - a->clTs; if (ticks < 0 || ticks > 32767) { aim_give_up(s, a); return -5; } a->tc = (int)ticks; a->minAt = a->cl + o;
+    lock(s); double e1 = ticks * scale * a->rate, est = e1; long half = 96 * 1024;
+    if (s->aim.nd >= 4 && csz > 0) { float d[16]; int nd = s->aim.nd < 16 ? s->aim.nd : 16; memcpy(d, s->aim.dur, nd * sizeof *d); qsort(d, nd, sizeof *d, cmp_float); double e2 = (double)csz * ticks / d[nd / 2]; est = (e1 + e2) / 2; } /* (and by the Cluster's own size, once it is known how long this file's Clusters last) */
+    a->est = (long)est;
+    if (s->aim.ne >= 5) { long er[16], ab[16]; int ne = s->aim.ne < 16 ? s->aim.ne : 16; memcpy(er, s->aim.err, ne * sizeof *er); qsort(er, ne, sizeof *er, cmp_long); long bias = er[ne / 2]; for (int i = 0; i < ne; i++) ab[i] = labs(er[i] - bias); qsort(ab, ne, sizeof *ab, cmp_long);
+      est += bias; half = ab[ne / 2] * 3 / 2; if (half < 64 * 1024) half = 64 * 1024; if (half > 192 * 1024) half = 192 * 1024; } /* (how far off the last ones were: the window as wide as half of them need) */
+    unlock(s);
+    if (csz > 0 && est > csz - 1024) est = (double)csz - 1024; if (est < 0) est = 0;
+    a->at = a->dataAt + (long long)est - half; if (a->at < a->minAt) a->at = a->minAt; a->len = 2 * half + 4096;
+    if (a->clEnd > 0 && a->at + a->len > a->clEnd) a->len = (long)(a->clEnd - a->at); if (a->len < 16) { aim_give_up(s, a); return -5; }
+    a->stage = 1; return 1; }
+  if (a->stage == 2) { /* the rest of its block */
+    if (n < a->len) return -1; unsigned char *w = realloc(a->part, a->partLen + n); if (!w) return -3; a->part = w; memcpy(w + a->partLen, b, n); a->partLen += n;
+    return aim_frame(tr, a->num, a->part, a->partLen, frame, flen); }
+  /* a window: the block itself */
+  for (o = 0; o + 8 < n && fo < 0; o++) { if (b[o] != ID_SIMPLEBLOCK && b[o] != ID_BLOCKGROUP) continue; int t, tc, key; long tot;
+    if (!aim_hdr(b, n, o, trks, &t, &tc, &key, &tot) || t != a->num || tc != a->tc || key == 0) continue; if (o + tot < n && !aim_next_ok(b, n, o + tot)) continue; fo = o; ftot = tot; }
+  if (fo >= 0) { long rel = (long)(a->at + fo - a->dataAt);
+    lock(s); s->aim.hit++; s->aim.err[s->aim.ne++ % 16] = rel - a->est; if (a->tc > 150 && rel > 4096 && a->clEnd > 0) s->aim.dur[s->aim.nd++ % 16] = (float)((double)a->tc * (a->clEnd - a->dataAt) / rel);
+    if (a->k < s->info.nvk && s->info.vk[a->k].cl == a->cl) s->info.vk[a->k].rel = rel; unlock(s); /* (its place kept: the next read goes straight to it) */
+    if (ftot > maxBytes) return -4; if (fo + ftot <= n) return aim_frame(tr, a->num, b + fo, ftot, frame, flen);
+    a->part = malloc(n - fo); if (!a->part) return -3; memcpy(a->part, b + fo, n - fo); a->partLen = n - fo; a->at += n; a->len = ftot - a->partLen; a->stage = 2; return 1; }
+  if (a->tries++ >= 1) { aim_give_up(s, a); return -5; }
+  /* not in it: the blocks it does hold (each proven by the two after it) say which way the keyframe lies */
+  long lk = -1; for (o = 0; o + 8 < n && lk < 0; o++) { if (b[o] != ID_SIMPLEBLOCK && b[o] != ID_BLOCKGROUP) continue; int t, tc, key; long tot, tot2;
+    if (!aim_hdr(b, n, o, trks, &t, &tc, &key, &tot) || o + tot + 8 >= n) continue; long e = o + tot;
+    if (aim_hdr(b, n, e, trks, &t, &tc, &key, &tot2)) { if (e + tot2 < n && !aim_next_ok(b, n, e + tot2)) continue; if (e + tot2 + 8 < n && !aim_hdr(b, n, e + tot2, trks, &t, &tc, &key, &tot) && b[e + tot2] != 0x1F) continue; lk = o; }
+    else if (b[e] == 0x1F && e + 4 <= n && b[e + 1] == 0x43 && b[e + 2] == 0xB6 && b[e + 3] == 0x75) lk = o; }
+  if (lk < 0) { aim_give_up(s, a); return -5; }
+  long off0 = -1, offL = -1; int tc0 = 0, tcL = 0, first = 0, top = -40000, vtop = -40000, past = 0;
+  for (o = lk; o + 8 < n;) { int t, tc, key; long tot; if (aim_hdr(b, n, o, trks, &t, &tc, &key, &tot)) { if (off0 < 0) { off0 = o; tc0 = tc; first = tc; } offL = o; tcL = tc; if (tc > top) top = tc; if (t == a->num && tc > vtop) vtop = tc; o += tot; continue; }
+    if (b[o] == 0x1F) { past = 1; break; } unsigned id; long long sz; int il = read_id(b, n, o, &id), sl = il ? read_size(b, n, o + il, &sz) : 0; if (!il || !sl || sz < 0 || !aim_next_ok(b, n, o)) break; o += il + sl + (long)sz; }
+  double rpt = a->rate * scale; if (offL > off0 && tcL > tc0) { double r2 = (double)(offL - off0) / (tcL - tc0); if (r2 < rpt / 4) r2 = rpt / 4; if (r2 > rpt * 4) r2 = rpt * 4; rpt = r2; } /* (bytes a tick, as this stretch goes) */
+  int hi = vtop > -40000 ? vtop : top; long long at2; long len2; /* (the video's own blocks tell best: all before a keyframe are earlier than it) */
+  if (hi > a->tc) { if (a->at + off0 <= a->minAt) { aim_give_up(s, a); return -5; } double back = (first > a->tc ? (first - a->tc) * rpt * 1.5 : 0) + 160 * 1024; if (back > 1024 * 1024) back = 1024 * 1024;
+    at2 = a->at + off0 - (long long)back; if (at2 < a->minAt) at2 = a->minAt; len2 = (long)(a->at + off0 - at2) + 64; } /* (before this window) */
+  else if (!past) { double fwd = (a->tc - hi) * rpt * 1.5 + 160 * 1024; if (fwd > 1024 * 1024) fwd = 1024 * 1024; at2 = a->at + offL; len2 = (long)fwd; if (a->clEnd > 0 && at2 + len2 > a->clEnd) len2 = (long)(a->clEnd - at2); if (len2 < 16) { aim_give_up(s, a); return -5; } } /* (after it: from its last block on) */
+  else { aim_give_up(s, a); return -5; }
+  a->at = at2; a->len = len2; return 1; }
+/* the same, one keyframe on its own connection: 0 the frame, -1 a read failed, -3 / -4, -5 not found this way */
+static int aim_read(MkvSession *s, NetRange *net, int k, long maxBytes, unsigned char **frame, long *flen, long *bytes, int *reqs) {
+  MkvAim a; if (!mkv_aim_start(s, k, &a)) return -5; int r = 1;
+  for (int i = 0; i < 5 && r == 1; i++) { unsigned char *b = NULL; long n = 0; int e = range_with(s, net, a.at, a.len, &b, &n, NULL); (*reqs)++; if (e) { free(b); r = -1; break; } *bytes += n; r = mkv_aim_feed(s, &a, b, n, maxBytes, frame, flen); free(b); }
+  mkv_aim_end(&a); if (r == 1) { aim_give_up(s, &a); r = -5; } return r; }
+int mkv_range(MkvSession *s, NetRange *net, long long start, long len, unsigned char **out, long *got) { return range_with(s, net, start, len, out, got, NULL); }
+int mkv_key_read(MkvSession *s, NetRange *net, int k, long guess, long maxBytes, unsigned char **frame, long *flen, double *t, long *bytes, int *reqs) {
+  *frame = NULL; *flen = 0; *bytes = 0; *reqs = 0; if (!s || !net) return -1;
+  lock(s); if (k < 0 || k >= s->info.nvk || s->dead) { unlock(s); return -1; } Point v = s->info.vk[k]; const Track *tr = NULL;
+  for (int j = 0; j < s->info.ntr; j++) if (s->info.tr[j].num == v.num) tr = &s->info.tr[j]; unlock(s);
+  if (t) *t = v.t; if (!tr) return -3;
+  if (s->mp4) { if (v.len <= 0) return -3; if (v.len > maxBytes) return -4; unsigned char *b; long n; int e = range_with(s, net, v.cl, v.len, &b, &n, NULL); (*reqs)++; if (e) return -1; *bytes += n;
+    if (n < v.len) { free(b); return -1; } *frame = b; *flen = n; return 0; } /* (an MP4: its exact bytes, one read) */
+  if (guess < 64 * 1024) guess = 64 * 1024;
+  if (v.rel == -1) { int ar = aim_read(s, net, k, maxBytes, frame, flen, bytes, reqs); if (ar != -5) return ar; } /* (no place in the index: read where it most likely lies; not found there, its Cluster walked as before) */
+  if (v.rel < 0) { long r2 = -1; int w = walk_cluster(s, net, &v, guess, &r2, bytes, reqs, NULL, 0); if (w) return w; v.rel = r2; lock(s); if (k < s->info.nvk && s->info.vk[k].cl == v.cl) s->info.vk[k].rel = r2; unlock(s); } /* (no position in the index: found by walking its Cluster, and kept for the next time) */
+  long long start = v.cl + 5 + v.rel; long slack = 7; unsigned char *b; long n; /* (the Cluster's data starts 5 to 12 bytes in: read from its earliest and find the block) */
+  int e = range_with(s, net, start, slack + guess, &b, &n, NULL); (*reqs)++; if (e) return -1; *bytes += n;
+  int r = mkv_key_from(s, net, k, b, n, maxBytes, frame, flen, bytes, reqs); free(b); return r;
+}
+/* a keyframe from bytes read at mkv_key_where's start (a batch's part): the block found in its first bytes, its tail read
+   when the window cut it; 0 and *frame, -1 a read failed, -3 not a usable key block, -4 over maxBytes (b stays the caller's) */
+int mkv_key_from(MkvSession *s, NetRange *net, int k, const unsigned char *b0, long n, long maxBytes, unsigned char **frame, long *flen, long *bytes, int *reqs) {
+  *frame = NULL; *flen = 0; lock(s); if (k < 0 || k >= s->info.nvk || s->dead || s->info.vk[k].rel < 0) { unlock(s); return -1; } Point v = s->info.vk[k]; const Track *tr = NULL;
+  for (int j = 0; j < s->info.ntr; j++) if (s->info.tr[j].num == v.num) tr = &s->info.tr[j]; unlock(s); if (!tr) return -3;
+  if (s->mp4) { if (v.len <= 0) return -3; if (v.len > maxBytes) return -4; unsigned char *d = malloc(v.len); if (!d) return -3; /* (an MP4: its bytes from the batch, the rest read when the window cut it) */
+    long have = n < v.len ? n : v.len; memcpy(d, b0, have);
+    if (have < v.len) { unsigned char *r; long rn; int e = range_with(s, net, v.cl + have, v.len - have, &r, &rn, NULL); (*reqs)++; if (e || rn < v.len - have) { free(r); free(d); return -1; } memcpy(d + have, r, v.len - have); *bytes += rn; free(r); }
+    *frame = d; *flen = v.len; return 0; }
+  long long start = v.cl + 5 + v.rel; long slack = 7; const unsigned char *b = b0; unsigned char *own = NULL; int e;
+  Block blk; long off = -1; for (int h = 0; h <= (int)slack && off < 0; h++) if (read_block(b, n, h, v.num, &blk)) off = h;
+  if (off < 0) return -3;
+  if (blk.len < 0) { if (blk.total > maxBytes) return -4; e = range_with(s, net, start + off, blk.total, &own, &n, NULL); (*reqs)++; if (e) return -1; *bytes += n; off = 0; b = own;
+    if (!read_block(b, n, 0, v.num, &blk) || blk.len < 0) { free(own); return -3; } }
+  unsigned id; read_id(b, n, off, &id); int key = id != ID_SIMPLEBLOCK || (blk.payload && (blk.payload[-1] & 0x80)); /* (a SimpleBlock says it; a BlockGroup the Cues point at is taken as one) */
+  if (!blk.payload || !key || blk.plen <= 0) { free(own); return -3; }
+  long ol; unsigned char *d = decode_payload(tr, blk.payload, blk.plen, &ol); free(own); if (!d) return -3;
+  *frame = d; *flen = ol; return 0;
+}
+/* a batch's part for keyframe k, read from mkv_key_where's start: its block found there, its Cluster walked first when
+   the index gave no place in it (that place kept); 0 and *frame, -1 a read failed, -3 unusable, -4 over maxBytes */
+int mkv_key_from_part(MkvSession *s, NetRange *net, int k, const unsigned char *b0, long n, long maxBytes, unsigned char **frame, long *flen, long *bytes, int *reqs) {
+  *frame = NULL; *flen = 0; lock(s); if (k < 0 || k >= s->info.nvk || s->dead) { unlock(s); return -1; } Point v = s->info.vk[k]; int mp = s->mp4; unlock(s);
+  if (mp || v.rel >= 0) return mkv_key_from(s, net, k, b0, n, maxBytes, frame, flen, bytes, reqs);
+  long r2 = -1; int q0 = *reqs; long b0n = *bytes; int w = walk_cluster(s, net, &v, 65536, &r2, bytes, reqs, b0, n); if (getenv("SB_SPDBG")) fprintf(stderr, "[mkv] walk k%d: %s at %ld in its Cluster, %d more reads, %ld KB\n", k, w ? "not found" : "found", r2, *reqs - q0, (*bytes - b0n) / 1024); if (w) return w;
+  lock(s); if (k < s->info.nvk && s->info.vk[k].cl == v.cl) s->info.vk[k].rel = r2; unlock(s);
+  long off = 5 + r2; if (off + 16 < n) return mkv_key_from(s, net, k, b0 + off, n - off, maxBytes, frame, flen, bytes, reqs);
+  long b2 = 0; int q2 = 0; int r = mkv_key_read(s, net, k, 196608, maxBytes, frame, flen, NULL, &b2, &q2); *bytes += b2; *reqs += q2; return r; } /* (its block past the part: read on its own, its place known now) */
+/* a hold on the session for a thread of the caller's (it stays readable until released; mkv_close only marks it dead) */
+int mkv_key_where(MkvSession *s, int k, long long *start, long *slack) { lock(s); int ok = k >= 0 && k < s->info.nvk && !s->dead; if (ok) { const Point *v = &s->info.vk[k]; if (s->mp4) { *start = v->cl; *slack = 0; } else if (v->rel >= 0) { *start = v->cl + 5 + v->rel; *slack = 7; } else { *start = v->cl; *slack = -1; } } /* (no place in its Cluster: the Cluster's start, walked in the bytes a batch brings) */ unlock(s); return ok; } /* (where a keyframe's block starts, its position known: a batch can ask for it) */
+const char *mkv_url(MkvSession *s) { return s ? s->url : ""; }
+void mkv_set_key_url(MkvSession *s, const char *url) { if (!s) return; lock(s); free(s->keyUrl); s->keyUrl = url && url[0] ? strdup(url) : NULL; unlock(s); }
+int mkv_net_warm(MkvSession *s, NetRange *net) { unsigned char *b = NULL; long n = 0; int e = range_with(s, net, 0, 1, &b, &n, NULL); free(b); return e; } /* (a connection opened ahead: its first read pays the handshake now) */
+void mkv_retain(MkvSession *s) { if (!s) return; lock(s); s->refs++; unlock(s); }
+void mkv_release(MkvSession *s) { if (!s) return; lock(s); int last = --s->refs == 0; unlock(s); if (last) session_free(s); }
+int mkv_dead(MkvSession *s) { if (!s) return 1; lock(s); int d = s->dead; unlock(s); return d; }
+int mkv_key_time(MkvSession *s, int k, double *t) { if (!s) return 0; lock(s); int ok = k >= 0 && k < s->info.nvk; if (ok) *t = s->info.vk[k].t; unlock(s); return ok; }
+int mkv_key_count(MkvSession *s) { if (!s) return 0; lock(s); int n = s->info.nvk; unlock(s); return n; }
 int mkv_chapters(MkvSession *s, MkvChapter *out, int max) {
   if (!s) return 0; lock(s); int r = -1;
   if (s->info.haveChapters) { r = s->info.nch < max ? s->info.nch : max; memcpy(out, s->info.ch, r * sizeof *out); }

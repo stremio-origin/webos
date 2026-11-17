@@ -16,14 +16,19 @@ enum { ALIGN_LEFT = 0, ALIGN_CENTER = 1, ALIGN_RIGHT = 2, ALIGN_START = 3, ALIGN
 
 typedef struct {
   GLuint tex;        /* alpha texture of the whole line (0 while it is being made) */
-  int w, h;          /* texture size in layout units (the line box: ascent + descent) */
+  int w, h;          /* texture size in layout units (the line box: ascent + descent, more where ink reaches past it) */
   float width;       /* advance width of the text in layout units */
-  int baseline;      /* baseline offset from the top of the box */
+  int baseline;      /* baseline offset from the top of the texture */
+  float top;         /* how far the texture starts above the line box (ink above it, e.g. stacked accents; usually 0) */
   int ellipsis;      /* 1 when the text was cut to fit */
   float u0, v0, u1, v1; /* where the line sits in its texture */
 } SbLine;
 
+#define TEXT_SUBFONTS 20
 int  text_init(const char *assetDir, float surfaceScale);
+/* a weight that draws in the viewer's subtitle fonts: latin 1-10 (0 the app's), arabic 1-10 (0 the app's); a font lacking
+   a letter of a run leaves that run in the app's own */
+int  text_sub_weight(int weight, int latin, int arabic);
 void text_set_rtl(int rtl);      /* the UI direction: START/END alignment, base paragraph direction */
 int  text_rtl(void);
 void text_frame_begin(void);     /* resets the per-frame rasterising budget */
@@ -40,9 +45,13 @@ float text_width(const char *utf8, int px, int weight, float tracking);
 /* upper case in place for the app's languages (Latin with accents, Polish, Turkish dotted i, Cyrillic, Greek); cap = the buffer size */
 void text_upper(char *s, size_t cap);
 const SbLine *text_line(const char *utf8, int px, int weight, float tracking, float maxW);
+/* development / test: rows of ink above and below the line box (*above, *below); returns 1 if the ink reaches the edge
+   of the room it is drawn in (it would be cut) */
+int text_ink_check(const char *utf8, int px, int weight, int *above, int *below);
 
 /* Draws a single line at (x, y = top of the line box). Returns the drawn width. */
 float text_draw(const char *utf8, float x, float y, int px, int weight, uint32_t color, float tracking, float maxW, int align);
+float text_draw_hfade(const char *utf8, float x, float y, int px, int weight, uint32_t color, float tracking, float maxW, float x0, float room, int fl, int fr); /* left-aligned, fading into the room's ends (ui/strip.h) */
 
 /* Wraps into at most maxLines lines of maxW; the last line gets an ellipsis when cut. Draws them
    lineHeight apart (0 = the font's). Returns the number of lines drawn. */

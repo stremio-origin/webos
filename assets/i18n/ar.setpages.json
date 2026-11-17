@@ -1,0 +1,23 @@
+{
+ "Seek bar": "شريط التقديم",
+ "Seek step, chapters, previews": "خطوة التقديم، الفصول، المعاينات",
+ "Best stream, next episode, picture size": "أفضل بث، الحلقة التالية، حجم الصورة",
+ "Accent colour, screensaver, clock, trailers": "لون التمييز، شاشة التوقف، الساعة، المقاطع الدعائية",
+ "Track what you watch": "تتبّع ما تشاهده",
+ "Member since": "عضو منذ",
+ "Stremio account": "حساب Stremio",
+ "{n} titles": "{n} عنوان",
+ "{n} installed": "{n} مثبتة",
+ "Connected": "متصل",
+ "Not connected": "غير متصل",
+ "Default": "الافتراضي",
+ "Font": "الخط",
+ "Arabic font": "الخط العربي",
+ "For subtitles in Arabic": "للترجمات باللغة العربية",
+ "Language, size, font, colour": "اللغة، الحجم، الخط، اللون",
+ "Subtitle font": "خط الترجمة",
+ "Arabic subtitle font": "خط الترجمة العربية",
+ "Styled subtitles keep their own fonts, colours and background.": "الترجمات المنسّقة تحتفظ بخطوطها وألوانها وخلفيتها.",
+ "Stats for nerds on": "إحصاءات المتخصصين مفعّلة",
+ "Stats for nerds off": "إحصاءات المتخصصين متوقفة"
+}

@@ -30,7 +30,32 @@ static int lsock = -1, port;
 
 static int send_all(int fd, const void *p, size_t n) { const char *c = p; while (n) { ssize_t k = send(fd, c, n, MSG_NOSIGNAL); if (k <= 0) return 0; c += k; n -= (size_t)k; } return 1; }
 /* one answer's head, kept until its end so it is sent once, for the last hop (redirects are followed here) */
-typedef struct { int fd, head, sent, status, failed; char hdr[2048]; size_t hl; const Ent *e; } Conn;
+typedef struct { int fd, head, sent, status, failed; char hdr[2048]; size_t hl; const Ent *e;
+  int pl, sniff; char base[4096]; unsigned char *buf; size_t bl, bc; char pend[3072]; int pendN; } Conn;
+/* pl: an HLS playlist, kept whole to be rewritten; base: its address after redirects; sniff: its first bytes awaited
+   (a playlist by its content though not by its address or type), its head (pend) held until they tell */
+/* an address another one points to (a playlist's line, a redirect): absolute, from the root, or beside it */
+static void url_resolve(const char *base, const char *ref, char *out, size_t cap) {
+  if (strstr(ref, "://")) { snprintf(out, cap, "%s", ref); return; }
+  const char *sch = strstr(base, "://"); if (!sch) { snprintf(out, cap, "%s", ref); return; }
+  if (ref[0] == '/' && ref[1] == '/') { snprintf(out, cap, "%.*s%s", (int)(sch - base + 1), base, ref); return; }
+  const char *host = sch + 3, *path = strchr(host, '/'); if (!path) path = host + strlen(host);
+  if (ref[0] == '/') { snprintf(out, cap, "%.*s%s", (int)(path - base), base, ref); return; }
+  const char *q = strpbrk(path, "?#"), *end = q ? q : path + strlen(path), *sl = end; while (sl > path && sl[-1] != '/') sl--;
+  snprintf(out, cap, "%.*s%s", (int)(sl - base), base, ref);
+}
+static void pct_enc(const char *s, char *out, size_t cap) { size_t o = 0; static const char *H = "0123456789ABCDEF";
+  for (; *s && o + 4 < cap; s++) { unsigned char c = (unsigned char)*s; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strchr("-_.~", c)) out[o++] = (char)c; else { out[o++] = '%'; out[o++] = H[c >> 4]; out[o++] = H[c & 15]; } } out[o] = 0; }
+static void pct_dec(const char *s, char *out, size_t cap) { size_t o = 0; for (; *s && o + 1 < cap; s++) { if (*s == '%' && s[1] && s[2]) { char h[3] = { s[1], s[2], 0 }; out[o++] = (char)strtol(h, NULL, 16); s += 2; } else out[o++] = *s; } out[o] = 0; }
+static int looks_playlist(const char *url) { const char *q = strpbrk(url, "?#"); size_t n = q ? (size_t)(q - url) : strlen(url); return (n > 5 && !strncasecmp(url + n - 5, ".m3u8", 5)) || (n > 4 && !strncasecmp(url + n - 4, ".m3u", 4)); }
+/* the start of a playlist (after a byte order mark): 1 yes, 0 no, -1 too few bytes yet */
+static int m3u_start(const unsigned char *b, size_t n) { size_t o = n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF ? 3 : 0;
+  if (n - o < 7) return n && memcmp(b + o, "#EXTM3U", n - o) ? 0 : -1; return !memcmp(b + o, "#EXTM3U", 7); }
+static int buf_add(Conn *c, const unsigned char *p, size_t n) {
+  if (c->bl + n + 1 > c->bc) { size_t nc = (c->bl + n + 1) * 2; unsigned char *nb = realloc(c->buf, nc); if (!nb) return 0; c->buf = nb; c->bc = nc; }
+  memcpy(c->buf + c->bl, p, n); c->bl += n; c->buf[c->bl] = 0; return 1; }
+/* the held head and what came so far, sent as they are: not a playlist after all */
+static int sniff_pass(Conn *c) { c->sniff = 0; int ok = send_all(c->fd, c->pend, (size_t)c->pendN) && (!c->bl || send_all(c->fd, c->buf, c->bl)); c->bl = 0; if (!ok) c->failed = 1; return ok; }
 static const char *const PASS[] = { "content-type:", "content-length:", "content-range:", "accept-ranges:", "last-modified:", "etag:", NULL };
 static int overridden(const Ent *e, const char *line) { /* the addon's response headers win over the server's */
   const char *c = strchr(line, ':'); if (!c) return 0; size_t n = (size_t)(c - line);
@@ -40,14 +65,45 @@ static int overridden(const Ent *e, const char *line) { /* the addon's response 
 static void on_hdr(const char *line, void *ud) {
   Conn *c = ud; if (c->sent) return;
   int code; if (sscanf(line, "HTTP/%*s %d", &code) == 1) { c->status = code; c->hl = 0; return; } /* a new hop */
+  if (!strncasecmp(line, "location:", 9)) { char loc[4096], nb[4096]; const char *v = line + 9; while (*v == ' ') v++; snprintf(loc, sizeof loc, "%.*s", (int)strcspn(v, "\r\n"), v); url_resolve(c->base, loc, nb, sizeof nb); snprintf(c->base, sizeof c->base, "%s", nb); } /* where the playlist really is: its own lines are beside it */
   if (line[0] == '\r' || line[0] == '\n') { if (c->status < 200 || (c->status >= 300 && c->status < 400)) return; /* the end of a redirect's head */
+    if (c->status < 300 && !c->head && (c->pl || strcasestr(c->hdr, "mpegurl") || strcasestr(c->e->resp, "mpegurl"))) { c->pl = 1; c->sent = 1; return; } /* a playlist (by its address or its type): kept whole, rewritten, sent after */
     char head[3072]; int k = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\n%.*s", c->status, c->status < 300 ? "OK" : "Error", (int)c->hl, c->hdr);
     for (const char *p = c->e->resp; *p && k < (int)sizeof head - 4; ) { const char *nl = strchr(p, '\n'); size_t l = nl ? (size_t)(nl - p) : strlen(p); k += snprintf(head + k, sizeof head - k, "%.*s\r\n", (int)l, p); if (!nl) break; p = nl + 1; }
     k += snprintf(head + k, sizeof head - k, "Connection: close\r\n\r\n");
-    c->sent = 1; if (!send_all(c->fd, head, (size_t)(k < (int)sizeof head ? k : (int)sizeof head - 1))) c->failed = 1; return; }
+    k = k < (int)sizeof head ? k : (int)sizeof head - 1;
+    if (c->status < 300 && !c->head) { memcpy(c->pend, head, (size_t)k); c->pendN = k; c->sniff = 1; c->sent = 1; return; } /* its first bytes decide */
+    c->sent = 1; if (!send_all(c->fd, head, (size_t)k)) c->failed = 1; return; }
   for (int i = 0; PASS[i]; i++) if (!strncasecmp(line, PASS[i], strlen(PASS[i])) && !overridden(c->e, line)) { size_t l = strlen(line); if (c->hl + l < sizeof c->hdr) { memcpy(c->hdr + c->hl, line, l); c->hl += l; } }
 }
-static int on_body(const unsigned char *p, size_t n, void *ud) { Conn *c = ud; if (c->failed) return 0; if (!p) return 1; if (!c->sent) return 1; if (!send_all(c->fd, p, n)) { c->failed = 1; return 0; } return 1; }
+static int on_body(const unsigned char *p, size_t n, void *ud) { Conn *c = ud; if (c->failed) return 0; if (!p) return 1; if (!c->sent) return 1;
+  if (c->sniff) { if (!buf_add(c, p, n)) { c->failed = 1; return 0; } int m = m3u_start(c->buf, c->bl); if (m < 0) return 1;
+    if (m) { c->sniff = 0; c->pl = 1; return 1; } return sniff_pass(c); } /* a playlist by its first line: kept whole as one */
+  if (c->pl) { if (c->bl + n > 8u << 20) { c->failed = 1; return 0; } /* (a playlist is a few KB; 8 MB is not one) */
+    if (!buf_add(c, p, n)) { c->failed = 1; return 0; } return 1; }
+  if (!send_all(c->fd, p, n)) { c->failed = 1; return 0; } return 1; }
+/* an HLS playlist through here: every address in it (variants, segments, keys, init sections, audio and subtitle
+   renditions) made one of ours, so each is fetched with the stream's headers too. Before, the playlist came through
+   with them and everything it named went straight to its server without: a stream whose server checks them played
+   for some channels and not others */
+static void send_playlist(Conn *c, unsigned id) {
+  size_t cap = c->bl * 3 + 65536, o = 0; char *out = malloc(cap); if (!out) return;
+  char abs[4096], enc[12300];
+  #define PUT(s, n) do { size_t _n = (n); if (o + _n < cap) { memcpy(out + o, (s), _n); o += _n; } } while (0)
+  #define OURS(u) do { url_resolve(c->base, (u), abs, sizeof abs); pct_enc(abs, enc, sizeof enc); char _p[64]; int _k = snprintf(_p, sizeof _p, "http://127.0.0.1:%d/s/%u/u/", port, id); PUT(_p, (size_t)_k); PUT(enc, strlen(enc)); } while (0)
+  for (char *ln = (char *)c->buf; ln && *ln; ) {
+    char *nl = strchr(ln, '\n'); size_t L = nl ? (size_t)(nl - ln) : strlen(ln); size_t T = L; if (T && ln[T - 1] == '\r') T--;
+    char save = ln[T]; ln[T] = 0;
+    if (T && ln[0] != '#') OURS(ln); /* a variant or a segment */
+    else { char *u = strstr(ln, "URI=\""); /* a key, an init section, a rendition */
+      if (u) { u += 5; char *q = strchr(u, '"'); if (q) { *q = 0; PUT(ln, (size_t)(u - ln)); OURS(u); *q = '"'; PUT(q, strlen(q)); } else PUT(ln, T); }
+      else PUT(ln, T); }
+    ln[T] = save; PUT("\n", 1); ln = nl ? nl + 1 : NULL; }
+  #undef OURS
+  #undef PUT
+  char head[256]; int k = snprintf(head, sizeof head, "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: %zu\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n", o);
+  if (send_all(c->fd, head, (size_t)k)) send_all(c->fd, out, o); free(out);
+}
 /* ---- a file's sound converted for the TV: a local HLS stream ----
    One conversion at a time (the film playing). Its reading goes through one kept-alive range connection with a ring of
    the last 4 MiB read (the demuxer steps back a little now and then); the library itself is loaded on the first
@@ -207,15 +263,24 @@ static void *serve(void *a) {
   plat_thread_background(5);
   int fd = (int)(intptr_t)a; char req[8192]; size_t got = 0;
   while (got < sizeof req - 1) { ssize_t k = recv(fd, req + got, sizeof req - 1 - got, 0); if (k <= 0) break; got += (size_t)k; req[got] = 0; if (strstr(req, "\r\n\r\n")) break; }
-  req[got] = 0; char method[8] = "", path[256] = ""; unsigned id = 0;
-  if (sscanf(req, "%7s %255s", method, path) == 2 && sscanf(path, "/h/%u/", &id) == 1) { conv_serve(fd, id, path, !strcmp(method, "HEAD")); close(fd); return NULL; }
+  req[got] = 0; char method[8] = "", path[8192] = ""; unsigned id = 0; /* (a playlist's address of ours carries a whole address) */
+  if (sscanf(req, "%7s %8191s", method, path) == 2 && sscanf(path, "/h/%u/", &id) == 1) { conv_serve(fd, id, path, !strcmp(method, "HEAD")); close(fd); return NULL; }
   if (sscanf(path, "/s/%u", &id) == 1) {
     Ent e; int found = 0; pthread_mutex_lock(&mu); for (int i = 0; i < NENT; i++) if (ents[i].id == id) { e = ents[i]; found = 1; } pthread_mutex_unlock(&mu);
     if (found) {
       char hdrs[1024]; snprintf(hdrs, sizeof hdrs, "%s", e.req);
       const char *rg = strcasestr(req, "\r\nrange:"); if (rg) { rg += 8; while (*rg == ' ') rg++; size_t l = strcspn(rg, "\r\n"); size_t hl = strlen(hdrs); snprintf(hdrs + hl, sizeof hdrs - hl, "Range: %.*s\n", (int)(l < 200 ? l : 200), rg); }
-      Conn c; memset(&c, 0, sizeof c); c.fd = fd; c.e = &e; c.head = !strcmp(method, "HEAD");
-      int st = net_pipe_sync(e.url, hdrs, c.head, on_hdr, on_body, &c, 60);
+      /* /s/<id>/u/<address>: one an HLS playlist of this stream names (see send_playlist), else the stream itself */
+      char target[4096]; const char *us = strchr(path + 3, '/'); if (us && !strncmp(us, "/u/", 3)) pct_dec(us + 3, target, sizeof target); else snprintf(target, sizeof target, "%s", e.url);
+      Conn c; memset(&c, 0, sizeof c); c.fd = fd; c.e = &e; c.head = !strcmp(method, "HEAD"); snprintf(c.base, sizeof c.base, "%s", target); c.pl = looks_playlist(target);
+      Uint32 tq = SDL_GetTicks(); int st = net_pipe_sync(target, hdrs, c.head, on_hdr, on_body, &c, 60);
+      if (getenv("SB_HPROXY_LOG")) { const char *q = strpbrk(target, "?"); const char *b2 = target; for (const char *p2 = target; *p2 && (!q || p2 < q); p2++) if (*p2 == '/') b2 = p2 + 1; int bl = (int)(q ? q - b2 : (long)strlen(b2)); fprintf(stderr, "[hproxy] %s %.*s -> %d (%s, %u ms)\n", c.head ? "HEAD" : "GET", bl > 60 ? 60 : bl, b2, c.status, c.pl ? "playlist" : "data", SDL_GetTicks() - tq); } /* (development: what the TV fetched through here) */
+      if (c.sniff) { if (!c.failed) sniff_pass(&c); else { const char *b = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; send_all(fd, b, strlen(b)); } } /* (it ended before its first line said anything) */
+      if (c.pl && c.sent && !c.failed && c.bl > 3 && c.buf[0] == 0xEF && c.buf[1] == 0xBB && c.buf[2] == 0xBF) { memmove(c.buf, c.buf + 3, c.bl - 2); c.bl -= 3; } /* (its byte order mark: off) */
+      if (c.pl && c.sent && !c.failed && c.bl && !strncmp((const char *)c.buf, "#EXTM3U", 7)) send_playlist(&c, id);
+      else if (c.pl && c.sent && c.bl && !c.failed) { char b[160]; int k = snprintf(b, sizeof b, "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", c.bl); if (send_all(fd, b, (size_t)k)) send_all(fd, c.buf, c.bl); } /* named like one, but not: as it came */
+      else if (c.pl && c.sent) { const char *b = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; send_all(fd, b, strlen(b)); fprintf(stderr, "[hproxy] a playlist failed (HTTP %d)\n", st); } /* (nothing went out yet for it) */
+      free(c.buf);
       if (!c.sent) { char b[128]; int k = snprintf(b, sizeof b, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); send_all(fd, b, (size_t)k); fprintf(stderr, "[hproxy] the source failed (HTTP %d)\n", st); }
     } else { const char *b = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; send_all(fd, b, strlen(b)); } }
   close(fd); return NULL;

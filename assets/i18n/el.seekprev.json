@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Προεπισκοπήσεις στη γραμμή αναζήτησης",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Εικόνες από την ταινία πάνω από τη γραμμή καθώς μετακινείστε. Απενεργοποίηση: δεν δημιουργούνται",
+ "Previews for torrents": "Προεπισκοπήσεις για torrent",
+ "Slower than debrid, up to 500 MB extra per stream.": "Πιο αργά από το debrid, έως 500 MB επιπλέον ανά ροή.",
+ "Previews {n}%": "Προεπισκοπήσεις {n}%",
+ "Previews ready": "Οι προεπισκοπήσεις είναι έτοιμες",
+ "Uses more data, on mobile data too.": "Χρησιμοποιεί περισσότερα δεδομένα, και στα δεδομένα κινητής.",
+ "Getting the seek bar’s previews ready… {n}%": "Ετοιμάζονται οι προεπισκοπήσεις της μπάρας… {n}%",
+ "Play now": "Αναπαραγωγή τώρα",
+ "Load previews before playing": "Φόρτωση προεπισκοπήσεων πριν την αναπαραγωγή",
+ "about {n} s left": "απομένουν περίπου {n} δ",
+ "about {n} min left": "απομένουν περίπου {n} λεπ.",
+ "The film starts once this much of it has its previews; OK starts it at once": "Η ταινία ξεκινά μόλις αυτό το ποσοστό έχει προεπισκοπήσεις· το OK την ξεκινά αμέσως"
+}

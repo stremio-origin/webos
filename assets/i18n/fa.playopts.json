@@ -1,0 +1,10 @@
+{
+ "Next episode card": "کارت قسمت بعدی",
+ "Large": "بزرگ",
+ "Compact": "فشرده",
+ "Compact: a smaller picture and no summary, more of the film shows": "فشرده: تصویر کوچک‌تر و بدون خلاصه، بخش بیشتری از فیلم نشان داده می‌شود",
+ "Torrent connections": "اتصال تورنت‌ها",
+ "Automatic": "خودکار",
+ "TCP only": "فقط TCP",
+ "TCP only can help on mobile (4G / 5G) routers; a torrent may find fewer peers": "فقط TCP می‌تواند روی روترهای موبایلی (4G / 5G) کمک کند؛ ممکن است تورنت همتای کمتری پیدا کند"
+}

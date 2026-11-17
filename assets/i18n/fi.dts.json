@@ -1,0 +1,7 @@
+{"Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV":"Automaattinen selvittää, mitä tämä TV toistaa. Muunna, jos et ole varma. Pois jättää asian TV:lle","Convert":"Muunna","DTS sound":"DTS-ääni","Default audio language, DTS, interface sounds":"Oletusäänikieli, DTS, käyttöliittymän äänet",
+"Converting the sound for this TV…": "Muunnetaan ääntä tälle TV:lle…",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (muunnettu)",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (muunnettu)",
+"Playing the {t} track: this TV can’t play DTS": "Toistetaan {t}-raita: tämä TV ei pysty toistamaan DTS-ääntä",
+"Playing the {t} track: this TV can’t play TrueHD": "Toistetaan {t}-raita: tämä TV ei pysty toistamaan TrueHD-ääntä"
+}

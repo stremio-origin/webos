@@ -19,6 +19,7 @@ int plat_map_key(const SDL_KeyboardEvent *e);
 int plat_text_input(void);
 /* the device's name for logs ("LG webOS 4.4.2 OLED55C9") */
 const char *plat_device_name(void);
+const char *plat_log_header(void);   /* a line for shared logs about this device (no names): "" where there is nothing (core/applog.c has the default) */
 /* the device's RAM in MB (0 when unknown): picks the picture budget and the drawing size */
 int plat_mem_total_mb(void);
 void plat_thread_background(int nice);  /* the calling thread yields to the drawing thread (and threads it starts inherit it) */
@@ -35,10 +36,17 @@ char *plat_luna_call(const char *uri, const char *payload, int timeoutMs);
    (always 0 off webOS) */
 typedef void (*PlatLunaCb)(const char *payload, void *ud);
 unsigned long plat_luna_subscribe(const char *uri, const char *payload, PlatLunaCb cb, void *ud);
+/* the same for the TV's screen-saver request, and the answer to it: on a handle of the app's own name used for
+   nothing else (the helper library never passes those requests on); where that name is refused, as above */
+unsigned long plat_luna_subscribe_app(const char *uri, const char *payload, PlatLunaCb cb, void *ud);
+int plat_luna_send_app(const char *uri, const char *payload);
 void plat_luna_cancel(unsigned long handle);
 void plat_luna_pump(void);
 /* a call whose answer nobody waits for (a refusal is logged); 0 when it could not be sent (always 0 off webOS) */
 int plat_luna_send(const char *uri, const char *payload);
+/* shows or hides the TV's own pointer (the Magic Remote's): the app puts it away as the TV's own apps do (an arrow
+   key, the controls fading over a film); it comes back by itself when the remote moves. Nothing off webOS */
+void plat_pointer_visible(int on);
 /* the panel's lines (2160 on a 4K TV) from the platform itself, without a system service; 0 when unknown */
 int plat_panel_lines(void);
 #endif

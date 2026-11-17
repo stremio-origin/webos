@@ -1,41 +1,14 @@
 {
-  "version": "1.0.0",
-  "items": [
-    {
-      "icon": "wn_new",
-      "title": "Completely renovated",
-      "text": "Rebuilt as a native app. Fast to open, smooth to move."
-    },
-    {
-      "icon": "wn_best",
-      "title": "The best stream, picked for you",
-      "text": "Tested on your TV, one press to play."
-    },
-    {
-      "icon": "wn_cast",
-      "title": "Cast from your phone",
-      "text": "Your TV shows up on your phone. Launch the app, play and control it directly. The Android app arrives soon."
-    },
-    {
-      "icon": "wn_people",
-      "title": "People and reviews",
-      "text": "The cast list, reviews and a spotlight of what's new."
-    },
-    {
-      "icon": "wn_subs",
-      "title": "Subtitles that just fit",
-      "text": "One-press sync, styled as the film made them."
-    },
-    {
-      "icon": "wn_av",
-      "title": "Picture and sound",
-      "text": "Dolby Vision, DTS converted on the TV, USB for torrents."
-    }
-  ],
-  "support": {
-    "title": "Thank you",
-    "message": "Thank you!",
-    "url": "https://ko-fi.com/simussu",
-    "github": "https://github.com/stremio-origin/webos"
-  }
+ "version": "1.1.0",
+ "items": [
+  {"icon": "wn_av", "title": "Seek previews", "text": "A picture of the film on the seek bar, for debrid and direct links."},
+  {"icon": "wn_subs", "title": "Subtitles your way", "text": "Font, size, colour, background, brightness and position, changed while you watch."},
+  {"icon": "wn_opts", "title": "Tracks per show", "text": "The subtitles and audio you pick stay for the whole show."},
+  {"icon": "wn_new", "title": "Chapters and skips", "text": "Chapters on the seek bar, and Skip intro and recap by itself or on OK."},
+  {"icon": "wn_live", "title": "Live TV", "text": "Channels and sports from your live addons, with Favorites and Recent."},
+  {"icon": "collection", "title": "Film collections", "text": "On the title page and in the Library, and the next film after the credits."},
+  {"icon": "wn_lib", "title": "28 languages", "text": "Greek, Brazilian Portuguese, Romanian and Hungarian among them."},
+  "And much more."
+ ],
+ "support": {"title": "Thank you", "message": "Thank you!", "url": "https://ko-fi.com/simussu", "github": "https://github.com/stremio-origin/webos"}
 }

@@ -11,8 +11,9 @@
 #define TRAILER_MAX_SUBS 12
 typedef struct { char url[1536], lang[8], name[64], kind[12]; } TrailerSub;  /* kind: "srt" (IMDb) or "timedtext" (YouTube) */
 typedef struct {
-  char url[2048];      /* what to load: the best HLS variant, or an MP4 (low quality: the 480p MP4) */
+  char url[2048];      /* what to load: the best HLS variant, or an MP4 (low quality: the sharpest MP4, 1080p / 720p / 480p) */
   char alt[2048];      /* the MP4 to try when the HLS stream fails ("" = none) */
+  char down[2][2048];  /* the background trailer: the lower MP4s to fall back to, in order (720p then 480p; "" = none) */
   char mime[32];       /* "application/x-mpegurl" or "video/mp4" */
   char name[128];      /* the clip's own name ("Official Trailer"); "Trailer" when unknown */
   int  runtime;        /* seconds, 0 = unknown */
@@ -23,7 +24,7 @@ typedef struct {
 typedef void (*TrailerCb)(const Trailer *t, const char *err, void *ud);
 
 /* imdbId: "tt…" or NULL; ytIds: YouTube ids, comma separated, or NULL (then Cinemeta is asked for them).
-   lowQuality: the background trailer (480p MP4, no caption matching). Returns a token for trailer_cancel. */
+   lowQuality: the background trailer (an MP4, the sharpest there is unless the connection was measured slow; no caption matching). Returns a token for trailer_cancel. */
 unsigned trailer_find(const char *imdbId, const char *ytIds, int lowQuality, TrailerCb cb, void *ud);
 /* the same from a title's metadata (meta may be NULL: then the id alone) */
 unsigned trailer_find_meta(const cJSON *meta, const char *id, int lowQuality, TrailerCb cb, void *ud);

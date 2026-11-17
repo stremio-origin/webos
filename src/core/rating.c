@@ -10,7 +10,9 @@
 #include <ctype.h>
 
 /* the country whose rating is shown, by the app's language; films without a key: which Wikidata rating */
-static const char *RATE_CC[][2] = { { "en", "US" }, { "de", "DE" }, { "fr", "FR" }, { "es", "ES" }, { "it", "IT" }, { "nl", "NL" }, { "pl", "PL" }, { "pt", "BR" }, { "ru", "RU" }, { "tr", "TR" }, { "ar", "AE" } };
+static const char *RATE_CC[][2] = { { "en", "US" }, { "de", "DE" }, { "fr", "FR" }, { "es", "ES" }, { "it", "IT" }, { "nl", "NL" }, { "pl", "PL" }, { "pt", "PT" }, { "pt-BR", "BR" }, { "ru", "RU" }, { "tr", "TR" }, { "ar", "AE" },
+  { "el", "GR" }, { "ro", "RO" }, { "hu", "HU" }, { "cs", "CZ" }, { "sk", "SK" }, { "uk", "UA" }, { "bg", "BG" }, { "sr", "RS" }, { "hr", "HR" }, { "sv", "SE" }, { "da", "DK" },
+  { "no", "NO" }, { "fi", "FI" }, { "id", "ID" }, { "vi", "VN" }, { "fa", "IR" } }; /* (the full code first: pt-BR is Brazil's, pt Portugal's) */
 static const char *RATE_WD[][2] = { { "de", "P1981" }, { "fr", "P2758" }, { "pt", "P3216" } }; /* FSK, CNC, ClassInd; MPA (P1657) otherwise */
 #define KEEP 120
 
@@ -82,8 +84,9 @@ void rating_get(const char *type, const char *id, RatingCb cb, void *ud) {
   if (!id || strncmp(id, "tt", 2) || !id[2] || strspn(id + 2, "0123456789") != strlen(id + 2)) { cb(&z, ud); return; }
   Ask *a = calloc(1, sizeof *a); a->cb = cb; a->ud = ud;
   snprintf(a->type, sizeof a->type, "%s", type && !strcmp(type, "series") ? "series" : "movie"); snprintf(a->id, sizeof a->id, "%s", id);
-  snprintf(a->lang, sizeof a->lang, "%.2s", i18n_lang()); snprintf(a->k, sizeof a->k, "r%s%s", a->id, a->lang);
+  const char *full = i18n_lang(); snprintf(a->lang, sizeof a->lang, "%.2s", full); snprintf(a->k, sizeof a->k, "r%s%s", a->id, full); /* (the full code: pt and pt-BR keep their own) */
   snprintf(a->cc, sizeof a->cc, "US"); for (size_t i = 0; i < sizeof RATE_CC / sizeof RATE_CC[0]; i++) if (!strcmp(RATE_CC[i][0], a->lang)) snprintf(a->cc, sizeof a->cc, "%s", RATE_CC[i][1]);
+  for (size_t i = 0; i < sizeof RATE_CC / sizeof RATE_CC[0]; i++) if (!strcmp(RATE_CC[i][0], full)) snprintf(a->cc, sizeof a->cc, "%s", RATE_CC[i][1]);
   for (int i = 0; i < keptN; i++) if (!strcmp(kept[i].k, a->k)) { Rating r = kept[i].r; free(a); cb(&r, ud); return; }
   char p[64]; snprintf(p, sizeof p, "/find/%s?external_source=imdb_id", a->id);
   if (!tmdb_request(p, on_find, a)) wiki(a);
@@ -93,7 +96,7 @@ int rating_age(const Rating *r) {
   const char *s = r ? r->rating : ""; if (!*s) return -1;
   if (strspn(s, "0123456789") == strlen(s)) return atoi(s);
   if (!strcasecmp(s, "ALL")) return 0;
-  static const struct { const char *c; int age; } M[] = { { "G", 0 }, { "TV-G", 0 }, { "TV-Y", 0 }, { "U", 0 }, { "L", 0 }, { "AL", 0 }, { "TP", 0 }, { "A", 0 }, { "T", 0 },
+  static const struct { const char *c; int age; } M[] = { { "G", 0 }, { "TV-G", 0 }, { "TV-Y", 0 }, { "U", 0 }, { "L", 0 }, { "AL", 0 }, { "TP", 0 }, { "A", 0 }, { "T", 0 }, { "KN", 0 }, { "S", 0 },
     { "PG", 7 }, { "TV-PG", 7 }, { "TV-Y7", 7 }, { "TV-Y7-FV", 7 }, { "PG-13", 13 }, { "TV-14", 13 }, { "12A", 12 }, { "R", 16 }, { "NC-17", 18 }, { "TV-MA", 18 }, { "X", 18 } };
   for (size_t i = 0; i < sizeof M / sizeof M[0]; i++) if (!strcasecmp(s, M[i].c)) return M[i].age;
   int n = 0; for (const char *p = s; *p; p++) if (*p >= '0' && *p <= '9') { n = atoi(p); break; } /* "-12", "12+", "M/16": its number */

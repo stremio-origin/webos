@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "Кадри върху лентата за превъртане",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Кадри от филма над лентата, докато се придвижвате по нея. Изключено: не се създават",
+ "Previews for torrents": "Прегледи за торенти",
+ "Slower than debrid, up to 500 MB extra per stream.": "По-бавно от debrid, до 500 MB допълнително на поток.",
+ "Previews {n}%": "Прегледи {n}%",
+ "Previews ready": "Прегледите са готови",
+ "Uses more data, on mobile data too.": "Използва повече данни, и при мобилни данни.",
+ "Getting the seek bar’s previews ready… {n}%": "Подготвяме прегледите на лентата… {n}%",
+ "Play now": "Пусни сега",
+ "Load previews before playing": "Зареждане на прегледите преди пускане",
+ "about {n} s left": "остават около {n} с",
+ "about {n} min left": "остават около {n} мин",
+ "The film starts once this much of it has its previews; OK starts it at once": "Филмът тръгва, щом тази част от него има прегледи; OK го пуска веднага"
+}

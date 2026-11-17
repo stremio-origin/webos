@@ -83,7 +83,14 @@ ok('sealed page opens (' + page.length + ' base64 chars)', opened === text);
 var big = ''; for (i = 0; i < 30000; i++) big += crypto.randomBytes(6).toString('hex') + ' line ' + i + '\n'; /* hardly compresses: only the newest part fits */
 fs.writeFileSync(inF, big); run(['seal', code, dev.getPublicKey('base64'), inF, outF]); page = fs.readFileSync(outF, 'utf8');
 try { opened = open(code, page, dev.getPrivateKey('base64')); } catch (e) { opened = ''; }
-ok('a large bundle keeps its newest part', opened.length > 1000 && big.endsWith(opened) && page.length < 64000, page.length + ' chars, ' + opened.length + ' of ' + big.length + ' kept');
+var CUT = '[older lines left out: the page holds about 64 KB]\n';
+ok('a large bundle keeps its newest part', opened.length > 1000 && opened.startsWith(CUT) && big.endsWith(opened.slice(CUT.length)) && page.length < 64000, page.length + ' chars, ' + opened.length + ' of ' + big.length + ' kept');
+/* with the bundle's own header (version, build, device, then "== app =="): it stays, then the note, then the newest whole lines */
+var head = 'Stremio Origin 1.1.0 build abc123\nwebOS 6.0 OLED55C1\nRAM 1.5 GB\n== app ==\n', bh = head + big;
+fs.writeFileSync(inF, bh); run(['seal', code, dev.getPublicKey('base64'), inF, outF]); page = fs.readFileSync(outF, 'utf8');
+try { opened = open(code, page, dev.getPrivateKey('base64')); } catch (e) { opened = ''; }
+var rest = opened.slice(head.length + CUT.length);
+ok('a large bundle keeps its header', opened.startsWith(head + CUT) && rest.length > 1000 && bh.endsWith(rest) && /^[0-9a-f]{12} line \d+\n/.test(rest) && page.length < 64000, page.length + ' chars, header kept, ' + rest.length + ' newest chars, whole lines');
 var refused = false; try { open('K7M3', fs.readFileSync(outF, 'utf8'), dev.getPrivateKey('base64')); } catch (e) { refused = true; }
 ok('another code does not open it', refused);
 fs.rmSync(tmp, { recursive: true, force: true });

@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Aikajana",
+ "Seek step, chapters, previews": "Siirtymäväli, kappaleet, esikatselut",
+ "Best stream, next episode, picture size": "Paras lähde, seuraava jakso, kuvakoko",
+ "Accent colour, screensaver, clock, trailers": "Korostusväri, näytönsäästäjä, kello, trailerit",
+ "Track what you watch": "Pidä kirjaa katsomastasi",
+ "Member since": "Jäsen alkaen",
+ "Stremio account": "Stremio-tili",
+ "{n} titles": "{n} nimikettä",
+ "{n} installed": "{n} asennettu",
+ "Connected": "Yhdistetty",
+ "Not connected": "Ei yhdistetty",
+ "Default": "Oletus",
+ "Font": "Fontti",
+ "Arabic font": "Arabialainen fontti",
+ "For subtitles in Arabic": "Arabiankielisille tekstityksille",
+ "Language, size, font, colour": "Kieli, koko, fontti, väri",
+ "Subtitle font": "Tekstityksen fontti",
+ "Arabic subtitle font": "Arabialainen tekstitysfontti",
+ "Styled subtitles keep their own fonts, colours and background.": "Muotoillut tekstitykset säilyttävät omat fonttinsa, värinsä ja taustansa.",
+ "Stats for nerds on": "Nörttitilastot päällä",
+ "Stats for nerds off": "Nörttitilastot pois"
+}

@@ -4,6 +4,7 @@
    to it first. */
 #ifndef SB_QRCARD_H
 #define SB_QRCARD_H
+#include <stdint.h>
 
 typedef struct {
   const char *title, *sub;      /* already translated */
@@ -13,6 +14,9 @@ typedef struct {
   float doneHold;               /* seconds the tick stays before the card goes */
   void (*onClose)(void *ud);    /* once it is closed, however that happened */
   void *ud;
+  const char *badge;            /* a service's mark (an icon's name) over the title, white on badgeBg; NULL = none */
+  uint32_t badgeBg;             /* the service's own colour: the badge, the tick when it is done */
+  int code;                     /* the title is a code to type: large and spaced; the address under the QR is left out */
 } QrCardOpts;
 
 void qrcard_show(const QrCardOpts *o);

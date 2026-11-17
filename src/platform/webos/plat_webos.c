@@ -33,6 +33,7 @@ void plat_pre_init(const char *appId) {
   if (!getenv("XDG_RUNTIME_DIR")) setenv("XDG_RUNTIME_DIR", "/tmp/xdg", 1);
   SDL_SetHint(SDL_HINT_WEBOS_ACCESS_POLICY_KEYS_BACK, "true");
   SDL_SetHint(SDL_HINT_WEBOS_ACCESS_POLICY_KEYS_EXIT, "true");
+  SDL_SetHint(SDL_HINT_WEBOS_CURSOR_SLEEP_TIME, "5000"); /* the TV's own pointer sleeps after 5 s still, as the app puts it away (left unset, 5 minutes; a TV whose SDL does not know it ignores it) */
   char *base = SDL_GetBasePath(); /* from /proc/self/exe: inside the jail, the jail's own path to the app */
   snprintf(assetDir, sizeof assetDir, "%sassets", base ? base : "./");
   /* the app's writable folder, kept across updates where the install allows it. The first that takes a file:
@@ -68,6 +69,10 @@ void plat_post_window(SDL_Window *w) { (void)w; }
 const char *plat_asset_dir(void) { return assetDir; }
 const char *plat_data_dir(void) { return dataDir; }
 void plat_window_size(int *w, int *h, Uint32 *flags) { *w = 1920; *h = 1080; *flags = SDL_WINDOW_OPENGL; /* measured on a 43LK5900 (webOS 4.4): with SDL_WINDOW_FULLSCREEN the compositor hands back a 1280x720 surface; without it, 1920x1080 */
+  /* webOS 3 (its SDL 2.0.2 / 2.0.4 and older compositor): a full-screen window, as apps known to start there ask for; a
+     plain one was answered with the launcher's white screen and nothing else. The drawing follows whatever surface
+     comes back (1280x720 included) */
+  { int major = 0; const char *v = strstr(devName, "webOS "); if (v) major = atoi(v + 6); if (major > 0 && major < 4) { *flags |= SDL_WINDOW_FULLSCREEN; fprintf(stderr, "[start] webOS %d: a full-screen window\n", major); } }
   const char *v = getenv("SB_WIN"); if (v) { int a, b, f; if (sscanf(v, "%dx%d:%d", &a, &b, &f) == 3) { *w = a; *h = b; *flags = SDL_WINDOW_OPENGL | (f & 1 ? SDL_WINDOW_FULLSCREEN : 0) | (f & 2 ? SDL_WINDOW_ALLOW_HIGHDPI : 0) | (f & 4 ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0); } } /* SB_WIN=3840x2160:2 to try other surface requests */ }
 int plat_map_key(const SDL_KeyboardEvent *e) {
   switch (e->keysym.scancode) {
@@ -77,6 +82,7 @@ int plat_map_key(const SDL_KeyboardEvent *e) {
     case SDL_WEBOS_SCANCODE_CH_UP: return K_CH_UP; case SDL_WEBOS_SCANCODE_CH_DOWN: return K_CH_DOWN;
     case SDL_WEBOS_SCANCODE_CURSOR_SHOW: return K_CURSOR_SHOW; case SDL_WEBOS_SCANCODE_CURSOR_HIDE: return K_CURSOR_HIDE;
     case SDL_WEBOS_SCANCODE_EXIT: return K_EXIT;
+    case 483: case SDL_SCANCODE_MENU: return K_INFO; /* (LG's Info key: the code between Back and the pointer's; a key not known here is named in the log below) */
     /* media keys come through SDL's Linux table: Play (web 415, KEY_PLAY) and the single play/pause key (10252,
        KEY_PLAYPAUSE) both arrive as AUDIOPLAY and cannot be told apart, so it toggles (Play on a paused film plays,
        as 415 does); Pause (19, KEY_PAUSE) is PAUSE */
@@ -85,6 +91,14 @@ int plat_map_key(const SDL_KeyboardEvent *e) {
     case SDL_SCANCODE_AUDIOSTOP: case SDL_SCANCODE_STOP: return K_STOP;
     case SDL_SCANCODE_AUDIOREWIND: return K_REW;
     case SDL_SCANCODE_AUDIOFASTFORWARD: return K_FF;
+    /* LG's own SDL gives some remote buttons scancodes of its own, past SDL's range, with no keycode (sym 0), so they
+       arrived here unknown and did nothing. Measured on a webOS 4.5 set's libSDL2 (PlexNative's key table): the
+       separate Play button 450 (evdev KEY_PLAY; Pause beside it is SDL's PAUSE above, which is why Pause worked and
+       Play did not on a webOS 6.5 Magic Remote, #29 / #75), fast-forward 451 and rewind 452, and the channel rocker
+       300 / 301 (evdev KEY_CHANNELUP / DOWN; the header's 480 / 481 kept for the sets that send those) */
+    case 450: return K_PLAY;
+    case 451: return K_FF; case 452: return K_REW;
+    case 300: return K_CH_UP; case 301: return K_CH_DOWN;
     default: break;
   }
   switch (e->keysym.sym) {
@@ -96,6 +110,7 @@ int plat_map_key(const SDL_KeyboardEvent *e) {
     case SDLK_PAUSE: return K_PAUSE;
     default: break;
   }
+  if (e->type == SDL_KEYDOWN) fprintf(stderr, "[key] a key not known here: scancode %d, sym %d\n", (int)e->keysym.scancode, (int)e->keysym.sym); /* (a remote's new key named, to be mapped) */
   return K_NONE;
 }
 const char *plat_device_name(void) { return devName; }
@@ -146,9 +161,25 @@ const char *plat_ui_locale(void) {
   fprintf(stderr, "[i18n] TV language: %s\n", loc[0] ? loc : "(no answer)");
   return loc[0] ? loc : NULL;
 }
+void plat_pointer_visible(int on) { /* SDL's own cursor call: in every SDL webOS ships (3 included), the TV's cursor shown or hidden for the app's window */
+  int r = SDL_ShowCursor(on ? SDL_ENABLE : SDL_DISABLE); fprintf(stderr, "[ptr] %s (%d)\n", on ? "shown" : "hidden", r);
+}
 /* the TV's SDL knows the panel without a system service (a refused systemproperty call leaves 4K sets at 1080p) */
 int plat_panel_lines(void) {
   SDL_bool (*res)(int *, int *) = NULL; *(void **)(&res) = dlsym(RTLD_DEFAULT, "SDL_webOSGetPanelResolution");
   int w = 0, h = 0; if (!res || !res(&w, &h)) return 0;
   return h;
 }
+
+/* the TV's family for the loading lines (core/waitlines): OLED when its model code starts with it, QNED or NanoCell
+   (NANO) when the code holds them, else "" (the plain LG lines; no guessing). Asked once, in the background (a system
+   call can take seconds): "" until it answers. */
+#include <pthread.h>
+#include <ctype.h>
+static char wbrand[16]; static volatile int wbrandDone;
+static void *wbrand_ask(void *a) { (void)a;
+  char *r = plat_luna_call("luna://com.webos.service.tv.systemproperty/getSystemInfo", "{\"keys\":[\"modelName\"]}", 4000); char model[64] = "";
+  const char *m = r ? strstr(r, "\"modelName\"") : NULL; if (m && (m = strchr(m + 11, ':')) && (m = strchr(m, '"'))) { m++; size_t k = 0; while (*m && *m != '"' && k + 1 < sizeof model) model[k++] = (char)toupper((unsigned char)*m++); model[k] = 0; }
+  const char *b = !strncmp(model, "OLED", 4) ? "OLED" : strstr(model, "QNED") ? "QNED" : strstr(model, "NANO") ? "NanoCell" : "";
+  snprintf(wbrand, sizeof wbrand, "%s", b); fprintf(stderr, "[brand] model \"%s\": %s\n", model, *b ? b : "the plain LG lines"); free(r); wbrandDone = 1; return NULL; }
+const char *plat_wait_brand(void) { static int asked; if (!asked) { asked = 1; pthread_t t; if (!pthread_create(&t, NULL, wbrand_ask, NULL)) pthread_detach(t); } return wbrandDone ? wbrand : ""; }

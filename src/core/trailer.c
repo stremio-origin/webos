@@ -1,6 +1,7 @@
 #include "core/trailer.h"
 #include "core/net.h"
 #include "core/json.h"
+#include "core/best.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +53,9 @@ static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static void guess_lang(const char *name, const char *url, char *out) {
   static const char *two[][2] = { { "en", "eng" }, { "es", "spa" }, { "fr", "fre" }, { "de", "ger" }, { "it", "ita" }, { "pt", "por" }, { "ru", "rus" },
     { "ar", "ara" }, { "nl", "dut" }, { "pl", "pol" }, { "tr", "tur" }, { "sv", "swe" }, { "ro", "rum" }, { "el", "gre" }, { "he", "heb" },
-    { "hi", "hin" }, { "ko", "kor" }, { "ja", "jpn" }, { "zh", "chi" } };
+    { "hi", "hin" }, { "ko", "kor" }, { "ja", "jpn" }, { "zh", "chi" },
+    { "hu", "hun" }, { "cs", "cze" }, { "sk", "slo" }, { "uk", "ukr" }, { "bg", "bul" }, { "sr", "srp" }, { "hr", "hrv" }, { "da", "dan" }, { "no", "nor" },
+    { "nb", "nor" }, { "fi", "fin" }, { "id", "ind" }, { "vi", "vie" }, { "fa", "per" } };
   for (const char *p = url ? strchr(url, '/') : NULL; p; p = strchr(p + 1, '/')) {
     int n = 0; while (n < 3 && lower(p[1 + n]) >= 'a' && lower(p[1 + n]) <= 'z') n++;
     for (int k = n; k >= 2; k--) { char c = p[1 + k]; if (c != '-' && c != '_') continue;
@@ -107,9 +110,10 @@ static void deliver(Job *j) {
   const char *url = js_str(o, "url", "");
   if (!*url) { j->cb(NULL, js_str(o, "err", "unavailable"), j->ud); cJSON_Delete(o); return; }
   Trailer *t = calloc(1, sizeof *t); const char *hls = js_str(o, "hls", "");
-  /* HLS when IMDb has it: its MP4s mark too few keyframes for the TV to seek; the background trailer keeps the 480p MP4 */
+  /* HLS when IMDb has it: its MP4s mark too few keyframes for the TV to seek; the background trailer keeps an MP4 (bg_order) */
   if (*hls && !j->lq) { cpy(t->url, sizeof t->url, hls); cpy(t->alt, sizeof t->alt, url); cpy(t->mime, sizeof t->mime, "application/x-mpegurl"); }
   else { cpy(t->url, sizeof t->url, url); cpy(t->mime, sizeof t->mime, "video/mp4"); }
+  if (j->lq) { int n = 0; const cJSON *d; cJSON_ArrayForEach(d, js_arr(o, "down")) if (n < 2 && cJSON_IsString(d) && *d->valuestring) cpy(t->down[n++], sizeof t->down[0], d->valuestring); }
   cpy(t->name, sizeof t->name, js_str(o, "name", "Trailer")); t->runtime = (int)js_num(o, "runtime", 0); cpy(t->source, sizeof t->source, js_str(o, "source", ""));
   const cJSON *s; cJSON_ArrayForEach(s, js_arr(o, "subs")) { if (t->nsubs >= TRAILER_MAX_SUBS) break; TrailerSub *d = &t->subs[t->nsubs++];
     cpy(d->url, sizeof d->url, js_str(s, "url", "")); cpy(d->lang, sizeof d->lang, js_str(s, "lang", "eng")); cpy(d->name, sizeof d->name, js_str(s, "name", "English")); cpy(d->kind, sizeof d->kind, js_str(s, "kind", "srt")); }
@@ -209,11 +213,11 @@ static void yt_innertube(const char *vid, YtCb cb, void *ud) {
 static void piped_try(YtReq *r);
 static void on_piped(int st, const unsigned char *body, size_t len, void *ud) {
   YtReq *r = ud; int ii = r->order[r->k]; cJSON *j = st > 0 ? net_json(body) : NULL;
-  const char *lo = "", *hi = ""; const cJSON *v;
+  const char *lo = "", *hi = ""; int hiQ = 0; const cJSON *v;
   cJSON_ArrayForEach(v, js_arr(j, "videoStreams")) {
     if (js_bool(v, "videoOnly", 0) || !*js_str(v, "url", "") || strncmp(js_str(v, "mimeType", ""), "video/mp4", 9)) continue;
     int q = atoi(js_str(v, "quality", "0"));
-    if (q >= 480) { if (!*hi) hi = js_str(v, "url", ""); } else if (!*lo) lo = js_str(v, "url", "");
+    if (q >= 480) { if (q > hiQ) { hi = js_str(v, "url", ""); hiQ = q; } } else if (!*lo) lo = js_str(v, "url", ""); /* (the sharpest one at 480 or more, whatever the list's order) */
   }
   if (*lo || *hi) {
     cJSON *out = cJSON_CreateObject(); cJSON_AddStringToObject(out, "lo", lo); cJSON_AddStringToObject(out, "hi", hi); cJSON_AddItemToObject(out, "subs", cJSON_CreateArray());
@@ -242,9 +246,12 @@ static void yt_piped(const char *vid, YtCb cb, void *ud) {
 /* one YouTube video: the low or high MP4 (cached 2 h; a dead one is left alone for 3 min) */
 typedef void (*YtUrlCb)(Job *j, const char *url, const char *err);
 typedef struct { Job *j; char vid[20]; YtUrlCb cb; } YtRes;
+/* the background trailer: the sharpest MP4 there is (1080p, else 720p, else 480p), the low one first only on a connection
+   measured slow (under 8 Mb/s: Settings, the best stream); the TV decodes the picture itself, the cost is the download */
+static int bg_slow(void) { double m = best_net_mbps(); return m > 0 && m < 8; }
 static const char *yt_pick(const cJSON *c, int lq) {
   const char *lo = js_str(c, "lo", ""), *hi = js_str(c, "hi", "");
-  return lq ? (*lo ? lo : hi) : (*hi ? hi : lo);
+  return lq && bg_slow() ? (*lo ? lo : hi) : (*hi ? hi : lo);
 }
 static void yt_res_done(YtRes *r, cJSON *res) {
   if (res) { const char *u = yt_pick(res, r->j->lq); memo_put(ytCache, r->vid, res); r->cb(r->j, u, *u ? "" : "no format"); }
@@ -369,8 +376,11 @@ static void yt_captioned(Job *j) {
 /* ---- the answer ------------------------------------------------------------------------------------ */
 static void imdb_reply(Job *j, const cJSON *v, const cJSON *subs) {
   const char *lo = js_str(v, "lo", ""), *hi = js_str(v, "hi", ""), *full = js_str(v, "full", "");
-  const char *u = j->lq ? (*lo ? lo : *hi ? hi : full) : (*full ? full : *hi ? hi : lo);
+  const char *u = j->lq && bg_slow() ? (*lo ? lo : *hi ? hi : full) : (*full ? full : *hi ? hi : lo); /* (the background trailer too: bg_slow) */
   cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "url", u); cJSON_AddStringToObject(o, "hls", js_str(v, "hls", ""));
+  if (j->lq) { /* the background trailer: what is lower than the one chosen, sharpest first, to fall back to when it fails */
+    cJSON *dn = cJSON_AddArrayToObject(o, "down"); const char *all[3] = { full, hi, lo }; int past = 0;
+    for (int i = 0; i < 3; i++) { if (all[i] == u || (*u && !strcmp(all[i], u))) { past = 1; continue; } if (past && *all[i]) cJSON_AddItemToArray(dn, cJSON_CreateString(all[i])); } }
   cJSON_AddStringToObject(o, "name", js_str(v, "name", "Trailer")); cJSON_AddNumberToObject(o, "runtime", js_num(v, "run", 0)); cJSON_AddStringToObject(o, "source", "imdb");
   cJSON_AddItemToObject(o, "subs", subs ? cJSON_Duplicate(subs, 1) : cJSON_CreateArray());
   reply(j, o);
@@ -380,6 +390,7 @@ static void on_yt_url(Job *j, const char *url, const char *err) {
   if (!*url) { reply(j, err_obj(*err ? err : "unavailable")); return; }
   const cJSON *c = memo_get(ytCache, j->yt[0], 1e9), *subs = js_arr(c, "subs");
   cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "url", url); cJSON_AddStringToObject(o, "name", "Trailer"); cJSON_AddStringToObject(o, "source", "youtube");
+  { const char *lo = js_str(c, "lo", ""); if (j->lq && *lo && strcmp(lo, url)) { cJSON *dn = cJSON_AddArrayToObject(o, "down"); cJSON_AddItemToArray(dn, cJSON_CreateString(lo)); } } /* (the background trailer: the low one when the high one fails) */
   cJSON_AddItemToObject(o, "subs", subs ? cJSON_Duplicate(subs, 1) : cJSON_CreateArray());
   reply(j, o);
 }

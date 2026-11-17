@@ -34,6 +34,7 @@ void app_back(void);
 void app_key(int k, int down, int repeat);
 void app_text(const char *utf8);
 void app_tick(float dt);
+void app_tick_behind(float dt);       /* behind another app (core/away.c): only what must go on, nothing drawn */
 void app_draw(void);
 void app_draw_under(void);            /* the page under the sheets (for their glass): backdrop, screen, top bar */
 float app_screen_alpha(void);         /* the entrance fade of the current screen (0..1) */
@@ -47,6 +48,8 @@ void app_play_from_start(const Item *it);
 void app_open_external(const char *url, const char *name);  /* an addon's outside link: a stremio:///detail page here, else a code for the phone */
 void app_refresh_boards(void);        /* the library changed: the boards rebuild */
 extern int app_splash_done;
+extern int app_launch_cast;   /* opened by a phone to play something: the background trailer waits for its play */
+void app_launch_params(const char *json); /* the launch (or relaunch) parameters as JSON: {"cast":1} holds the background trailer for the phone's play */
 void app_reveal_start(void);                        /* first launch: the page rises in once the splash goes */
 float app_reveal_x(float delay, float dur);         /* 0..1 of that entrance for a block with this delay (1 when none runs) */
 int  app_revealing(void);
@@ -60,6 +63,8 @@ unsigned app_bg_gen(void);
 int app_bg_pending(void);   /* a new backdrop is asked for and on its way */
 void app_glow_kick(void);              /* the phone sent words: Search's glows surge and spring back */             /* bumps each time a new backdrop takes over */
 float app_idle(void);
+void app_activity(void); /* a phone's command counts as activity, as a key does */
+void  app_pace_again(void);                  /* the screen's frame rate measured again at the next quiet moment */
 float app_trailer_idle(void);           /* seconds since a key other than OK (the background trailer's own idleness) */                 /* seconds since the last key */
 int  app_rtl(void);
 void app_occluder(float x, float y, float w, float h); /* an opaque panel holding still: the backdrop is not drawn under it (next frame) */
@@ -76,8 +81,12 @@ float nudge_y(const Nudge *n);
 
 /* hold OK: 0..1 of the way to the card menu (the line that runs around the card) */
 float app_hold_progress(void);
+void  app_card_shake(void);      /* a held card that has no menu (a collection): a short soft shake of the focused card, nothing else */
+float app_card_shake_dx(void);  /* its offset now (0 when still), for the screens to add to the focused card */
 int  app_key_held(void);               /* the key being handled repeats a held one (screens glide instead of popping) */
 int  app_ok_down(void);                /* OK is held down now (a sheet's own hold reads it) */
+int   app_clock_12(void); /* Settings › Appearance › Clock: 12-hour (3:30 PM) rather than 24-hour (15:30) */
+void  app_fmt_hm(int h, int m, char *out, size_t cap); /* a time of day as that setting says */
 void  app_clock_draw(float right, float y, float alpha); /* the pages' clock, its right edge at x (the player's too) */
 void  app_clock_top(void); /* the bar's clock over the start screen and the guide (main, last) */
 float app_hold_k(double since);        /* 0..1 of a hold begun then, on the same clock as the card menu's line */

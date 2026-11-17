@@ -101,6 +101,10 @@ static void send_json(Client *c, cJSON *j) { char *s = cJSON_PrintUnformatted(j)
 static void send_t(Client *c, const char *t) { cJSON *j = cJSON_CreateObject(); cJSON_AddStringToObject(j, "t", t); send_json(c, j); }
 static void send_err(Client *c, const char *msg) { cJSON *j = cJSON_CreateObject(); cJSON_AddStringToObject(j, "t", "error"); cJSON_AddStringToObject(j, "msg", msg); send_json(c, j); }
 
+void cast_error(const char *msg, const char *code, const char *id, int back) {
+  for (int i = 0; i < MAXC; i++) if (C[i].fd >= 0 && C[i].auth) { cJSON *j = cJSON_CreateObject(); cJSON_AddStringToObject(j, "t", "error"); cJSON_AddStringToObject(j, "msg", msg ? msg : "");
+    if (code && *code) cJSON_AddStringToObject(j, "code", code); if (id && *id) cJSON_AddStringToObject(j, "id", id); cJSON_AddNumberToObject(j, "back", back ? 1 : 0); send_json(&C[i], j); C[i].lastS = -1; } /* (the state right after it, at once) */
+}
 int cast_phones(void) { int n = 0; for (int i = 0; i < MAXC; i++) if (C[i].fd >= 0 && C[i].auth) n++; return n; }
 static void pairing_end(void) { if (codeFor >= 0) { codeFor = -1; code[0] = 0; if (H.pairing) H.pairing(""); } }
 static void drop(Client *c) {
@@ -124,7 +128,9 @@ static void on_msg(Client *c, const char *s) {
       cJSON *r = cJSON_CreateObject(); cJSON_AddStringToObject(r, "t", "paired"); cJSON_AddStringToObject(r, "token", tok); send_json(c, r); fprintf(stderr, "[cast] paired\n"); }
     else { if (++wrong >= 3) { lockUntil = now + 60; pairing_end(); wrong = 0; send_err(c, "locked"); } else send_err(c, "wrong code"); }
   } else if (!strcmp(t, "hello")) {
-    if (token_ok(js(j, "token"))) { c->auth = 1; c->lastS = -1; cJSON *r = cJSON_CreateObject(); cJSON_AddStringToObject(r, "t", "ready"); cJSON_AddStringToObject(r, "name", H.name ? H.name() : "TV"); send_json(c, r);
+    if (token_ok(js(j, "token"))) { c->auth = 1; c->lastS = -1; cJSON *r = cJSON_CreateObject(); cJSON_AddStringToObject(r, "t", "ready"); cJSON_AddStringToObject(r, "name", H.name ? H.name() : "TV");
+      if (H.playbest) { cJSON *cp = cJSON_AddArrayToObject(r, "caps"); cJSON_AddItemToArray(cp, cJSON_CreateString("best")); if (H.previews) cJSON_AddItemToArray(cp, cJSON_CreateString("previews")); } /* (the phone sends playbest only to a TV that says so) */
+      send_json(c, r);
       fprintf(stderr, "[cast] phone connected\n"); if (H.connected) H.connected(cast_phones()); }
     else { send_t(c, "denied"); drop(c); }
   } else if (c->auth) {
@@ -132,17 +138,24 @@ static void on_msg(Client *c, const char *s) {
       CastSub subs[16]; int ns = 0; const cJSON *sl = cJSON_GetObjectItemCaseSensitive(j, "subs"), *e;
       cJSON_ArrayForEach(e, sl) { if (ns < 16 && *js(e, "url")) { subs[ns].url = js(e, "url"); subs[ns].lang = js(e, "lang"); ns++; } }
       const cJSON *m = cJSON_GetObjectItemCaseSensitive(j, "meta");
-      CastPlay p = { js(j, "url"), js(j, "title"), js(m, "type"), js(m, "id"), js(m, "poster"), js(m, "background"), js(m, "logo"), jn(j, "pos"), (int)jn(m, "season"), (int)jn(m, "episode"), subs, ns };
-      if (*p.url && H.play) { fprintf(stderr, "[cast] play \"%s\" at %.0f s, %d subtitles\n", p.title, p.pos, ns); H.play(&p); }
+      CastPlay p = { js(j, "url"), js(j, "title"), js(m, "type"), js(m, "id"), "", js(m, "poster"), js(m, "background"), js(m, "logo"), jn(j, "pos"), (int)jn(m, "season"), (int)jn(m, "episode"), subs, ns };
+      int chan = !strcmp(p.type, "tv") || !strcmp(p.type, "channel"); /* (a channel: no stream needed, the TV finds its own) */
+      if ((*p.url || (chan && *p.id)) && H.play) { fprintf(stderr, "[cast] play \"%s\" at %.0f s, %d subtitles\n", p.title, p.pos, ns); H.play(&p); }
       else send_err(c, "no url");
+    } else if (!strcmp(t, "playbest")) { /* the phone names the title; this TV picks its stream (its own best-stream rules: what this TV plays best) */
+      const cJSON *m = cJSON_GetObjectItemCaseSensitive(j, "meta");
+      CastPlay p = { "", js(j, "title"), js(m, "type"), js(m, "id"), js(m, "vid"), js(m, "poster"), js(m, "background"), js(m, "logo"), jn(j, "pos"), (int)jn(m, "season"), (int)jn(m, "episode"), NULL, 0 };
+      if (*p.id && H.playbest) { fprintf(stderr, "[cast] playbest \"%s\" (%s) at %.0f s\n", p.title, *p.vid ? p.vid : p.id, p.pos); H.playbest(&p); }
+      else send_err(c, "no id");
     } else if (!strcmp(t, "pause")) H.cmd(1, 0);
     else if (!strcmp(t, "resume")) H.cmd(2, 0);
     else if (!strcmp(t, "seek")) H.cmd(3, jn(j, "pos"));
     else if (!strcmp(t, "stop")) H.cmd(4, 0);
+    else if (!strcmp(t, "playnow")) H.cmd(5, 0); /* (the seek previews' wait: the film starts now, as OK on the TV) */
     else if (!strcmp(t, "account")) { const cJSON *u = cJSON_GetObjectItemCaseSensitive(j, "user"); char *us = u ? cJSON_PrintUnformatted(u) : NULL;
       if (H.account) H.account(js(j, "authKey"), us ? us : ""); free(us); }
     else if (!strcmp(t, "settings")) { static const char *K[] = { "autoBest", "subsLang", "defaultAudioTrack", "enableDefaultAudioTrack", "subtitleSize", "subsColor", "subsBgStyle",
-        "subsOutlineColor", "subsAssStyle", "enableNextVideo", "bingeWatch", "seekStep", "aspectMode", "bgTrailer", "bgTrailerVol", "uiSound", "uiSoundVol", "accent", "ssDelay", "uiLang" };
+        "subsOutlineColor", "subsAssStyle", "subsPosPct", "enableNextVideo", "bingeWatch", "seekStep", "aspectMode", "bgTrailer", "bgTrailerVol", "uiSound", "uiSoundVol", "accent", "ssDelay", "uiLang", "subsFont", "subsFontAr", "subsBright", "seekPreviews" };
       /* (every setting the phone and the TV share, the language too; never one of this TV's own: its USB drive, Dolby Vision conversion) */
       const cJSON *pr = cJSON_GetObjectItemCaseSensitive(j, "prefs");
       for (int i = 0; i < (int)(sizeof K / sizeof *K); i++) { const cJSON *v = cJSON_GetObjectItemCaseSensitive(pr, K[i]); if (cJSON_IsString(v) && strlen(v->valuestring) < 64 && H.pref) H.pref(K[i], v->valuestring); } }
@@ -150,6 +163,7 @@ static void on_msg(Client *c, const char *s) {
     else if (!strcmp(t, "tracks?")) { char *tr = H.tracks ? H.tracks() : NULL; /* asked: the tracks now, or empty lists when nothing plays */
       const char *empty = "{\"t\":\"tracks\",\"subs\":[],\"audio\":[],\"sub\":\"off\",\"aud\":\"\"}"; const char *m = tr ? tr : empty; send_frame(c, 1, m, (int)strlen(m)); c->trHash = tr ? fnv(tr) : 0; free(tr); }
     else if (!strcmp(t, "subdelay")) { if (H.track) { H.track(t, "", (int)jn(j, "ms")); c->trHash = 0; } }
+    else if (!strcmp(t, "subsync")) { if (H.track) { H.track(t, "", 0); c->trHash = 0; } } /* (the subtitles synced to the speech, as the player's Sync; its progress told with the tracks) */
     else if (!strcmp(t, "key")) { static const char *K[] = { "up", "down", "left", "right", "ok", "back", "home", "play", "pause" }; const char *k = js(j, "k");
       for (int i = 0; i < 9; i++) if (!strcmp(k, K[i])) { if (H.key) H.key(CAST_K_UP + i); break; } }
   } /* (anything else before hello: no answer) */
@@ -204,20 +218,41 @@ static void tracks(double now) {
   free(s);
 }
 static void states(double now) {
-  static const char *S[] = { "idle", "loading", "playing", "paused", "ended", "error" }; char title[256]; double pos, du; int s = -1;
+  static const char *S[] = { "idle", "loading", "playing", "paused", "ended", "error", "choosing" }; char title[256]; double pos, du; int s = -1;
+  char ty[16] = "", id[128] = "", vid[160] = ""; /* (SB_ID / SB_VID: a long addon id whole, #81) */ int any = 0; for (int i = 0; i < MAXC; i++) if (C[i].fd >= 0 && C[i].auth) any = 1;
+  if (any && H.ident) { static char lastId[200]; char cur[200]; H.ident(ty, sizeof ty, id, sizeof id, vid, sizeof vid); snprintf(cur, sizeof cur, "%s|%s", id, vid); /* what plays: asked once a pass, only with a phone connected */
+    if (strcmp(cur, lastId)) { snprintf(lastId, sizeof lastId, "%s", cur); for (int k = 0; k < MAXC; k++) C[k].lastS = -1; } } /* (another title or episode: told at once) */
   for (int i = 0; i < MAXC; i++) { Client *c = &C[i]; if (c->fd < 0 || !c->auth) continue;
-    if (s < 0) { s = H.state ? H.state(&pos, &du, title, sizeof title) : CAST_IDLE; if (s < 0 || s > 5) s = 0; }
+    if (s < 0) { s = H.state ? H.state(&pos, &du, title, sizeof title) : CAST_IDLE; if (s < 0 || s > 6) s = 0; }
     if (s == c->lastS && (s == CAST_IDLE || s == CAST_ENDED || s == CAST_ERROR || now - c->lastAt < 1.0)) continue;
     c->lastS = s; c->lastAt = now; cJSON *j = cJSON_CreateObject(); cJSON_AddStringToObject(j, "t", "state"); cJSON_AddStringToObject(j, "s", S[s]);
-    cJSON_AddNumberToObject(j, "pos", (int)(pos * 10) / 10.0); cJSON_AddNumberToObject(j, "dur", (int)du); cJSON_AddStringToObject(j, "title", title); send_json(c, j); }
+    cJSON_AddNumberToObject(j, "pos", (int)(pos * 10) / 10.0); cJSON_AddNumberToObject(j, "dur", (int)du); cJSON_AddStringToObject(j, "title", title);
+    if (id[0]) { cJSON_AddStringToObject(j, "type", ty); cJSON_AddStringToObject(j, "id", id); cJSON_AddStringToObject(j, "vid", vid); } /* (what plays: the phone's remote follows a change made on the TV) */
+    if (id[0] && H.chips) { cJSON *ca = cJSON_AddArrayToObject(j, "chips"); H.chips(ca); } /* (the player's own info line: the remote shows it as the TV does) */
+    if (id[0] && H.sync) { char sst[120] = ""; int sr = H.sync(sst, sizeof sst); cJSON_AddNumberToObject(j, "syncing", sr > 0); cJSON_AddStringToObject(j, "syncSt", sr >= 0 ? sst : ""); } /* (Sync's progress: with the state, never the whole tracks again) */
+    if (id[0] && H.previews) { int pc = 0, tg = 0, eta = 0; if (H.previews(&pc, &tg, &eta)) { cJSON *pv = cJSON_AddObjectToObject(j, "previews"); cJSON_AddNumberToObject(pv, "pct", pc); cJSON_AddNumberToObject(pv, "target", tg); cJSON_AddNumberToObject(pv, "eta", eta); } } /* (the film waits for its seek previews: the phone shows how far, and "playnow" starts it) */
+    if (id[0] && H.p2p) { const char *pl = H.p2p(); if (pl && *pl) cJSON_AddStringToObject(j, "p2p", pl); } /* (a torrent: its peers and speed, as the player's corner) */
+    if (id[0] && H.info) { char inf[96] = ""; H.info(inf, sizeof inf); if (inf[0]) cJSON_AddStringToObject(j, "info", inf); } /* (the stream in a few words, under the remote's title) */
+    send_json(c, j); }
 }
 
+/* discovery's port shareable: a socket a closed app leaves behind (the Mac has kept some) never holds it from the next */
+#ifdef SO_REUSEPORT
+#define REUSEPORT(fd) do { int one_ = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one_, sizeof one_); } while (0)
+#else
+#define REUSEPORT(fd) do { } while (0)
+#endif
 int cast_start(const CastHooks *h) {
   if (on) return 1; H = *h; for (int i = 0; i < MAXC; i++) C[i].fd = -1; ids();
   int one = 1; struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_ANY);
   udp = socket(AF_INET, SOCK_DGRAM, 0);
-  if (udp >= 0) { setsockopt(udp, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); setsockopt(udp, SOL_SOCKET, SO_BROADCAST, &one, sizeof one); a.sin_port = htons(CAST_UDP_PORT);
+  if (udp >= 0) { setsockopt(udp, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); setsockopt(udp, SOL_SOCKET, SO_BROADCAST, &one, sizeof one); REUSEPORT(udp); a.sin_port = htons(CAST_UDP_PORT);
     if (bind(udp, (struct sockaddr *)&a, sizeof a) != 0) { close(udp); udp = -1; } else nonblock(udp); }
+  if (udp < 0) { /* the port held (an app before this one that has not let go of it): this network's own address only, so a phone asking each address still finds it (its broadcast does not reach it then) */
+    struct ifaddrs *ifs = NULL; if (!getifaddrs(&ifs)) { for (struct ifaddrs *f = ifs; f && udp < 0; f = f->ifa_next) { if (!f->ifa_addr || f->ifa_addr->sa_family != AF_INET || (f->ifa_flags & IFF_LOOPBACK)) continue;
+        struct sockaddr_in b = *(struct sockaddr_in *)f->ifa_addr; if (!lan(&b)) continue; b.sin_port = htons(CAST_UDP_PORT); int u = socket(AF_INET, SOCK_DGRAM, 0); if (u < 0) continue;
+        setsockopt(u, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); REUSEPORT(u); if (bind(u, (struct sockaddr *)&b, sizeof b) == 0) { nonblock(u); udp = u; fprintf(stderr, "[cast] discovery: the port is held, this address only\n"); } else close(u); }
+      freeifaddrs(ifs); } }
   lis = socket(AF_INET, SOCK_STREAM, 0);
   if (lis >= 0) { setsockopt(lis, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); a.sin_port = htons(CAST_WS_PORT);
     if (bind(lis, (struct sockaddr *)&a, sizeof a) != 0 || listen(lis, 4) != 0) { close(lis); lis = -1; } else nonblock(lis); }

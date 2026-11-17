@@ -9,8 +9,10 @@
 #include "core/i18n.h"
 #include "core/update.h"
 #include "screens/player.h"
+#include "core/live.h"
 #include "screens/settings.h"
 #include "screens/board.h"
+#include "screens/btrailer.h"
 #include "cJSON.h"
 #include "ui/gfx.h"
 #include "ui/text.h"
@@ -22,16 +24,34 @@
 static char codeNow[8], castTitle[256]; static Tween codeA;
 
 static const char *tv_name(void) { return plat_device_name(); }
+/* a channel a phone started that will not play: the phone told why (its remote leaves "loading"), in this TV's words */
+static void on_live_fail(const char *id, const char *code, int back) { if (!cast_phones()) return; fprintf(stderr, "[cast] channel %s did not play (%s)%s: phones told\n", id, code, back ? ", the one before plays on" : "");
+  cast_error(T("This channel isn't broadcasting right now"), code, id, back); }
 static void on_play(const CastPlay *p) {
+  app_activity();
   snprintf(castTitle, sizeof castTitle, "%s", p->title);
+  if (live_type(p->type) && *p->id) { /* a channel from a phone: started as one picked here (its own stream found, the channel player, Up / Down along its line-up) */
+    Item it; memset(&it, 0, sizeof it); snprintf(it.type, sizeof it.type, "%s", p->type); snprintf(it.id, sizeof it.id, "%s", p->id); snprintf(it.name, sizeof it.name, "%s", p->title); snprintf(it.poster, sizeof it.poster, "%s", p->poster); snprintf(it.logo, sizeof it.logo, "%s", p->logo);
+    char ty[16], pid[96], pv[96]; player_cast_ident(ty, sizeof ty, pid, sizeof pid, pv, sizeof pv); live_start(&it, NULL, 0, player_open() && live_type(ty)); return; } /* (a channel already on: switched in its player, as Up / Down) */
   Stream s; memset(&s, 0, sizeof s); snprintf(s.url, sizeof s.url, "%s", p->url); snprintf(s.name, sizeof s.name, "%s", p->title); snprintf(s.title, sizeof s.title, "%s", p->title);
-  const char *type = *p->type ? p->type : "movie", *id = *p->id ? p->id : "cast"; char vid[96];
+  const char *type = *p->type ? p->type : "movie", *id = *p->id ? p->id : "cast"; char vid[SB_VID];
   if (!strcmp(type, "series") && p->season > 0) snprintf(vid, sizeof vid, "%s:%d:%d", id, p->season, p->episode); else snprintf(vid, sizeof vid, "%s", id);
   const char *urls[16], *langs[16]; for (int i = 0; i < p->nsubs && i < 16; i++) { urls[i] = p->subs[i].url; langs[i] = p->subs[i].lang; }
   player_next_subs(urls, langs, p->nsubs); player_next_art(p->title, p->poster, p->background, p->logo);
   player_play_at(&s, type, id, vid, p->pos); /* pos 0: where it was left, as a play on the TV */
 }
-static void on_cmd(int cmd, double pos) { player_cast(cmd, pos); }
+/* the phone names a title and this TV finds its stream (its own best-stream choice, as with best stream on here): the
+   title's pictures at once, "choosing" told to the phone while it searches, then it plays from pos (0: from the start) */
+static void on_playbest(const CastPlay *p) {
+  app_activity();
+  snprintf(castTitle, sizeof castTitle, "%s", p->title);
+  const char *type = *p->type ? p->type : "movie", *id = p->id; char vid[SB_VID];
+  if (*p->vid) snprintf(vid, sizeof vid, "%s", p->vid); else if (!strcmp(type, "series") && p->season > 0) snprintf(vid, sizeof vid, "%s:%d:%d", id, p->season, p->episode); else snprintf(vid, sizeof vid, "%s", id);
+  player_next_subs(NULL, NULL, 0); player_next_art(p->title, p->poster, p->background, p->logo);
+  player_cast_best(type, id, vid, p->pos);
+}
+static void on_cmd(int cmd, double pos) { static const char *N[] = { "", "pause", "resume", "seek", "stop", "playnow" }; if (cmd > 0 && cmd < 6) fprintf(stderr, "[cast] %s from the phone\n", N[cmd]); app_activity(); player_cast(cmd, pos); } /* (a phone's pause is activity: the screen saver never comes at once over it) */
+static void on_track(const char *k, const char *id, int ms) { app_activity(); player_cast_track(k, id, ms); }
 static int on_state(double *pos, double *dur, char *title, int cap) { int s = player_cast_state(pos, dur, title, cap); if (s && !title[0]) snprintf(title, (size_t)cap, "%s", castTitle); return s; } /* (no title known here: the phone's own) */
 static void on_key(int k) {
   if (k == CAST_K_HOME) { if (player_open()) player_cast(4, 0); else app_go(SCR_HOME, NULL, 1); return; }
@@ -50,14 +70,15 @@ static void on_account(const char *ak, const char *userJson) {
   toast(T("Signing in with your phone\xe2\x80\x99s account"), 2500, NULL);
   extern void login_finish(const char *); if (SCR != SCR_LOGIN) app_go(SCR_LOGIN, NULL, 1); login_finish(ak); /* the sign-in's own loading, then Home */
 }
-static void on_pref(const char *k, const char *v) { if (settings_apply_pref(k, v)) toast(T("Settings updated from your phone"), 2500, "castprefs"); } /* (one notice for a phone's whole batch) */
+static void on_pref(const char *k, const char *v) { if (settings_apply_pref(k, v) && !player_open()) toast(T("Settings updated from your phone"), 2000, NULL); } /* (one short notice, no key cap before it; none while a title plays: the change shows itself, the subtitles moving or changing) */
 static void on_pairing(const char *code) { snprintf(codeNow, sizeof codeNow, "%s", code); }
-static void on_connected(int n) { static int was; if (n > was) toast(T("Phone connected"), 2500, NULL); else if (n < was && !n) toast(T("Phone disconnected"), 2500, NULL); was = n; }
+static void on_connected(int n) { static int was; if (n > was && !player_open()) btr_cast_hold(20); /* a phone just connected: its play comes next, no trailer flashes before it */ if (n > was) toast(T("Phone connected"), 2500, NULL); else if (n < was && !n) toast(T("Phone disconnected"), 2500, NULL); was = n; }
 
 void castlink_start(void) {
   static CastHooks h; const char *dn = plat_device_name();
-  h.plat = strstr(dn, "webOS") ? "webos" : strstr(dn, "Android") ? "androidtv" : "mac"; h.ver = update_current(); h.name = tv_name;
-  h.get = store_get; h.set = store_set; h.play = on_play; h.cmd = on_cmd; h.key = on_key; h.state = on_state; h.pairing = on_pairing; h.connected = on_connected; h.account = on_account; h.pref = on_pref; h.tracks = player_cast_tracks; h.track = player_cast_track;
+  h.plat = strstr(dn, "webOS") ? "webos" : strstr(dn, "Android") ? "androidtv" : strstr(dn, "Tizen") ? "tizen" : "mac"; h.ver = update_current(); h.name = tv_name;
+  h.get = store_get; h.set = store_set; h.play = on_play; h.playbest = on_playbest; h.cmd = on_cmd; h.key = on_key; h.state = on_state; h.ident = player_cast_ident; h.info = player_cast_info; h.chips = player_cast_chips; h.p2p = player_p2p_line; h.sync = player_cast_sync; h.pairing = on_pairing; h.connected = on_connected; h.account = on_account; h.pref = on_pref; h.tracks = player_cast_tracks; h.track = on_track; h.previews = player_cast_previews;
+  live_fail_hook = on_live_fail;
   cast_start(&h);
 }
 void castlink_tick(float dt) { cast_tick(); tween_to(&codeA, codeNow[0] ? 1 : 0, 0.3f, EASE_CSS_EASE); tween_tick(&codeA, dt); }

@@ -30,6 +30,7 @@
 #include <libavutil/channel_layout.h>
 #include <libavutil/avstring.h>
 #include <libavutil/dovi_meta.h>
+#include <libavutil/pixdesc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -481,3 +482,53 @@ static int sbd_api_v(void) { return SBD_API_VERSION; }
 static const char *sbd_version(void) { static char v[64]; snprintf(v, sizeof v, "FFmpeg %s", av_version_info()); return v; }
 static const sbd_api API_ = { sbd_api_v, sbd_version, sbd_open, sbd_info_of, sbd_seg_start, sbd_seg_dur, sbd_run, sbd_close };
 API const sbd_api *sbd_get(void) { return &API_; }
+
+#ifdef SBD_PREVIEW
+/* ---- seek previews: one keyframe in, one small RGB picture out (see sbdts.h) ---- */
+typedef struct { AVCodecContext *c; AVPacket *pk; AVFrame *f; } PrevDec;
+static int prev_api(void) { return SBD_PREV_VERSION; }
+static void prev_close(void *h) { PrevDec *d = h; if (!d) return; avcodec_free_context(&d->c); av_packet_free(&d->pk); av_frame_free(&d->f); free(d); }
+static void *prev_open(const char *codecId, const unsigned char *extra, int extraLen) {
+  enum AVCodecID id = !strcmp(codecId, "V_MPEG4/ISO/AVC") ? AV_CODEC_ID_H264 : !strcmp(codecId, "V_MPEGH/ISO/HEVC") ? AV_CODEC_ID_HEVC : AV_CODEC_ID_NONE;
+  if (id == AV_CODEC_ID_NONE) id = !strcmp(codecId, "h264") ? AV_CODEC_ID_H264 : !strcmp(codecId, "hevc") ? AV_CODEC_ID_HEVC : AV_CODEC_ID_NONE; /* (a platform's own names: start-code frames, another player's extractor) */
+  const AVCodec *cd = id != AV_CODEC_ID_NONE ? avcodec_find_decoder(id) : NULL; if (!cd) return NULL;
+  PrevDec *d = calloc(1, sizeof *d); if (!d) return NULL;
+  d->c = avcodec_alloc_context3(cd); d->pk = av_packet_alloc(); d->f = av_frame_alloc(); if (!d->c || !d->pk || !d->f) { prev_close(d); return NULL; }
+  if (extra && extraLen > 0) { /* avcC / hvcC (frames length-prefixed) or start-code parameter sets (frames with start codes): the decoder tells them apart; none: the parameter sets come inside the frame */
+    d->c->extradata = av_mallocz(extraLen + AV_INPUT_BUFFER_PADDING_SIZE); if (!d->c->extradata) { prev_close(d); return NULL; }
+    memcpy(d->c->extradata, extra, extraLen); d->c->extradata_size = extraLen; }
+  d->c->thread_count = 1; d->c->skip_loop_filter = AVDISCARD_ALL; d->c->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT; d->c->flags2 |= AV_CODEC_FLAG2_SHOW_ALL; /* (a keyframe that is not an IDR: open GOP, CRA) */
+  if (avcodec_open2(d->c, cd, NULL) < 0) { prev_close(d); return NULL; }
+  return d;
+}
+/* the picture shrunk straight from its planes: each output pixel the mean of its box (integer sums), BT.709 limited range to RGB on the small picture only */
+static int prev_frame(void *h, const unsigned char *data, int len, int w, int hh, unsigned char *rgb, int *srcW, int *srcH, float *dar, int *dark) {
+  PrevDec *d = h; if (!d || !data || len <= 0 || w <= 0 || hh <= 0) return -1;
+  if (av_new_packet(d->pk, len) < 0) return -1; memcpy(d->pk->data, data, len); d->pk->flags |= AV_PKT_FLAG_KEY;
+  int r = avcodec_send_packet(d->c, d->pk); av_packet_unref(d->pk); if (r < 0 && r != AVERROR(EAGAIN)) { avcodec_flush_buffers(d->c); return -1; }
+  avcodec_send_packet(d->c, NULL); /* (drained: a decoder holds its frames for reordering) */
+  int got = 0; while (!got) { r = avcodec_receive_frame(d->c, d->f); if (r < 0) break; got = 1; }
+  if (!got) { avcodec_flush_buffers(d->c); return -1; }
+  AVFrame *f = d->f; const AVPixFmtDescriptor *ds = av_pix_fmt_desc_get(f->format); int ok = ds && !(ds->flags & AV_PIX_FMT_FLAG_RGB) && ds->nb_components >= 3 && f->width > 0 && f->height > 0;
+  int deep = ok && ds->comp[0].depth > 8, sh = deep ? ds->comp[0].depth - 8 : 0, cw = ok ? ds->log2_chroma_w : 0, ch = ok ? ds->log2_chroma_h : 0;
+  long long sumY = 0;
+  if (ok) for (int oy = 0; oy < hh; oy++) { int y0 = (int)((long long)oy * f->height / hh), y1 = (int)((long long)(oy + 1) * f->height / hh); if (y1 <= y0) y1 = y0 + 1;
+    for (int ox = 0; ox < w; ox++) { int x0 = (int)((long long)ox * f->width / w), x1 = (int)((long long)(ox + 1) * f->width / w); if (x1 <= x0) x1 = x0 + 1;
+      long sy = 0, su = 0, sv = 0; int ny = 0, nc = 0;
+      for (int y = y0; y < y1; y += 2) { const unsigned char *ry = f->data[0] + (long)y * f->linesize[0]; /* (every other line and column: the box's mean, a quarter of the reads) */
+        for (int x = x0; x < x1; x += 2) { sy += deep ? (((const uint16_t *)ry)[x] >> sh) : ry[x]; ny++; } }
+      for (int y = y0 >> ch; y < ((y1 + (1 << ch) - 1) >> ch); y += 2) { const unsigned char *ru = f->data[1] + (long)y * f->linesize[1], *rv = f->data[2] + (long)y * f->linesize[2];
+        for (int x = x0 >> cw; x < ((x1 + (1 << cw) - 1) >> cw); x += 2) { su += deep ? (((const uint16_t *)ru)[x] >> sh) : ru[x]; sv += deep ? (((const uint16_t *)rv)[x] >> sh) : rv[x]; nc++; } }
+      int Y = ny ? (int)(sy / ny) : 16, U = nc ? (int)(su / nc) : 128, V = nc ? (int)(sv / nc) : 128; sumY += Y;
+      int c = Y - 16, dd = U - 128, e = V - 128; /* BT.709 limited range, fixed point (x256) */
+      int R = (298 * c + 459 * e + 128) >> 8, G = (298 * c - 55 * dd - 136 * e + 128) >> 8, B = (298 * c + 541 * dd + 128) >> 8;
+      unsigned char *o = rgb + ((long)oy * w + ox) * 3; o[0] = R < 0 ? 0 : R > 255 ? 255 : R; o[1] = G < 0 ? 0 : G > 255 ? 255 : G; o[2] = B < 0 ? 0 : B > 255 ? 255 : B; } }
+  if (srcW) *srcW = f->width; if (srcH) *srcH = f->height;
+  if (dar) { AVRational sar = f->sample_aspect_ratio; *dar = f->height ? (float)f->width / f->height * (sar.num > 0 && sar.den > 0 ? (float)sar.num / sar.den : 1.0f) : 0; }
+  if (dark) *dark = ok && sumY / ((long long)w * hh) < 24;
+  av_frame_unref(f); avcodec_flush_buffers(d->c);
+  return ok ? 0 : -1;
+}
+static const sbd_prev_api PREV_ = { prev_api, prev_open, prev_frame, prev_close };
+API const sbd_prev_api *sbd_prev_get(void) { return &PREV_; }
+#endif

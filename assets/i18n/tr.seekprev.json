@@ -1,0 +1,15 @@
+{
+ "Previews on the seek bar": "İlerleme çubuğunda önizlemeler",
+ "Pictures from the film over the bar as you move through it. Off: none are made": "Çubukta ilerlerken filmden görüntüler. Kapalı: hiç oluşturulmaz",
+ "Previews for torrents": "Torrentler için önizlemeler",
+ "Slower than debrid, up to 500 MB extra per stream.": "Debrid'den daha yavaş, akış başına 500 MB'a kadar ek.",
+ "Previews {n}%": "Önizlemeler %{n}",
+ "Previews ready": "Önizlemeler hazır",
+ "Uses more data, on mobile data too.": "Daha fazla veri kullanır, mobil veride de.",
+ "Getting the seek bar’s previews ready… {n}%": "Arama çubuğu önizlemeleri hazırlanıyor… %{n}",
+ "Play now": "Şimdi oynat",
+ "Load previews before playing": "Oynatmadan önce önizlemeleri yükle",
+ "about {n} s left": "yaklaşık {n} sn kaldı",
+ "about {n} min left": "yaklaşık {n} dk kaldı",
+ "The film starts once this much of it has its previews; OK starts it at once": "Film, bu kadarının önizlemesi hazır olunca başlar; OK hemen başlatır"
+}

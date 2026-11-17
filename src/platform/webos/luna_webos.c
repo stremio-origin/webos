@@ -82,13 +82,18 @@ static bool h_drop(LSHandle *sh, LSMessage *msg, void *u) { (void)sh; const char
 /* ---- the own handle ---- */
 static void err_reset(LSErr *e) { if (lsErrFree && e->message) lsErrFree(e); memset(e, 0, sizeof *e); if (lsErrInit) lsErrInit(e); }
 #define SYM(lib, var, name) do { *(void **)(&var) = dlsym(lib, name); if (!var) { fprintf(stderr, "[luna] no %s\n", name); return 0; } } while (0)
-static int setup(void) {
-  if (bus) return 1; if (broken) return 0; broken = 1; /* one try per run */
+static int syms(void) { /* the libraries, once */
+  static int st; if (st) return st > 0; st = -1;
   void *L = dlopen("libluna-service2.so.3", RTLD_NOW), *G = dlopen("libglib-2.0.so.0", RTLD_NOW);
   if (!L || !G) { fprintf(stderr, "[luna] luna/glib not found\n"); return 0; }
   SYM(L, lsRegister, "LSRegister"); SYM(L, lsAttach, "LSGmainAttach"); SYM(L, lsCallOne, "LSCallOneReply"); SYM(L, lsPayload, "LSMessageGetPayload");
   *(void **)(&lsCallCancel) = dlsym(L, "LSCallCancel"); *(void **)(&lsCall) = dlsym(L, "LSCall"); *(void **)(&lsErrInit) = dlsym(L, "LSErrorInit"); *(void **)(&lsErrFree) = dlsym(L, "LSErrorFree");
   SYM(G, gCtxNew, "g_main_context_new"); SYM(G, gLoopNew, "g_main_loop_new"); SYM(G, gCtxIter, "g_main_context_iteration");
+  st = 1; return 1;
+}
+static int setup(void) {
+  if (bus) return 1; if (broken) return 0; broken = 1; /* one try per run */
+  if (!syms()) return 0;
   /* the window's own registration (SDL) holds the app id: anonymous first (a rooted TV lets it call anything),
      then a media-client name, which the developer-mode role allows (for com.webos.media only) */
   const char *app = getenv("APPID"); if (!app) app = "tv.stremioorigin.app"; const char *shortId = strrchr(app, '.') ? strrchr(app, '.') + 1 : app;
@@ -149,7 +154,7 @@ int plat_luna_send(const char *uri, const char *payload) {
    race the app. The own handle's replies are dispatched when its context runs there; the helper's arrive on its
    thread and wait in a queue */
 #define SUBS 4
-static struct { unsigned long tok; PlatLunaCb cb; void *ud; int on, viaHelper; unsigned gen; } subs[SUBS];
+static struct { unsigned long tok; PlatLunaCb cb; void *ud; int on, viaHelper, viaApp; unsigned gen; } subs[SUBS];
 typedef struct { HCtx h; int slot; unsigned gen; } HSub; /* h first: the helper hands its address back */
 static HSub hsubs[SUBS];
 typedef struct QMsg { int slot; unsigned gen; char *p; struct QMsg *next; } QMsg;
@@ -166,7 +171,7 @@ static bool h_sub(LSHandle *h, LSMessage *m, void *u) {
 }
 unsigned long plat_luna_subscribe(const char *uri, const char *payload, PlatLunaCb cb, void *ud) {
   int i = 0; while (i < SUBS && subs[i].on) i++; if (i == SUBS) return 0;
-  subs[i].cb = cb; subs[i].ud = ud; subs[i].gen++;
+  subs[i].cb = cb; subs[i].ud = ud; subs[i].gen++; subs[i].viaApp = 0;
   if (helpers()) {
     pthread_mutex_lock(&qMu); memset(&hsubs[i].h, 0, sizeof hsubs[i].h); hsubs[i].h.cb = h_sub; hsubs[i].h.multiple = 1; hsubs[i].h.pub = 1; hsubs[i].slot = i; hsubs[i].gen = subs[i].gen; pthread_mutex_unlock(&qMu);
     if (!hCall(uri, payload, &hsubs[i].h)) { subs[i].on = 1; subs[i].viaHelper = 1; subs[i].tok = nextTok++; return subs[i].tok; }
@@ -178,14 +183,51 @@ unsigned long plat_luna_subscribe(const char *uri, const char *payload, PlatLuna
   if (!lsCall(bus, uri, payload, on_sub, (void *)(uintptr_t)i, &tok, &e) || !tok) { fprintf(stderr, "[luna] %s failed: %s\n", uri, e.message ? e.message : "?"); err_reset(&e); subs[i].on = 0; pthread_mutex_unlock(&callMu); return 0; }
   err_reset(&e); subs[i].tok = tok; pthread_mutex_unlock(&callMu); return tok;
 }
+
+/* ---- the screen saver's handle ----
+   The power service takes the screen-saver request only from a name its role lets call it, and the helper library
+   acknowledges that subscription but never passes the requests on: a handle registered under the app id, made the
+   first time it is needed, on a context of its own, and used for that request and its answer only (every call
+   above keeps its own handle and order). Where the app id is refused, both go the way they always went. */
+static LSHandle *appBus; static void *appCtx; static int appTried;
+static int app_bus(void) { /* under callMu */
+  if (appTried) return appBus != NULL; appTried = 1;
+  if (!syms() || !lsCall) return 0;
+  const char *app = getenv("APPID"); if (!app) app = "tv.stremioorigin.app";
+  LSErr e; memset(&e, 0, sizeof e); err_reset(&e); LSHandle *h = NULL;
+  if (!lsRegister(app, &h, &e) || !h) { fprintf(stderr, "[luna] screen saver handle: %s refused (%d %s), the usual way instead\n", app, e.error_code, e.message ? e.message : "?"); err_reset(&e); return 0; }
+  void *c = gCtxNew(), *lp = gLoopNew(c, 0); err_reset(&e);
+  if (!lsAttach(h, lp, &e)) { fprintf(stderr, "[luna] screen saver handle: attach failed: %s\n", e.message ? e.message : "?"); err_reset(&e); return 0; }
+  err_reset(&e); appBus = h; appCtx = c; fprintf(stderr, "[luna] screen saver handle registered as %s\n", app); return 1;
+}
+unsigned long plat_luna_subscribe_app(const char *uri, const char *payload, PlatLunaCb cb, void *ud) {
+  pthread_mutex_lock(&callMu); int own = app_bus(); pthread_mutex_unlock(&callMu);
+  if (!own) return plat_luna_subscribe(uri, payload, cb, ud);
+  int i = 0; while (i < SUBS && subs[i].on) i++; if (i == SUBS) return 0;
+  subs[i].cb = cb; subs[i].ud = ud; subs[i].gen++;
+  pthread_mutex_lock(&callMu);
+  LSErr e; memset(&e, 0, sizeof e); if (lsErrInit) lsErrInit(&e); unsigned long tok = 0;
+  subs[i].on = 1; subs[i].viaHelper = 0; subs[i].viaApp = 1;
+  if (!lsCall(appBus, uri, payload, on_sub, (void *)(uintptr_t)i, &tok, &e) || !tok) { fprintf(stderr, "[luna] %s failed: %s\n", uri, e.message ? e.message : "?"); err_reset(&e); subs[i].on = 0; pthread_mutex_unlock(&callMu); return 0; }
+  err_reset(&e); subs[i].tok = tok; pthread_mutex_unlock(&callMu); return tok;
+}
+int plat_luna_send_app(const char *uri, const char *payload) {
+  pthread_mutex_lock(&callMu); int own = app_bus(); pthread_mutex_unlock(&callMu);
+  if (!own) return plat_luna_send(uri, payload);
+  pthread_mutex_lock(&callMu);
+  LSErr e; memset(&e, 0, sizeof e); if (lsErrInit) lsErrInit(&e); unsigned long tok = 0;
+  int ok = lsCallOne(appBus, uri, payload, on_drop, NULL, &tok, &e); if (!ok) fprintf(stderr, "[luna] %s failed: %s\n", uri, e.message ? e.message : "?"); err_reset(&e);
+  pthread_mutex_unlock(&callMu); return ok;
+}
 void plat_luna_cancel(unsigned long handle) {
   for (int i = 0; i < SUBS; i++) if (subs[i].on && subs[i].tok == handle) { subs[i].on = 0;
     if (subs[i].viaHelper) { if (hUnreg) hUnreg(&hsubs[i].h); }
-    else if (lsCallCancel) { LSErr e; memset(&e, 0, sizeof e); if (lsErrInit) lsErrInit(&e); lsCallCancel(bus, handle, &e); err_reset(&e); } }
+    else if (lsCallCancel) { LSErr e; memset(&e, 0, sizeof e); if (lsErrInit) lsErrInit(&e); lsCallCancel(subs[i].viaApp ? appBus : bus, handle, &e); err_reset(&e); } }
 }
 void plat_luna_pump(void) {
   pthread_mutex_lock(&qMu); QMsg *q = qHead; qHead = qTail = NULL; pthread_mutex_unlock(&qMu);
   { while (q) { QMsg *n = q->next; if (subs[q->slot].on && subs[q->slot].viaHelper && subs[q->slot].gen == q->gen) subs[q->slot].cb(q->p, subs[q->slot].ud); free(q->p); free(q); q = n; } }
-  int any = 0; for (int i = 0; i < SUBS; i++) any |= subs[i].on && !subs[i].viaHelper; if (!any || !bus) return;
+  if (appCtx) for (int n = 0; n < 8 && gCtxIter(appCtx, 0); n++) {} /* (its answers' replies too, after the request is gone) */
+  int any = 0; for (int i = 0; i < SUBS; i++) any |= subs[i].on && !subs[i].viaHelper && !subs[i].viaApp; if (!any || !bus) return;
   for (int n = 0; n < 8 && gCtxIter(ctx, 0); n++) {}
 }

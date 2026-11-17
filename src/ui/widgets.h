@@ -43,6 +43,8 @@ void ph_text(float x, float y, float w, int n, int px, float lineH, int align); 
 void ph_surface(float x, float y, float w, float h, float r);         /* the surface alone, still: nothing is coming */
 /* the picture (its corners baked in) over the waiting look, which stays until the picture has faded in; returns 1 when drawn */
 int  ph_picture(GLuint tex, float x, float y, float w, float h, float r, uint32_t tint);
+void card_standin(const Item *it, float x, float y, float w, float h, float r, int wide, float foot); /* a title with no art to show: its backdrop (wide: its poster) or a colour of its name, the title over it (foot: room kept clear under it, for a tag) */
+void card_draw_round(const Item *it, float x, float y, float d); /* a live channel's round badge (All channels: the one marked LIVE) */
 int  ph_hold(void);   /* development (SB_PH_HOLD=1): pictures are held back, every placeholder stays */
 
 /* the floating focus copy over a card: lifted 6px, 1.06 from its top edge, a 5px white ring, popping up on each move */
@@ -57,7 +59,8 @@ void focus_tick(FocusPop *f, float dt);
 /* whether a move should restart its ring's landing pop: not for held keys or quick successive presses (the pop
    starts dim and large: restarted on every step it hid the ring); *last = when the previous move came */
 int  focus_pops(double *last);
-float key_hint(float x, float y, int key, const char *label, uint32_t col, int alignRight); /* a remote key (K_OK, K_BACK, K_UP / K_DOWN, K_LEFT / K_RIGHT, K_RED, K_GREEN) as on the remote, then its words; y the middle */
+float key_hint(float x, float y, int key, const char *label, uint32_t col, int alignRight); /* a remote key (K_OK, K_BACK, K_UP / K_DOWN, K_LEFT / K_RIGHT, K_RED, K_GREEN, K_YELLOW, K_BLUE) as on the remote, then its words; y the middle */
+float key_hint_s(float x, float y, int key, const char *label, uint32_t col, int alignRight, float s); /* the same, every length times s (a screen drawn small) */
 /* focus: the card or face with the focus grows a little, lifts off with a soft shadow, and a faint glare of glass
    crosses it once (with a click, if Interface sounds is on); the one it left settles back. One state per key (any
    stable number for the card: lift_key(owner, index)); a card no one draws for two frames is forgotten.
@@ -85,4 +88,5 @@ typedef struct { Tween x, y, w, h, a; int shown; float dur; } Pill;
 void pill_to(Pill *p, float x, float y, float w, float h);
 void pill_hide(Pill *p);
 void pill_tick(Pill *p, float dt);
+float live_mark(float x, float y, float sc, int rtl, float *k3, int st); /* a channel's state: LIVE, faint (not known) or Off air; its top row's width */
 #endif

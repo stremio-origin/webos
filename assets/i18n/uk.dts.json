@@ -1,0 +1,7 @@
+{"Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV":"Авто визначає, що відтворює цей телевізор. Якщо не впевнені, оберіть «Конвертувати». «Вимк» залишає це телевізору","Convert":"Конвертувати","DTS sound":"Звук DTS","Default audio language, DTS, interface sounds":"Мова аудіо за замовчуванням, DTS, звуки інтерфейсу",
+"Converting the sound for this TV…": "Конвертування звуку для цього телевізора…",
+"Dolby Digital 5.1 (converted)": "Dolby Digital 5.1 (конвертовано)",
+"Dolby Digital 2.0 (converted)": "Dolby Digital 2.0 (конвертовано)",
+"Playing the {t} track: this TV can’t play DTS": "Відтворення доріжки {t}: цей телевізор не відтворює DTS",
+"Playing the {t} track: this TV can’t play TrueHD": "Відтворення доріжки {t}: цей телевізор не відтворює TrueHD"
+}

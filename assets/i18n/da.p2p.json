@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Få peers ({n}) · {r}","Getting the file list…":"Henter fillisten…","Low storage: small buffer":"Lidt lagerplads: lille buffer","Low storage: streaming from memory":"Lidt lagerplads: streamer fra hukommelsen","Slow source: {r} for a {v} video":"Langsom kilde: {r} for en {v}-video","Waiting for the next pieces…":"Venter på de næste stykker…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Lidt lagerplads: Sæt et USB-drev i"
+}

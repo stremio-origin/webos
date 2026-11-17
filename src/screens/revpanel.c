@@ -18,10 +18,12 @@
 #include "ui/glass.h"
 #include "ui/text.h"
 #include "ui/img.h"
+#include "ui/spoil.h"
 #include "ui/icon.h"
 #include "ui/widgets.h"
 #include "ui/sound.h"
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -52,11 +54,11 @@ enum { O_PLAY, O_STREAMS, O_WATCHED, O_TRAILER, O_LIB };
 typedef struct { int kind; QT x; Tween la; int f; double fAt; } Opt;
 static struct {
   int open, closing, page; Item it, it_ep; /* it_ep: as given (an episode keeps its video id) */ /* page: risen from the foot of the title page (Down), not grown out of a button */ int season, episode, stackSeason, sel; /* sel: 0 the show, 1 the season (the switch) */
-  const Reviews *rv; float from[5]; Timer1 in, out; SGlass glass;
+  int fromBtn; /* grown out of a menu's option: it starts as that option's highlight and folds back into it */ const Reviews *rv; float from[5]; Timer1 in, out; SGlass glass;
   int zone; /* 0 options, 1 comments, 2 the switch */ int optIdx, nopt, cIdx, expanded; Opt opt[MAXOPT]; FPill pill, cpill; Nudge nudge; QT listY; double openAt;
   /* laid out once per change (the answers, the language, the library, what is opened): never per frame */
   unsigned lay, rvVer, lg, lv; int layExp, laySel;
-  char tag[64], chip[MAXSW][40],  title[300], info[200], syn[1100], still[512], logo[512], spost[160]; int logoOn, layLogo; int synN, synMax, nShown; const RevTile *tiles[6];
+  char tag[64], chip[MAXSW][40],  title[300], info[200], syn[1100], still[512], logo[512], spost[160], fb[512]; int unrel; int logoOn, layLogo; int synN, synMax, nShown; const RevTile *tiles[6];
   char scoreS[16], votesS[64], when[REV_MAXC][48]; int pct[10], nl[REV_MAXC], more[REV_MAXC]; float cy[REV_MAXC], ch[REV_MAXC], listH; QT cyA[REV_MAXC]; int animN; double tileAt[6]; int tileN; double apAt[8]; unsigned apSig[8]; char tileV[6][16]; /* when each part first had something to show (it fades in from then) */ int tab, ntab, layTab, vis[REV_MAXC], nvis; char tabSrc[4][12]; int tabN[4]; Tween tbF[4]; FPill tpill; float tabX[4], tabW[4]; double tabAt; int tabDir; /* the comments' tabs: all, then each source; the highlight glides between them, the list slides in */ Tween chF[MAXSW]; FPill spill; int ns, seasonList[MAXSW - 1]; QT swX; /* the seasons the switch steps through, its scroll */ /* the comments' places as they slide, the chips' focus as it fades */
   char optLbl[MAXOPT][64]; const char *optIcon[MAXOPT]; float optW[MAXOPT]; float ttlW; int ttlN;
 } R;
@@ -73,7 +75,7 @@ static float ap(int i, int present) { return ap_sig(i, present, R.apSig[i]); }
 static unsigned hsh(const char *s) { unsigned h = 2166136261u; for (; s && *s; s++) h = (h ^ (unsigned char)*s) * 16777619u; return h; }
 static int is_ep(void) { return R.episode > 0; }
 static const cJSON *meta(void) { return sb_meta_cached(R.it.type, R.it.id); }
-static const cJSON *video(void) { const cJSON *v; char vid[80]; if (!is_ep()) return NULL; snprintf(vid, sizeof vid, "%s:%d:%d", R.it.id, R.season, R.episode);
+static const cJSON *video(void) { const cJSON *v; char vid[SB_VID]; if (!is_ep()) return NULL; snprintf(vid, sizeof vid, "%s:%d:%d", R.it.id, R.season, R.episode);
   cJSON_ArrayForEach(v, js_arr(meta(), "videos")) if (!strcmp(js_str(v, "id", ""), vid)) return v; return NULL; }
 /* "Jan 8, 2021" from "2021-01-08..." (as the title page writes it) */
 static void date_of(const char *r, char *out, size_t cap) {
@@ -103,8 +105,9 @@ static void opt_label(int kind, char *out, size_t cap, const char **icon) {
 static void make_opts(void) {
   int kinds[MAXOPT], n = 0, onPage = SCR == SCR_DETAIL && !strcmp(detail_id(), R.it.id);
   if (is_ep()) kinds[n++] = O_STREAMS; else if (!onPage) kinds[n++] = O_PLAY; else if (strcmp(R.it.type, "series")) kinds[n++] = O_STREAMS;
+  kinds[n++] = O_LIB; /* (Library among the first, as in the card menu) */
   if (is_ep() || strcmp(R.it.type, "series") || !R.season) kinds[n++] = O_WATCHED;
-  if (trailer_available(meta(), R.it.id)) kinds[n++] = O_TRAILER; kinds[n++] = O_LIB;
+  if (trailer_available(meta(), R.it.id)) kinds[n++] = O_TRAILER;
   int same = n == R.nopt; for (int i = 0; same && i < n; i++) same = R.opt[i].kind == kinds[i];
   if (!same) { for (int i = 0; i < n; i++) { Opt *o = &R.opt[i]; float x = i < R.nopt ? o->x.v : (i ? R.opt[i - 1].x.v + BD + BG : 0); memset(o, 0, sizeof *o); o->kind = kinds[i]; qt_set(&o->x, x); } R.nopt = n; }
   if (R.optIdx >= R.nopt) R.optIdx = R.nopt - 1;
@@ -176,6 +179,8 @@ static void layout(void) {
     char d[64], rt[32] = ""; date_of(js_str(v, "released", js_str(v, "firstAired", NULL)), d, sizeof d); int mn = sb_runtime_min(js_str(v, "runtime", "")); if (mn) sb_fmt_runtime(mn, rt, sizeof rt);
     snprintf(R.info, sizeof R.info, "%s%s%s", rt, rt[0] && d[0] ? "  \xc2\xb7  " : "", d);
     snprintf(R.syn, sizeof R.syn, "%s", js_str(v, "overview", js_str(v, "description", "")));
+    { Item it = R.it; if (m) sb_fill_item(&it, m, R.it.type); char b[512]; const char *bu = it.background[0] ? sb_bg_small(&it, b, sizeof b) : sb_poster_of(&it, b, sizeof b); snprintf(R.fb, sizeof R.fb, "%s", bu ? bu : "");
+      int yy, mm, dd; const char *rel = js_str(v, "released", js_str(v, "firstAired", "")); R.unrel = 0; if (sscanf(rel, "%d-%d-%d", &yy, &mm, &dd) == 3) { time_t now = time(NULL); struct tm *tt = localtime(&now); R.unrel = yy * 10000 + mm * 100 + dd > (tt->tm_year + 1900) * 10000 + (tt->tm_mon + 1) * 100 + tt->tm_mday; } } /* (no still of its own: what the episode list shows instead) */
     const char *th = js_str(v, "thumbnail", NULL); if (th && *th) snprintf(R.still, sizeof R.still, "%s", th); else if (sb_is_imdb(R.it.id)) snprintf(R.still, sizeof R.still, "https://episodes.metahub.space/%s/%d/%d/w780.jpg", R.it.id, R.season, R.episode); else R.still[0] = 0; }
   else { snprintf(R.chip[0], sizeof R.chip[0], "%s", T(!strcmp(R.it.type, "series") ? "Series" : "Movie"));
     for (int i = 0; i < R.ns; i++) { snprintf(s, sizeof s, "%d", R.seasonList[i]); snprintf(R.chip[i + 1], sizeof R.chip[i + 1], "%s", T1("Season {n}", "n", s)); }
@@ -250,7 +255,7 @@ static void tab_act(int i, int b) { (void)b; R.zone = 3; tab_go(i); }
 static float chip(float x, float y, const char *s, float f, int cur, int rtl) { /* f: how focused, 0..1 (it fades) */
   float w = text_width(s, 22, 700, 0.3f) + 36, h = 14 + text_line_height(22), cx = rtl ? x - w : x;
   if (f < 0.999f) { gfx_shadow(cx, y + 4, w, h, h / 2, 18, BLACK_A(110)); gfx_rrect(cx, y, w, h, h / 2, cur ? acc_a(0.55f) : RGBA(14, 12, 20, 178)); gfx_rrect_v(cx, y, w, h, h / 2, WHITE_A(26), WHITE_A(6)); gfx_ring(cx, y, w, h, h / 2, 1, WHITE_A(46)); }
-  if (f > 0.001f) { gfx_opacity_push(f); gfx_rrect(cx, y, w, h, h / 2, ACC); gfx_rrect_h(cx, y, w, h, h / 2, WHITE_A(0), WHITE_A(56)); gfx_ring_out(cx, y, w, h, h / 2, 4, acc_a(0.34f)); gfx_opacity_pop(); }
+  if (f > 0.001f) { gfx_opacity_push(f); gfx_rrect(cx, y, w, h, h / 2, ACC); gfx_rrect_h(cx, y, w, h, h / 2, WHITE_A(0), WHITE_A(56));  gfx_opacity_pop(); }
   text_draw(s, cx + w / 2, y + 7, 22, 700, col_mix(WHITE_A(245), ACC_FG, f), 0.3f, 0, ALIGN_CENTER);
   return w;
 }
@@ -355,7 +360,10 @@ static void draw_left(float x, float top, int rtl) {
   { GLuint t = 0; float u0 = 0, v0 = 0, u1 = 1, v1 = 1, rad = 0;
     if (R.still[0] && is_ep()) { t = img_get_shaped(R.still, 589, 331, 18, 1); } /* the episode list's own cut of the still */
     else if (R.still[0]) { float asp; t = img_get(R.still, 1280, 720, &asp); if (t) { img_cover_uv(asp, LW / STILL_H, 0, &u0, &v0, &u1, &v1); rad = 18; } } /* the page's backdrop, as decoded for it */
-    float sa = ap(AP_STILL, t != 0); if (sa < 1) ph_surface(x, y, LW, STILL_H, 18); if (t) gfx_image(t, x, y, LW, STILL_H, rad, WHITE_A((int)(255 * sa)), u0, v0, u1, v1); /* (the picture fades in over the waiting look) */
+    int none = is_ep() && (!R.still[0] || img_shaped_failed(R.still, 589, 331, 18, 1)); /* an episode with no still (not aired, or none was ever made): the episode list's stand-in, never an empty card */
+    if (none && R.fb[0] && R.unrel && spoil_blurable(R.fb)) { spoil_picture(R.fb, x, y, LW, STILL_H, 18); spoil_mark(x + LW / 2, y + STILL_H / 2 - 10, 64, 0, 0); t = 0; } /* (not aired: the show's backdrop blurred, the eye on it) */
+    else if (none && R.fb[0]) { ph_surface(x, y, LW, STILL_H, 18); GLuint bt = img_get_shaped(R.fb, 589, 331, 18, 1); if (bt) gfx_image(bt, x, y, LW, STILL_H, 0, WHITE_A(107), 0, 0, 1, 1); t = 0; } /* (aired, no still: the show's backdrop, dimmed) */
+    float sa = none ? 1 : ap(AP_STILL, t != 0); if (!none && sa < 1) ph_surface(x, y, LW, STILL_H, 18); if (t) gfx_image(t, x, y, LW, STILL_H, rad, WHITE_A((int)(255 * sa)), u0, v0, u1, v1); /* (the picture fades in over the waiting look) */
     if (t) gfx_rrect_v(x, y + STILL_H * 0.6f, LW, STILL_H * 0.4f, 0, BLACK_A(0), BLACK_A((int)(110 * sa))); }
   /* a season: its own poster on the picture, crossfading as the season changes */
   { float pa = 0; GLuint pt = 0; if (R.spost[0]) { pt = img_get_shaped(R.spost, 170, 255, 12, 1); pa = ap_sig(AP_SPOST, pt != 0, hsh(R.spost)); } else ap(AP_SPOST, 0);
@@ -371,7 +379,7 @@ static void draw_left(float x, float top, int rtl) {
       for (int i = 0; i <= R.ns; i++) { float ox = xs[i] - R.swX.v; if (ox + ws[i] < -20 || ox > vw + 20) continue; float bx = rtl ? cx - ox : cx + ox, bl = rtl ? bx - ws[i] : bx;
         hit_add(bl, cy, ws[i], chh, NULL, sw_act, i, 0); gfx_shadow(bl, cy + 4, ws[i], chh, chh / 2, 18, BLACK_A(110)); gfx_rrect(bl, cy, ws[i], chh, chh / 2, RGBA(14, 12, 20, 178)); gfx_ring(bl, cy, ws[i], chh, chh / 2, 1, WHITE_A(46)); }
       { float f = R.zone == 2 ? 1 : 0.55f, ox = R.spill.x.v - R.swX.v, pw = R.spill.w.v, bl = rtl ? cx - ox - pw : cx + ox, nx = R.zone == 2 ? nudge_x(&R.nudge) : 0; /* bright with the focus, softer without */
-        gfx_opacity_push(f * R.spill.a.v); gfx_rrect(bl + nx, cy, pw, chh, chh / 2, ACC | 0xff000000u); if (R.zone == 2) gfx_ring_out(bl + nx, cy, pw, chh, chh / 2, 4, acc_a(0.34f)); gfx_opacity_pop(); }
+        gfx_opacity_push(f * R.spill.a.v); gfx_rrect(bl + nx, cy, pw, chh, chh / 2, ACC | 0xff000000u);  gfx_opacity_pop(); }
       for (int i = 0; i <= R.ns; i++) { float ox = xs[i] - R.swX.v; if (ox + ws[i] < -20 || ox > vw + 20) continue; float bx = rtl ? cx - ox : cx + ox, bl = rtl ? bx - ws[i] : bx;
         float on = 1 - fminf(1, fabsf(R.spill.x.v - xs[i]) / (ws[i] + 10)); text_draw(R.chip[i], bl + ws[i] / 2, cy + 7, 22, 700, col_mix(WHITE_A(235), ACC_FG | 0xff000000u, on * (R.zone == 2 ? 1 : 0.7f)), 0.3f, 0, ALIGN_CENTER); }
       gfx_clip_pop(); }
@@ -420,7 +428,7 @@ static void draw_right(float x, float top, float bottom, int rtl) {
   /* the comments */
   float ta = ap_sig(AP_TABS, R.rv->nc > 0, (unsigned)R.sel); if (R.rv->nc) gfx_opacity_push(ta);
   if (R.rv->nc) { float cx = rtl ? x + RW : x, th = 14 + text_line_height(22); /* the tabs: All, then each source, with how many */
-    if (R.tpill.a.v > 0.001f) { gfx_offset_push(x, y); fpill_halo(&R.tpill, -1, 0.97f, acc_a(0.34f)); fpill_draw(&R.tpill, -1, 0.97f); gfx_offset_pop(); }
+    if (R.tpill.a.v > 0.001f) { gfx_offset_push(x, y); fpill_draw(&R.tpill, -1, 0.97f); gfx_offset_pop(); }
     for (int t = 0; t < R.ntab; t++) { char lb[48], n[12]; snprintf(n, sizeof n, "%d", R.tabN[t]); snprintf(lb, sizeof lb, "%s  %s", t ? R.tabSrc[t] : T("All"), n);
       float f = R.tbF[t].v, w = text_width(lb, 22, 700, 0.3f) + 36, bx = rtl ? cx - w : cx; R.tabX[t] = bx - x; R.tabW[t] = w; hit_add(bx, y, w, th, NULL, tab_act, t, 0);
       if (f < 0.999f) { gfx_opacity_push(1 - f); gfx_rrect(bx, y, w, th, th / 2, R.tab == t ? acc_a(0.45f) : WHITE_A(16)); gfx_ring(bx, y, w, th, th / 2, 1, WHITE_A(R.tab == t ? 60 : 30)); gfx_opacity_pop(); }
@@ -432,7 +440,7 @@ static void draw_right(float x, float top, float bottom, int rtl) {
     else if (trakt_has_key()) text_draw(T("No comments yet"), tx, y + 6, 24, 400, WHITE_A(150), 0, RW, al);
     else { /* no Trakt id yet: a card in the comments' place, OK on it shows the code for the phone */
       int f = R.zone == 1; float h = 32 + text_line_height(26) + 6 + 2 * 28, kx = rtl ? x + RW - 24 - 36 : x + 24, ktx = rtl ? x + RW - 24 - 36 - 20 : x + 24 + 36 + 20; hit_add(x, y, RW, h, cm_focus, cm_act, 0, 0);
-      if (R.cpill.a.v > 0.001f) { gfx_offset_push(x + (f ? nudge_x(&R.nudge) : 0), y + (f ? nudge_y(&R.nudge) : 0)); fpill_halo(&R.cpill, 18, 0.985f, acc_a(0.34f)); fpill_draw(&R.cpill, 18, 0.985f); gfx_offset_pop(); }
+      if (R.cpill.a.v > 0.001f) { gfx_offset_push(x + (f ? nudge_x(&R.nudge) : 0), y + (f ? nudge_y(&R.nudge) : 0)); fpill_draw(&R.cpill, 18, 0.985f); gfx_offset_pop(); }
       if (f) gfx_offset_push(nudge_x(&R.nudge), nudge_y(&R.nudge)); else { gfx_rrect(x, y, RW, h, 18, WHITE_A(14)); gfx_ring(x, y, RW, h, 18, 1, WHITE_A(18)); }
       icon_draw("reviews", kx, y + 16 + 2, 36, f ? ACC_FG : ACC2);
       text_draw(T("People\xe2\x80\x99s comments come with a Trakt id"), ktx, y + 16, 26, 700, f ? ACC_FG : WHITE_A(255), 0, RW - 100, al);
@@ -444,7 +452,7 @@ static void draw_right(float x, float top, float bottom, int rtl) {
   float tk = R.tabAt > 0 ? (float)((app_now() - R.tabAt) / 0.32) : 1; tk = tk > 1 ? 1 : tk; tk = quint(tk); /* (a new tab: its list slides in from its side) */
   float ca = ap_sig(AP_COMM, R.nvis > 0, (unsigned)R.sel * 31u + (unsigned)R.nvis); gfx_clip_push(x - 8, y - 8, RW + 16, vh + 16); gfx_opacity_push((0.2f + 0.8f * tk) * ca); gfx_offset_push(0, 14 * (1 - ca)); gfx_offset_push(48 * (1 - tk) * R.tabDir * (rtl ? -1 : 1), y - R.listY.v);
   float cnx = R.zone == 1 ? nudge_x(&R.nudge) : 0, cny = R.zone == 1 ? nudge_y(&R.nudge) : 0;
-  if (R.cpill.a.v > 0.001f) { gfx_offset_push(x + cnx, cny); fpill_halo(&R.cpill, 18, 0.985f, acc_a(0.34f)); fpill_draw(&R.cpill, 18, 0.985f); gfx_offset_pop(); }
+  if (R.cpill.a.v > 0.001f) { gfx_offset_push(x + cnx, cny); fpill_draw(&R.cpill, 18, 0.985f); gfx_offset_pop(); }
   for (int i = 0; i < R.nvis; i++) { float cy = i < R.animN ? R.cyA[i].v : R.cy[i]; if (cy + R.ch[i] < R.listY.v - 20 || cy > R.listY.v + vh + 20) continue; int f = R.zone == 1 && i == R.cIdx;
     hit_add(x, cy, RW, R.ch[i], cm_focus, cm_act, i, 0);
     if (f) gfx_offset_push(cnx, cny); revpanel_draw_comment(x, cy, RW, &R.rv->c[R.vis[i]], f, R.nl[i], 1);
@@ -463,7 +471,7 @@ static void draw(void) {
   if (R.page) { /* in the page: no box of its own, the reviews rise into the title page under its buttons */
     float lx = rtl ? PX + PW - PAD - LW : PX + PAD, rx = rtl ? PX + PAD : PX + PAD + LW + GAP, top = PG_TOP + 140 * (1 - e);
     gfx_opacity_push(e); draw_left(lx, top, rtl); draw_right(rx, top, SB_H - 40 + 140 * (1 - e), rtl); gfx_opacity_pop(); return; }
-  int pill = !R.page && R.from[2] > 0 && R.from[4] >= R.from[3] * 0.45f; /* opened from a round button: it starts as that button and swells into the panel */
+  int pill = !R.page && R.from[2] > 0 && (R.fromBtn || R.from[4] >= R.from[3] * 0.45f); /* opened from a round button: it starts as that button and swells into the panel */
   gfx_opacity_push(pill || R.page ? 1 : e < 0.15f ? e / 0.15f : 1);
   if (R.glass.ok && R.glass.a.v >= 0.999f && e >= 0.999f) gfx_shadow_under(x, y + 30, w, h, r, 80, BLACK_A(150), x, y, w, h, r); else gfx_shadow(x, y + 24, w, h, r, 60, BLACK_A((int)(150 * e)));
   sglass_draw(&R.glass, x, y, w, h, r); gfx_rrect(x, y, w, h, r, BLACK_A((int)(60 * (1 - e) * (1 - e)))); if (pill && e < 1) { float k = 1 - e; gfx_rrect(x, y, w, h, r, col_alpha(ACC | 0xff000000u, k * k * (3 - 2 * k))); } /* (the button's accent giving way to the glass) */ gfx_ring(x, y, w, h, r, 1, WHITE_A(22)); /* (the held picture's darkness gives way to the glass) */
@@ -489,9 +497,12 @@ const RevComment *revpanel_sample(int i) {
 const int *revpanel_sample_dist(void) { static const int d[10] = { 2, 1, 1, 2, 4, 7, 14, 27, 24, 18 }; return d; }
 static int nextList[MAXSW - 1], nextN;
 void revpanel_seasons(const int *list, int n) { if (n > MAXSW - 1) n = MAXSW - 1; nextN = n > 0 ? n : 0; if (nextN) memcpy(nextList, list, sizeof(int) * (size_t)nextN); }
+static int nextBtn;
+void revpanel_from_button(void) { nextBtn = 1; }
+float revpanel_card_k(void) { if (R.page || (!R.open && !R.closing)) return 0; float u = R.closing ? 1 - timer_x(&R.out) : R.in.on ? timer_x(&R.in) : 1; return R.closing ? u * u * (3 - 2 * u) : quint(u); }
 void revpanel_show(const Item *it, int stackSeason, float fx, float fy, float fw, float fh, float fr) {
   if (R.open) finish();
-  memset(&R, 0, sizeof R); R.it = *it; R.it_ep = *it; R.open = 1; R.expanded = -1; R.openAt = app_now();
+  memset(&R, 0, sizeof R); R.fromBtn = nextBtn; nextBtn = 0; R.it = *it; R.it_ep = *it; R.open = 1; R.expanded = -1; R.openAt = app_now();
   const char *c = strrchr(it->videoId, ':'); /* an episode card: "tt123:1:2" */
   if (it->ep && c) { const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') { R.season = atoi(p + 1); R.episode = atoi(c + 1); } }
   if (R.episode <= 0) { R.episode = 0; R.season = 0; R.stackSeason = !strcmp(it->type, "series") ? stackSeason : 0; } /* (the switch is the title's) */

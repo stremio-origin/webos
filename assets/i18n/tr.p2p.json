@@ -6,5 +6,6 @@
 "Low storage: small buffer": "Depolama az: küçük arabellek",
 "Waiting for the next pieces…": "Sonraki parçalar bekleniyor…",
 "{n} MB/s": "{n} MB/sn",
-"{n} KB/s": "{n} KB/sn"
+"{n} KB/s": "{n} KB/sn",
+"Low storage: plug in a USB drive": "Depolama az: bir USB bellek takın"
 }

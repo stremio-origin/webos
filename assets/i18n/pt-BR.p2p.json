@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Poucos peers ({n}) · {r}","Getting the file list…":"Obtendo a lista de arquivos…","Low storage: small buffer":"Pouco armazenamento: buffer pequeno","Low storage: streaming from memory":"Pouco armazenamento: transmitindo da memória","Slow source: {r} for a {v} video":"Fonte lenta: {r} para um vídeo {v}","Waiting for the next pieces…":"Aguardando as próximas partes…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Pouco armazenamento: conecte um pen drive USB"
+}

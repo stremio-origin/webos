@@ -6,5 +6,6 @@
 "Low storage: small buffer": "Weinig opslag: kleine buffer",
 "Waiting for the next pieces…": "Wachten op de volgende stukken…",
 "{n} MB/s": "{n} MB/s",
-"{n} KB/s": "{n} KB/s"
+"{n} KB/s": "{n} KB/s",
+"Low storage: plug in a USB drive": "Weinig opslag: sluit een USB-stick aan"
 }

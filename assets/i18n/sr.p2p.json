@@ -1,0 +1,3 @@
+{"Few peers ({n}) · {r}":"Malo peer-ova ({n}) · {r}","Getting the file list…":"Učitavanje liste datoteka…","Low storage: small buffer":"Malo prostora: mali bafer","Low storage: streaming from memory":"Malo prostora: strimovanje iz memorije","Slow source: {r} for a {v} video":"Spor izvor: {r} za {v} video","Waiting for the next pieces…":"Čeka se sledeći deo…","{n} KB/s":"{n} KB/s","{n} MB/s":"{n} MB/s",
+"Low storage: plug in a USB drive": "Malo prostora: priključite USB memoriju"
+}

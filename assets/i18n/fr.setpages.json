@@ -1,0 +1,23 @@
+{
+ "Seek bar": "Barre de lecture",
+ "Seek step, chapters, previews": "Pas d’avance, chapitres, aperçus",
+ "Best stream, next episode, picture size": "Meilleur flux, épisode suivant, taille de l’image",
+ "Accent colour, screensaver, clock, trailers": "Couleur d’accent, économiseur, horloge, bandes-annonces",
+ "Track what you watch": "Suivez ce que vous regardez",
+ "Member since": "Membre depuis",
+ "Stremio account": "Compte Stremio",
+ "{n} titles": "{n} titres",
+ "{n} installed": "{n} installés",
+ "Connected": "Connecté",
+ "Not connected": "Non connecté",
+ "Default": "Par défaut",
+ "Font": "Police",
+ "Arabic font": "Police arabe",
+ "For subtitles in Arabic": "Pour les sous-titres en arabe",
+ "Language, size, font, colour": "Langue, taille, police, couleur",
+ "Subtitle font": "Police des sous-titres",
+ "Arabic subtitle font": "Police arabe des sous-titres",
+ "Styled subtitles keep their own fonts, colours and background.": "Les sous-titres stylés gardent leurs propres polices, couleurs et fond.",
+ "Stats for nerds on": "Stats pour les geeks activées",
+ "Stats for nerds off": "Stats pour les geeks désactivées"
+}
