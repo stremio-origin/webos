@@ -1,4 +1,5 @@
 #include "core/app.h"
+#include "screens/exitask.h"
 #include "core/away.h"
 #include "core/traktwatch.h"
 #include "core/scrobble.h"
@@ -300,7 +301,7 @@ static void toast_draw(void) {
   gfx_opacity_pop();
 }
 static double exitAt = -10;
-void exit_ask(void) { if (NOW - exitAt < 2.5) { app_quit(); return; } exitAt = NOW; toast(T("Press again to exit"), 2500, "\001back"); }
+void exit_ask(void) { (void)exitAt; exitask_show(); } /* Back at the top asks first, on a card with Stay and Leave: a toast to press again went by unseen, and Back pressed again and again closed the app */
 
 /* ---- the clock ---- */
 static char clockTxt[16], clockOld[16]; static Timer1 clockAnim; static double clockAt;
