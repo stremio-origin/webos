@@ -11,6 +11,7 @@
 #include "core/json.h"
 #include "core/i18n.h"
 #include "core/addons.h"
+#include "core/tmdb.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -470,29 +471,112 @@ static void meta_put(const char *k, cJSON *m) { metaVer++; int slot = 0; unsigne
 /* a title page's disk copy: under the addons' setup too */
 static void meta_ck(char *out, size_t cap, const char *key) { snprintf(out, cap, "meta%08x:%s", addon_gen(), key); }
 #define META_BASES 8
-typedef struct { char type[16], id[SB_ID], key[SB_ID + 32]; void (*cb)(cJSON *, void *); void *ud; int fresh; char bases[META_BASES][512]; int nb, bi; } MetaReq;
+typedef struct { char type[16], id[SB_ID], key[SB_ID + 32]; void (*cb)(cJSON *, void *); void *ud; int fresh; char bases[META_BASES][512]; int nb, bi;
+  unsigned gen; int refs, won, hedged; char imdb[32]; cJSON *partial;
+} MetaReq;
 static void meta_try(MetaReq *r);
+/* The addon chain retains its order. For a numeric TMDB title, one parallel
+   branch resolves its IMDb identity and asks Cinemeta; an IMDb series can ask
+   Cinemeta directly. The first complete answer
+   wins; a late answer cannot overwrite it, call a freed screen or poison cache.
+   Each asynchronous branch owns one reference, including cancelled/failed calls. */
+static int meta_tmdb_path(const MetaReq *r, char *out, size_t cap) {
+  if (strncmp(r->id, "tmdb:", 5) || !r->id[5] || strlen(r->id + 5) > 20 ||
+      (strcmp(r->type, "series") && strcmp(r->type, "movie"))) return 0;
+  for (const char *p = r->id + 5; *p; p++) if (*p < '0' || *p > '9') return 0;
+  snprintf(out, cap, "/%s/%s/external_ids", !strcmp(r->type, "series") ? "tv" : "movie", r->id + 5); return 1;
+}
+static int meta_imdb_valid(const char *id) {
+  size_t n = strlen(id); if (n <= 2 || n >= 32 || id[0] != 't' || id[1] != 't') return 0;
+  for (size_t i = 2; i < n; i++) if (id[i] < '0' || id[i] > '9') return 0;
+  return 1;
+}
+static void meta_publish(MetaReq *r, cJSON *m, const unsigned char *b, size_t n) {
+  r->won = 1;
+  char ck[SB_ID + 48]; meta_ck(ck, sizeof ck, r->key);
+  if (b) cache_write(ck, b, n);
+  else { cJSON *j = cJSON_CreateObject(); cJSON_AddItemToObject(j, "meta", m);
+    char *text = cJSON_PrintUnformatted(j); if (text) { cache_write(ck, (const unsigned char *)text, strlen(text)); free(text); }
+    cJSON_DetachItemFromObjectCaseSensitive(j, "meta"); cJSON_Delete(j); }
+  meta_put(r->key, m);
+  if (!r->fresh) { r->fresh = 1; r->cb(m, r->ud); }
+}
+static void meta_release(MetaReq *r) {
+  if (--r->refs) return;
+  if (!r->won && r->partial && r->gen == addon_gen()) {
+    cJSON *m = r->partial; r->partial = NULL; meta_publish(r, m, NULL, 0);
+  }
+  cJSON_Delete(r->partial);
+  if (!r->fresh) r->cb(NULL, r->ud);
+  free(r);
+}
+static int meta_offer(MetaReq *r, cJSON *m, const unsigned char *b, size_t n) {
+  if (r->won || r->gen != addon_gen()) { cJSON_Delete(m); return 1; }
+  const cJSON *vs = js_arr(m, "videos");
+  if (r->hedged && !strcmp(r->type, "series") && (!vs || !cJSON_GetArraySize(vs))) {
+    if (!r->partial) r->partial = m; else cJSON_Delete(m); return 0;
+  }
+  meta_publish(r, m, b, n); return 1;
+}
+static void on_meta_cinemeta(int st, const unsigned char *b, size_t n, void *ud) {
+  (void)n; MetaReq *r = ud; cJSON *j = st == 200 ? net_json(b) : NULL;
+  cJSON *m = j ? cJSON_DetachItemFromObjectCaseSensitive(j, "meta") : NULL; net_json_free(j);
+  if (cJSON_IsObject(m)) {
+    const char *id = js_str(m, "id", "");
+    if (strcmp(id, r->imdb)) { cJSON_Delete(m); meta_release(r); return; }
+    /* Keep the library identity, but never rewrite the IMDb episode/stream IDs. */
+    cJSON_DeleteItemFromObjectCaseSensitive(m, "id"); cJSON_AddStringToObject(m, "id", r->id);
+    cJSON_DeleteItemFromObjectCaseSensitive(m, "imdb_id"); cJSON_AddStringToObject(m, "imdb_id", r->imdb);
+    if (!r->won && r->gen == addon_gen()) fprintf(stderr, "[meta] Cinemeta fallback for %s (%s): %d videos\n", r->id, r->imdb, cJSON_GetArraySize(js_arr(m, "videos")));
+    meta_offer(r, m, NULL, 0);
+  } else cJSON_Delete(m);
+  meta_release(r);
+}
+static void on_meta_identity(int st, const unsigned char *b, size_t n, void *ud) {
+  (void)n; MetaReq *r = ud;
+  if (r->won || r->gen != addon_gen()) { meta_release(r); return; }
+  cJSON *j = st == 200 ? net_json(b) : NULL; const char *id = js_str(j, "imdb_id", "");
+  int valid = meta_imdb_valid(id);
+  if (valid) copy_str(r->imdb, sizeof r->imdb, id); net_json_free(j);
+  if (!valid) { meta_release(r); return; }
+  fprintf(stderr, "[meta] identity %s -> %s\n", r->id, r->imdb);
+  char url[800]; addon_url(url, sizeof url, CINEMETA, "meta", r->type, r->imdb, NULL);
+  net_get_first(url, on_meta_cinemeta, r);
+}
 static void on_meta(int st, const unsigned char *b, size_t n, void *ud) {
   MetaReq *r = ud; cJSON *j = st == 200 ? net_json(b) : NULL; cJSON *m = j ? cJSON_DetachItemFromObjectCaseSensitive(j, "meta") : NULL; net_json_free(j);
   if (!cJSON_IsObject(m)) { cJSON_Delete(m); meta_try(r); return; }
-  char ck[SB_ID + 48]; meta_ck(ck, sizeof ck, r->key); cache_write(ck, b, n); /* the answer as it came ({"meta":...}): printing a series' tree again took a frame */
-  meta_put(r->key, m);
-  if (!r->fresh) r->cb(m, r->ud);
-  free(r);
+  if (meta_offer(r, m, b, n)) meta_release(r); else meta_try(r);
 }
 static void meta_try(MetaReq *r) {
-  if (r->bi >= r->nb) { if (!r->fresh) r->cb(NULL, r->ud); free(r); return; }
+  /* A hedged Cinemeta request already has its own reference and callback. */
+  while (r->hedged && r->bi < r->nb && !strcmp(r->bases[r->bi], CINEMETA)) r->bi++;
+  if (r->won || r->gen != addon_gen() || r->bi >= r->nb) { meta_release(r); return; }
   char url[800]; addon_url(url, sizeof url, r->bases[r->bi++], "meta", r->type, r->id, NULL);
   net_get(url, on_meta, r);
 }
 static void meta_go(MetaReq *r) {
-  if (!r->nb && !r->fresh) { r->cb(NULL, r->ud); free(r); return; }
-  if (!r->nb) { free(r); return; }
+  if (!r->nb && r->fresh) { meta_release(r); return; }
+  char path[96], url[1024], hdr[512];
+  if (r->gen == addon_gen() && meta_tmdb_path(r, path, sizeof path) && tmdb_call(path, url, sizeof url, hdr, sizeof hdr)) {
+    r->hedged = 1; r->refs++; net_get_hdr_first(url, hdr, on_meta_identity, r);
+  } else if (r->gen == addon_gen() && !strcmp(r->type, "series") && meta_imdb_valid(r->id) &&
+             r->nb && strcmp(r->bases[0], CINEMETA)) {
+    r->hedged = 1; r->refs++; copy_str(r->imdb, sizeof r->imdb, r->id);
+    addon_url(url, sizeof url, CINEMETA, "meta", r->type, r->imdb, NULL);
+    net_get_first(url, on_meta_cinemeta, r);
+  }
   meta_try(r);
 }
 static void on_meta_disk(int st, const unsigned char *b, size_t n, void *ud) {
-  MetaReq *r = ud; (void)n; cJSON *c = st == 200 ? net_json(b) : NULL; AddonCache h; addon_cache_hints(c, &h);
+  MetaReq *r = ud; if (r->gen != addon_gen()) { meta_release(r); return; }
+  (void)n; cJSON *c = st == 200 ? net_json(b) : NULL; AddonCache h; addon_cache_hints(c, &h);
   if (cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(c, "meta"))) { cJSON *m = cJSON_DetachItemFromObjectCaseSensitive(c, "meta"); cJSON_Delete(c); c = m; } /* written as the answer came */
+  /* Do not permanently deliver an incomplete series disk copy: this API calls
+     consumers once, so the eventual refresh cannot repair its missing episodes. */
+  if (!strcmp(r->type, "series") && cJSON_IsObject(c) && !cJSON_GetArraySize(js_arr(c, "videos"))) {
+    cJSON_Delete(c); c = NULL;
+  }
   if (h.maxAge > 0 && cJSON_IsObject(c)) { char ck[SB_ID + 48], cp[1200]; meta_ck(ck, sizeof ck, r->key); if (cache_file(ck, h.maxAge, cp, sizeof cp)) r->nb = 0; } /* younger than the addon's cacheMaxAge: no request */
   cJSON *m = sb_meta_cached(r->type, r->id); /* asked again meanwhile and answered from the addons */
   if (m) { cJSON_Delete(c); r->fresh = 1; r->cb(m, r->ud); }
@@ -504,6 +588,7 @@ static void on_meta_disk(int st, const unsigned char *b, size_t n, void *ud) {
 void sb_meta(const char *type, const char *id, void (*cb)(cJSON *, void *), void *ud) {
   cJSON *m = sb_meta_cached(type, id); if (m) { cb(m, ud); return; }
   MetaReq *r = calloc(1, sizeof *r); copy_str(r->type, sizeof r->type, type); copy_str(r->id, sizeof r->id, id); snprintf(r->key, sizeof r->key, "%s_%s", type, id); r->cb = cb; r->ud = ud;
+  r->refs = 1; r->gen = addon_gen();
   cJSON *a = sb_addons(); const cJSON *ad; int cine = 0;
   if (a) cJSON_ArrayForEach(ad, a) { if (r->nb >= META_BASES || !addon_serves(ad, "meta", type, id)) continue; addon_base(ad, r->bases[r->nb], 512); if (!strcmp(r->bases[r->nb], CINEMETA)) cine = 1; r->nb++; }
   if (sb_is_imdb(id) && !cine && r->nb < META_BASES && (!strcmp(type, "movie") || !strcmp(type, "series"))) copy_str(r->bases[r->nb++], 512, CINEMETA);

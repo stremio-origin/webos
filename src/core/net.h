@@ -12,6 +12,7 @@ typedef void (*NetCb)(int status, const unsigned char *body, size_t len, void *u
 int      net_init(const char *caBundlePath);  /* caBundlePath may be NULL */
 unsigned net_get(const char *url, NetCb cb, void *ud);
 unsigned net_get_first(const char *url, NetCb cb, void *ud); /* ahead of the queue (what the user waits on as they type) */
+unsigned net_get_hdr_first(const char *url, const char *headers, NetCb cb, void *ud);
 /* a file's size from one 1-byte range request (body = the byte count as text, status 0 when unknown); the body is never read */
 unsigned net_file(const char *path, NetCb cb, void *ud);  /* a local file read (and JSON parsed) off the drawing thread: 200 or 404 */
 unsigned net_size(const char *url, NetCb cb, void *ud);
