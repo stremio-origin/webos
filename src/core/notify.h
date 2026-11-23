@@ -11,6 +11,7 @@
 #include "cJSON.h"
 
 void notify_tick(void (*changed)(void));    /* once a frame: asks when due (signed in, the library there); changed() when the answers changed what shows */
+void notify_reset(void);
 void notify_refresh(void);                  /* ask now (a series just added, the library pulled) */
 /* a library item's new episodes: the first not yet watched (*vid, its season and episode), when the newest came out;
    0 = none */

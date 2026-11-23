@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 /* tests/scrobble: the Trakt scrobbler (src/core/scrobble.c) against a stand-in network and clock: what it sends for
    each way a film or an episode is watched, how it connects, renews and gives up. tests/scrobble/run.sh */
 #include "core/scrobble.h"
@@ -13,6 +14,12 @@
 static double clk = 1000; double sb_test_clock(void) { return clk; }
 static char dataDir[256], setting[16] = "true", client[80] = "0123456789abcdef0123456789abcdef0123456789a";
 const char *store_data_dir(void) { return dataDir; }
+static int active_profile = PROFILE_DEFAULT;
+int profiles_active(void) { return active_profile; }
+void profiles_file(int id, const char *file, char *path, size_t cap) {
+  if (id == PROFILE_DEFAULT) snprintf(path, cap, "%s/%s", dataDir, file);
+  else snprintf(path, cap, "%s/profile-%d-%s", dataDir, id, file);
+}
 const char *store_get(const char *k, const char *d) { return !strcmp(k, "traktScrobble") ? setting : d; }
 const char *trakt_client_id(void) { return client; }
 static char acctId[32] = "acct1"; /* the Stremio account signed in ("" signed out) */
@@ -136,6 +143,23 @@ int main(void) {
     pos = 0; play(&movie, 1, 20, 6000); scrobble_player_end(pos, 6000, 0); flush(); CHECK(count("/scrobble/") == 0, "nothing sent for the other account");
     snprintf(acctId, sizeof acctId, "%s", ""); CONNECT("accB"); CHECK(scrobble_state() == TRAKT_LINKED && FILE_HAS("\"acct\":\"\""), "connected signed out: no account yet");
     snprintf(acctId, sizeof acctId, "acct3"); clk += 2; scrobble_tick(); CHECK(scrobble_state() == TRAKT_LINKED && FILE_HAS("\"acct\":\"acct3\""), "no account kept (a file from before): taken by the one signed in");
+    scrobble_profile_ask();
+    int old = nr - 2;
+    scrobble_reset();
+    active_profile = 2;
+    CHECK(scrobble_state() == TRAKT_OFF, "second profile starts disconnected");
+    answer(old, 200, "{\"user\":{\"username\":\"stale\"}}");
+    CHECK(!scrobble_profile()->haveUser, "late profile data ignored");
+    CONNECT("second");
+    profiles_file(2, "trakt.auth", p2, sizeof p2);
+    CHECK(FILE_HAS("\"access\":\"second\""), "separate credentials persisted");
+    scrobble_unlink();
+    CHECK(access(p2, F_OK) != 0, "only second profile unlinked");
+    scrobble_reset();
+    active_profile = PROFILE_DEFAULT;
+    CHECK(scrobble_state() == TRAKT_LINKED, "first profile still connected");
+    profiles_file(PROFILE_DEFAULT, "trakt.auth", p2, sizeof p2);
+    CHECK(FILE_HAS("\"access\":\"accB\""), "first profile retained its own token");
     scrobble_unlink(); }
   snprintf(cmd, sizeof cmd, "rm -rf %s", dataDir); if (system(cmd)) {}
   printf(fails ? "%d failed\n" : "all ok\n", fails); return fails ? 1 : 0;

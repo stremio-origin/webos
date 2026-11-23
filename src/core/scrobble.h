@@ -12,6 +12,9 @@
 #include "core/net.h"
 
 enum { TRAKT_OFF, TRAKT_LINKED, TRAKT_RELINK };   /* not connected; connected; Trakt signed this TV out */
+void scrobble_reset(void);
+void scrobble_leave_profile(void);
+unsigned scrobble_generation(void);
 void scrobble_init(void);              /* after store_init (reads trakt.auth, renews the access when due) */
 int  scrobble_state(void);
 const char *scrobble_user(void);       /* the Trakt username once known ("" before) */

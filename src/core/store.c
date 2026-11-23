@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "core/store.h"
+#include "core/profiles.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,41 +54,88 @@ const char *store_get(const char *k, const char *def) { cJSON *v = find(k); retu
 void store_set(const char *k, const char *val) {
   const char *cur = store_get(k, NULL); if (cur && val && !strcmp(cur, val)) return;
   cJSON_DeleteItemFromObjectCaseSensitive(root, k); if (val) cJSON_AddStringToObject(root, k, val); touch(); }
-cJSON *store_node(const char *k) { return find(k); }
-void store_set_node(const char *k, cJSON *n) { if (n && find(k) == n) { touch(); return; } /* the store's own node, changed in place */ cJSON_DeleteItemFromObjectCaseSensitive(root, k); if (n) cJSON_AddItemToObject(root, k, n); touch(); }
-void store_remove(const char *k) { if (find(k)) { cJSON_DeleteItemFromObjectCaseSensitive(root, k); touch(); } }
+static const char *const profile_keys[] = {
+  "lib", "streams", "notifs", "cwHide", "upHide", "twHide", "twPbDrop"
+};
+static const char *profile_key(const char *key, int id, char *buf, size_t cap) {
+  if (id <= PROFILE_DEFAULT) return key;
+  for (size_t i = 0; i < sizeof profile_keys / sizeof *profile_keys; i++) {
+    if (!strcmp(key, profile_keys[i])) {
+      snprintf(buf, cap, "profile-%d-%s", id, key);
+      return buf;
+    }
+  }
+  return key;
+}
+cJSON *store_node(const char *key) {
+  char buf[80];
+  return find(profile_key(key, profiles_active(), buf, sizeof buf));
+}
+void store_set_node(const char *key, cJSON *n) {
+  char buf[80];
+  const char *k = profile_key(key, profiles_active(), buf, sizeof buf);
+  if (n && find(k) == n) { touch(); return; }
+  cJSON_DeleteItemFromObjectCaseSensitive(root, k);
+  if (n) cJSON_AddItemToObject(root, k, n);
+  touch();
+}
+static void remove_raw(const char *k) {
+  if (find(k)) { cJSON_DeleteItemFromObjectCaseSensitive(root, k); touch(); }
+}
+void store_remove(const char *key) {
+  char buf[80];
+  remove_raw(profile_key(key, profiles_active(), buf, sizeof buf));
+}
+void store_remove_profile(int id) {
+  char buf[80];
+  for (size_t i = 0; i < sizeof profile_keys / sizeof *profile_keys; i++)
+    remove_raw(profile_key(profile_keys[i], id, buf, sizeof buf));
+}
 /* cache files are written on a thread of their own: a disk write in the middle of a frame was a long frame on the TV
    (its flash can take tens of ms) */
 #include <pthread.h>
-typedef struct CW { char path[1200]; unsigned char *data; size_t len; struct CW *next; } CW;
+typedef struct CW { unsigned version; char path[1200]; unsigned char *data; size_t len; struct CW *next; } CW;
 static CW *cwHead, *cwTail; static pthread_mutex_t cwMu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t cwCv = PTHREAD_COND_INITIALIZER; static int cwThread;
+static pthread_mutex_t stateMu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned writtenVersion;
+static int write_state(const char *p, const void *data, size_t len, unsigned version) {
+  pthread_mutex_lock(&stateMu);
+  int ok = version <= writtenVersion || write_all(p, data, len);
+  if (ok && version > writtenVersion) writtenVersion = version;
+  pthread_mutex_unlock(&stateMu);
+  return ok;
+}
+static int write_job(const CW *w) {
+  return w->version ? write_state(w->path, w->data, w->len, w->version)
+                    : write_all(w->path, w->data, w->len);
+}
 static void cache_prune_soon(int failed);
 static int is_cache_path(const char *p);
 static void *cw_run(void *a) { plat_thread_background(15); (void)a;
   for (;;) { pthread_mutex_lock(&cwMu); while (!cwHead) pthread_cond_wait(&cwCv, &cwMu); CW *w = cwHead; cwHead = w->next; if (!cwHead) cwTail = NULL; pthread_mutex_unlock(&cwMu);
-    int ok = write_all(w->path, w->data, w->len), cache = is_cache_path(w->path); size_t n = w->len; free(w->data); free(w);
+    int ok = write_job(w), cache = is_cache_path(w->path); size_t n = w->len; free(w->data); free(w);
     if (cache) { static long written; written += (long)n; if (!ok) { fprintf(stderr, "[cache] a write failed (the disk full?): pruning now\n"); cache_prune_soon(1); written = 0; } else if (written > cache_cap_bytes() / 8 && cache_cap_bytes() > 0) { cache_prune_soon(0); written = 0; } } } /* (kept under its cap while running, not only at start) */
   return NULL; }
-static void write_later(const char *path, unsigned char *own, size_t len) { /* own: malloc'd, taken */
-  CW *w = malloc(sizeof *w); snprintf(w->path, sizeof w->path, "%s", path); w->data = own; w->len = len; w->next = NULL;
+static void write_later(const char *path, unsigned char *own, size_t len, unsigned version) { /* own: malloc'd, taken */
+  CW *w = malloc(sizeof *w); snprintf(w->path, sizeof w->path, "%s", path); w->data = own; w->len = len; w->version = version; w->next = NULL;
   pthread_mutex_lock(&cwMu);
   if (!cwThread) { pthread_t t; if (pthread_create(&t, NULL, cw_run, NULL) == 0) { pthread_detach(t); cwThread = 1; } }
-  if (!cwThread) { pthread_mutex_unlock(&cwMu); write_all(w->path, w->data, w->len); free(w->data); free(w); return; }
+  if (!cwThread) { pthread_mutex_unlock(&cwMu); write_job(w); free(w->data); free(w); return; }
   if (cwTail) cwTail->next = w; else cwHead = w; cwTail = w; pthread_cond_signal(&cwCv); pthread_mutex_unlock(&cwMu);
 }
 static void cache_path(const char *key, char *out, size_t cap);
-void cache_write(const char *key, const unsigned char *data, size_t len) { char p[1200]; cache_path(key, p, sizeof p); unsigned char *c = malloc(len ? len : 1); memcpy(c, data, len); write_later(p, c, len); }
+void cache_write(const char *key, const unsigned char *data, size_t len) { char p[1200]; cache_path(key, p, sizeof p); unsigned char *c = malloc(len ? len : 1); memcpy(c, data, len); write_later(p, c, len, 0); }
 void store_flush(void) {
   if (!dirty) return; dirty = 0;
   char *t = cJSON_PrintUnformatted(root); if (!t) return;
-  if (!write_all(path, t, strlen(t))) fprintf(stderr, "[store] could not write %s\n", path);
+  if (!write_state(path, t, strlen(t), serial)) { dirty = 1; fprintf(stderr, "[store] could not write %s\n", path); }
   free(t);
 }
 /* while running, the state is printed here and written by the writer thread (the file is a few hundred KB with a
    library); store_flush() at exit writes it at once */
 void store_pump(void) {
   if (!dirty || SDL_GetTicks() - dirtyAt <= 1500) return; dirty = 0;
-  char *t = cJSON_PrintUnformatted(root); if (t) write_later(path, (unsigned char *)t, strlen(t));
+  char *t = cJSON_PrintUnformatted(root); if (t) write_later(path, (unsigned char *)t, strlen(t), serial);
 }
 
 /* ---- file cache ---------------------------------------------------------------------------- */

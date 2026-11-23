@@ -50,6 +50,11 @@ Developed and tested on webOS 4.4, and reported working on webOS 4 to 25. [More]
 - No analytics. Nothing is sent to the developer.
 - Logs stay on the TV. Sharing them is your choice: Settings > About > Share logs.
 
+## Viewer profiles
+Choose a profile at launch or select your avatar in the top bar to switch viewers. Hold OK on a profile in the picker to manage it.
+
+Profiles share the TV’s Stremio sign-in and addons. The default profile keeps the existing library and Continue Watching sync with Stremio. Additional profiles keep their library, watched state and playback progress on this TV. Each profile can link its own Trakt account from Settings.
+
 ## Trakt
 Trakt is optional. You link it with a code and the sign-in stays on the TV. While it is linked, what you watch is added to your Trakt history. The app also reads your Trakt name and stats, history, watchlist, recommendations, watched marks and paused positions, only to show them in the app. Unlink any time: Settings > Trakt > Disconnect Trakt.
 

@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 /* What the connected Trakt account has watched (see traktwatch.h) */
 #define _DEFAULT_SOURCE /* (timegm) */
 #include "core/traktwatch.h"
@@ -80,7 +81,7 @@ static char *to_disk(const TwData *d) {
     for (int k = 0; k < s->n; k++) { cJSON_AddItemToArray(eps, cJSON_CreateNumber(s->se[k] >> 16)); cJSON_AddItemToArray(eps, cJSON_CreateNumber(s->se[k] & 0xffff)); cJSON_AddItemToArray(eps, cJSON_CreateNumber((double)s->eat[k])); }
     cJSON_AddItemToArray(e, eps); cJSON_AddItemToArray(sa, e); }
   char *t = cJSON_PrintUnformatted(o); cJSON_Delete(o); return t; }
-static void disk_path(char *p, size_t cap) { snprintf(p, cap, "%s/trakt-watched.json", store_data_dir()); }
+static void disk_path(char *p, size_t cap) { profiles_file(profiles_active(), "trakt-watched.json", p, cap); }
 
 typedef struct { int kind, gen; char *body; char path[1200]; TwData *d; TwM *m; int nm; TwS *s; int ns; } Job; /* kind: 0 the disk copy, 1 films, 2 shows, 3 a write */
 static void job_done(int st, const unsigned char *b, size_t n, void *ud);
@@ -153,6 +154,7 @@ int tw_on(void) { return scrobble_state() == TRAKT_LINKED && strcmp(store_get("t
 int tw_cw_on(void) { return scrobble_state() == TRAKT_LINKED && strcmp(store_get("traktCw", "true"), "false") != 0; }
 unsigned tw_ver(void) { return ver; }
 void tw_tick(void) {
+  if (!profiles_active()) return;
   if (scrobble_state() != TRAKT_LINKED) return;
   double now = app_now();
   if (!W.loaded && !W.writes) { W.loaded = 1; /* (never while a write is out: one for a connection gone could be read back) */ W.nextAt = now + 5; Job *k = calloc(1, sizeof *k); if (k) { k->kind = 0; k->gen = (int)gen; disk_path(k->path, sizeof k->path); job_start(k); } } /* the disk copy first, Trakt a moment after the start */
@@ -178,7 +180,7 @@ int tw_ep(const char *showId, int season, int episode) {
   char key[48]; snprintf(key, sizeof key, "%s:%d:%d", showId, season, episode); long long h = hidden_at(key); return !h || at > h; }
 
 /* ---- by hand ---- */
-static void on_added(int st, const unsigned char *b, size_t n, void *ud) { (void)b; (void)n; (void)ud;
+static void on_added(int st, const unsigned char *b, size_t n, void *ud) { (void)b; (void)n; if ((unsigned)(uintptr_t)ud != gen) return;
   if (st == 201 || st == 200) { fprintf(stderr, "[trakt] added to the history by hand\n"); if (W.nextAt > app_now() + AFTER_FILM) W.nextAt = app_now() + AFTER_FILM; } /* (read back soon: the marks then come from Trakt too) */
   else fprintf(stderr, "[trakt] the history not added to (%d)%s\n", st, st == 420 ? ": the account's limit" : ""); }
 static int may_add(void) { return tw_on() && scrobble_on(); } /* (tracking switched off: nothing told to Trakt) */
@@ -188,7 +190,7 @@ void tw_mark_movie(const char *id, int on) {
   if (hidden_at(id)) hide_set(id, 0);
   if (!may_add() || find_m(id)) return; /* (Trakt has it: a second play would count it twice) */
   cJSON *o = cJSON_CreateObject(), *ms = cJSON_AddArrayToObject(o, "movies"), *m = cJSON_CreateObject(), *ids = cJSON_AddObjectToObject(m, "ids");
-  cJSON_AddStringToObject(ids, "imdb", id); cJSON_AddItemToArray(ms, m); scrobble_post("/sync/history", o, on_added, NULL); }
+  cJSON_AddStringToObject(ids, "imdb", id); cJSON_AddItemToArray(ms, m); scrobble_post("/sync/history", o, on_added, (void *)(uintptr_t)gen); }
 void tw_mark_eps(const char *showId, const int *se, int n, int on) {
   if (!tw_on() || !is_tt(showId) || n <= 0) return; const TwS *s = find_s(showId); char key[48];
   if (!on) { for (int i = 0; i < n; i++) if (ep_at(s, se[2 * i], se[2 * i + 1]) >= 0) { snprintf(key, sizeof key, "%s:%d:%d", showId, se[2 * i], se[2 * i + 1]); hide_set(key, 1); } return; }
@@ -201,7 +203,7 @@ void tw_mark_eps(const char *showId, const int *se, int n, int on) {
     if (!sea) { sea = cJSON_CreateObject(); cJSON_AddNumberToObject(sea, "number", sn); cJSON_AddArrayToObject(sea, "episodes"); cJSON_AddItemToArray(seasons, sea); }
     cJSON *e = cJSON_CreateObject(); cJSON_AddNumberToObject(e, "number", en); cJSON_AddItemToArray(cJSON_GetObjectItemCaseSensitive(sea, "episodes"), e); added++; }
   cJSON_AddItemToArray(shows, sh); if (!added) { cJSON_Delete(o); return; }
-  scrobble_post("/sync/history", o, on_added, NULL); }
+  scrobble_post("/sync/history", o, on_added, (void *)(uintptr_t)gen); }
 int tw_plays(const TwPlay **out) { *out = PB; return tw_cw_on() ? npb : 0; }
 const TwPlay *tw_play_of(const char *id) { if (!tw_cw_on() || !id) return NULL; for (int i = 0; i < npb; i++) if (!strcmp(PB[i].id, id)) return &PB[i]; return NULL; } /* (newest first: the first is the newest) */
 static void on_play_deleted(int st, const unsigned char *b, size_t n, void *ud) { (void)b; (void)n; (void)ud; fprintf(stderr, "[trakt] a paused position %s (%d)\n", st == 204 || st == 200 ? "deleted" : "not deleted, hidden here", st); }
@@ -212,7 +214,10 @@ void tw_play_drop(const char *id) {
     if (c) cJSON_AddItemToArray(c, cJSON_CreateNumber((double)PB[i].pid)); } /* (and never shown here again, whatever Trakt answers) */
   if (c) { while (cJSON_GetArraySize(c) > 200) cJSON_DeleteItemFromArray(c, 0); store_set_node("twPbDrop", c); }
   if (k != npb) { npb = k; ver++; } }
-void tw_forget(void) {
+void tw_reset(void) {
   gen++; data_free(D); D = NULL; finish(0); W.loaded = 0; W.needM = W.needE = W.needP = 0; ver++; /* (writes still out: counted down as they come back) */
-  free(PB); PB = NULL; npb = 0; pbActs[0] = 0;
+  free(PB); PB = NULL; npb = 0; pbActs[0] = 0; W.wasOpen = 0;
+}
+void tw_forget(void) {
+  tw_reset();
   char p[1200]; disk_path(p, sizeof p); remove(p); store_remove("twHide"); store_remove("twPbDrop"); }

@@ -1023,6 +1023,13 @@ void tabs_warm_tick(void) {
   if (done || now - tabAt > 10) { static const char *const nm[3] = { "Discover", "Home", "Library" }; fprintf(stderr, "[warm] %s %s in %.1f s\n", nm[step], done ? "ready" : "gave up", now - tabAt); step++; tabAt = 0; }
 }
 void board_invalidate(void) { boards[0].built = 0; }
+void board_profile_changed(void) {
+  for (int i = 0; i < 2; i++) {
+    boards[i].built = 0;
+    boards[i].gen++;
+    boards[i].rowIdx = 0;
+  }
+}
 /* the bar hands the focus down: the first row (Discover: its spotlight) */
 void board_from_bar(void) { Board *b = cur(); if (!b) return; int n = first_visible_row(b, 0, 1); b->rowIdx = n >= 0 ? n : 0;
   if (b->kind == 1) { b->featOn = 1; feat_arm(b); } hero_soon(b, 150); }

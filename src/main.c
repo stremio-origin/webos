@@ -97,6 +97,8 @@ static int vsyncOn __attribute__((unused));   /* SB_VSYNC=1: let the driver wait
 #include "screens/search.h"
 #include "screens/settings.h"
 #include "screens/splash.h"
+#include "screens/profiles.h"
+#include "core/profiles.h"
 #include "screens/player.h"
 #include "core/away.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -232,7 +234,7 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 #endif
   gl_config(getenv("SB_GLCFG") ? atoi(getenv("SB_GLCFG")) : 0); /* 0 RGBA8, 1 RGB8 (no alpha), 2 RGB565: which surface the compositor takes without a copy */
-  store_init(plat_data_dir()); /* before the window: the drawing size is a setting */
+  store_init(plat_data_dir()); profiles_init(); /* before the window: the drawing size is a setting */
   { extern void supportcard_start(int autoReload); supportcard_start(argc > 1 && argv[1] && strstr(argv[1], "autoReload") != NULL); } /* (a real start counted for the support card; the TV relaunching it on its own is not one) */
   int memMb = plat_mem_total_mb();
   int w, h; Uint32 flags; plat_window_size(&w, &h, &flags);
@@ -292,10 +294,10 @@ int main(int argc, char **argv) {
   if (getenv("SB_SUPCARD_FIT")) { extern int supportcard_fit_check(const char *assetDir); int bad = supportcard_fit_check(plat_asset_dir()); return bad ? 2 : 0; } /* (development / test: the support card's words in every language against the card) */
   text_set_rtl(i18n_rtl()); icon_init(plat_asset_dir()); sb_init();
   app_init(); player_init();
-  app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen);
+  app_register(SCR_PROFILES, &profileScreen); app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen);
   app_register(SCR_DETAIL, &detailScreen); app_register(SCR_SIM, &simScreen); app_register(SCR_SEARCH, &searchScreen); app_register(SCR_SET, &setScreen); app_card_menu_hook = cwmenu_show;
-  if (sb_signed_in() || getenv("SB_SKIP_LOGIN")) { app_go(SCR_HOME, NULL, 1); splash_start(1, 0); } /* SB_SKIP_LOGIN: the default rows without an account (development) */
-  else { app_splash_done = 1; app_go(SCR_LOGIN, NULL, 1); }
+  if (getenv("SB_SKIP_LOGIN")) { profiles_select(profiles_id(0)); app_go(SCR_HOME, NULL, 1); splash_start(1, 0); } /* development without an account */
+  else { app_splash_done = 1; app_go(sb_signed_in() ? SCR_PROFILES : SCR_LOGIN, NULL, 1); }
 
   const char *shot = getenv("SB_SHOT"); int shotAt = shot ? atoi(getenv("SB_SHOT_FRAME") ? getenv("SB_SHOT_FRAME") : "40") : -1;
   const char *script = getenv("SB_SCRIPT");
