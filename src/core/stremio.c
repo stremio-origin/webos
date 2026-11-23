@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 #include "platform/plat.h"
 #include <pthread.h>
 #include "core/notify.h"
@@ -86,7 +87,24 @@ void sb_logout(void) {
   sb_forget_local();
 }
 static unsigned adGen; static int adGenOk; /* (see addon_gen) */
-void sb_forget_local(void) { if (scrobble_state() != TRAKT_OFF) scrobble_unlink(); tw_forget(); /* (Trakt goes with the account: connected under it, never left for the next one) */ store_remove("authKey"); store_remove("user"); store_remove("addons"); store_remove("lib"); store_remove("streams"); store_flush(); lib_invalidate(); adGenOk = 0; }
+void sb_forget_local(void) {
+  if (profiles_active()) {
+    if (scrobble_state() != TRAKT_OFF) scrobble_unlink();
+    tw_forget();
+  }
+  scrobble_reset();
+  notify_reset();
+  profiles_deselect();
+  for (int i = 0; i < profiles_count(); i++) profiles_clear_data(profiles_id(i));
+  store_remove("authKey");
+  store_remove("user");
+  store_remove("addons");
+  store_flush();
+  libSyncing = 0;
+  libSyncT = 0;
+  lib_invalidate();
+  adGenOk = 0;
+}
 /* addons */
 cJSON *sb_addons(void) { cJSON *a = store_node("addons"); return cJSON_IsArray(a) ? a : NULL; }
 /* a number for the addons as they are set up now (their addresses, which carry their configuration): the title
@@ -101,7 +119,10 @@ static unsigned addon_gen(void) {
 /* an addon can be switched off on this TV only (Settings > Addons): a local choice, never synced back to the
    account. Off, it gives no rows, metadata or streams here */
 void sb_addon_key(const cJSON *a, char *out, size_t cap) { const char *id = js_str(js_obj(a, "manifest"), "id", NULL); copy_str(out, cap, id && *id ? id : js_str(a, "transportUrl", "")); }
-int sb_addon_on(const cJSON *a) { char k[300], sk[320]; sb_addon_key(a, k, sizeof k); snprintf(sk, sizeof sk, "adOn_%s", k); return strcmp(store_get(sk, "true"), "false") != 0; }
+int sb_addon_on(const cJSON *a) {
+  if (profiles_active() > PROFILE_DEFAULT && strstr(js_str(a, "transportUrl", ""), "strem.io/trakt/addon/"))
+    return 0; // This add-on exposes the shared Stremio account's Trakt history.
+  char k[300], sk[320]; sb_addon_key(a, k, sizeof k); snprintf(sk, sizeof sk, "adOn_%s", k); return strcmp(store_get(sk, "true"), "false") != 0; }
 typedef struct { void (*cb)(int, void *); void *ud; } ChBox;
 /* the last sync's outcome: how many addons came in and went out (by address) */
 static int addAdded, addRemoved;
@@ -519,8 +540,10 @@ static cJSON *lib_arr(void) { cJSON *l = store_node("lib"); if (!cJSON_IsObject(
 cJSON *lib_get(const char *id) { return cJSON_GetObjectItemCaseSensitive(lib_arr(), id); }
 int lib_has(const char *id) { cJSON *it = lib_get(id); return it && !js_bool(it, "removed", 1); }
 void lib_invalidate(void) { libVer++; }
+void lib_reset_sync(void) { libSyncing = 0; libSyncT = 0; }
 unsigned lib_version(void) { return libVer; }
 static void push_item(cJSON *it) {
+  if (profiles_active() != PROFILE_DEFAULT) return;
   const char *ak = sb_auth_key(); if (!ak) return;
   cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "authKey", ak); cJSON_AddStringToObject(o, "collection", "libraryItem"); cJSON *ch = cJSON_CreateArray(); cJSON_AddItemToArray(ch, cJSON_Duplicate(it, 1)); cJSON_AddItemToObject(o, "changes", ch);
   char *body = cJSON_PrintUnformatted(o); cJSON_Delete(o); net_post_json(STREMIO_API "/api/datastorePut", body, NULL, NULL); free(body);
@@ -892,10 +915,12 @@ static int lib_migrate_legacy(void) {
 unsigned sb_lib_sync_age(void) { return libSyncT ? SDL_GetTicks() - libSyncT : 0xffffffffu; }
 
 /* two-way sync with the account, newest _mtime wins */
-typedef struct { void (*cb)(int, void *); void *ud; int changed; char (*ids)[SB_ID]; int nwant, at; } PullReq; /* ids: every title the account has newer, newest first */
+typedef struct { void (*cb)(int, void *); void *ud; int changed; unsigned session; char (*ids)[SB_ID]; int nwant, at; } PullReq; /* ids: every title the account has newer, newest first */
 static void pull_next(PullReq *r);
 static void on_pull_get(int st, const unsigned char *b, size_t n, void *ud) {
-  PullReq *r = ud; cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *items = js_arr(j, "result"), *it;
+  PullReq *r = ud;
+  if (r->session != profiles_session()) { free(r->ids); free(r); return; }
+  cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *items = js_arr(j, "result"), *it;
   if (items) cJSON_ArrayForEach(it, items) { const char *id = js_str(it, "_id", NULL); if (id) { cJSON_DeleteItemFromObjectCaseSensitive(lib_arr(), id); cJSON_AddItemToObject(lib_arr(), id, cJSON_Duplicate(it, 1)); r->changed = 1; } }
   net_json_free(j); pull_next(r);
 }
@@ -909,7 +934,9 @@ static void pull_next(PullReq *r) {
 typedef struct { char id[SB_ID]; double mt; } Want; /* a title the account has newer, and when it changed there */
 static int want_newer(const void *a, const void *b) { double x = ((const Want *)a)->mt, y = ((const Want *)b)->mt; return x < y ? 1 : x > y ? -1 : 0; }
 static void on_pull_meta(int st, const unsigned char *b, size_t n, void *ud) {
-  PullReq *r = ud; cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *rows = js_arr(j, "result");
+  PullReq *r = ud;
+  if (r->session != profiles_session()) { free(r->ids); free(r); return; }
+  cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *rows = js_arr(j, "result");
   if (!rows) { net_json_free(j); libSyncing = 0; int ch = lib_migrate_legacy(); if (r->cb) r->cb(ch, r->ud); free(r); return; }
   cJSON *lib = lib_arr(); const cJSON *row; cJSON *remote = cJSON_CreateObject();
   /* what the account has newer than us */
@@ -933,10 +960,10 @@ static void on_pull_meta(int st, const unsigned char *b, size_t n, void *ud) {
   net_json_free(j); pull_next(r);
 }
 void sb_pull_library(void (*cb)(int, void *), void *ud) {
-  const char *ak = sb_auth_key(); if (!ak || libSyncing) { if (cb) cb(0, ud); return; }
+  const char *ak = sb_auth_key(); if (!ak || libSyncing || profiles_active() != PROFILE_DEFAULT) { if (cb) cb(0, ud); return; }
   libSyncing = 1; libSyncT = SDL_GetTicks();
   cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "authKey", ak); cJSON_AddStringToObject(o, "collection", "libraryItem"); char *body = cJSON_PrintUnformatted(o); cJSON_Delete(o);
-  PullReq *r = calloc(1, sizeof *r); r->cb = cb; r->ud = ud; net_post_json(STREMIO_API "/api/datastoreMeta", body, on_pull_meta, r); free(body);
+  PullReq *r = calloc(1, sizeof *r); r->cb = cb; r->ud = ud; r->session = profiles_session(); net_post_json(STREMIO_API "/api/datastoreMeta", body, on_pull_meta, r); free(body);
 }
 
 /* ---- streams ------------------------------------------------------------------------------- */

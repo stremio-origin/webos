@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 #include "core/notify.h"
 #include "core/away.h"
 #include "core/sync.h"
@@ -33,12 +34,13 @@ void sb_sync_soon(int force) {
 }
 void sync_init(void) {
   bootAt = idleAt = app_now();
-  if (!sb_signed_in()) libBoot = addonBoot = 1; /* signing in fetches both itself */
+  if (!sb_signed_in()) addonBoot = 1; /* signing in fetches both itself */
   SDL_AddEventWatch(on_event, NULL);
 }
 static void on_notify(void) { board_invalidate(); if (!rebuildWanted) { rebuildWanted = 1; rebuildSince = app_now(); } } /* new episodes or what is coming changed: the rows again, in a pause */
 void sync_tick(void) {
   double now = app_now();
+  if (!profiles_active()) return;
   notify_tick(on_notify);
   if (!libBoot && now - bootAt >= 0.7) { libBoot = 1; sb_pull_library(on_lib, NULL); }
   if (!addonBoot && now - bootAt >= 0.9) { addonBoot = 1; sb_sync_addons(on_addons, NULL); }

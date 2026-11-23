@@ -102,6 +102,7 @@ cJSON *lib_new_item(const Item *it);
 void lib_save(cJSON *lit);              /* mtime, store, push */
 /* force = push to the account now (pause, close, end); otherwise at most once a minute */
 void lib_set_progress(const char *id, const Item *it, const char *vid, double timeOffsetMs, double durationMs, int force);
+void lib_reset_sync(void);
 void lib_invalidate(void);
 unsigned lib_version(void);             /* bumps on every change: boards rebuild when it moves */
 

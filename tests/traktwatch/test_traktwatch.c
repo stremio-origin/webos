@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 /* tests/traktwatch: what the Trakt account has watched (src/core/traktwatch.c) against a stand-in Trakt, clock and
    store: the disk copy, the checks and what they ask, the marks shown, hidden by hand and added by hand. Its thread
    runs for real; what it hands back is run here, as the drawing thread would. tests/traktwatch/run.sh */
@@ -19,6 +20,12 @@ double app_now(void) { return clk; }
 int player_open(void) { return playing; }
 void plat_thread_background(int n) { (void)n; }
 const char *store_data_dir(void) { return dataDir; }
+static int active_profile = PROFILE_DEFAULT;
+int profiles_active(void) { return active_profile; }
+void profiles_file(int id, const char *file, char *path, size_t cap) {
+  if (id == PROFILE_DEFAULT) snprintf(path, cap, "%s/%s", dataDir, file);
+  else snprintf(path, cap, "%s/profile-%d-%s", dataDir, id, file);
+}
 const char *store_get(const char *k, const char *d) { return !strcmp(k, "traktMarks") ? marks : !strcmp(k, "traktCw") ? cwSet : d; }
 cJSON *store_node(const char *k) { return cJSON_GetObjectItemCaseSensitive(root, k); }
 void store_set_node(const char *k, cJSON *n) { cJSON_DeleteItemFromObjectCaseSensitive(root, k); cJSON_AddItemToObject(root, k, n); }

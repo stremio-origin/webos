@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 /* tests/traktrows: Trakt's rows on Home (src/core/traktrows.c) against a stand-in Trakt: which rows Home gets, what
    each list asks, and the answers made an addon's (one card a title, IMDb ids only). tests/traktrows/run.sh */
 #include "core/traktrows.h"
@@ -67,3 +68,6 @@ int main(void) {
   cJSON_Delete(addons);
   printf(fails ? "%d failed\n" : "all ok\n", fails); return fails ? 1 : 0;
 }
+
+int profiles_active(void) { return PROFILE_DEFAULT; }
+unsigned scrobble_generation(void) { return 1; }

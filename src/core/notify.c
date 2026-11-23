@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 #include "core/notify.h"
 #include "core/addons.h"
 #include "core/net.h"
@@ -59,7 +60,10 @@ static void take(const cJSON *metas, int calendar) {
   }
 }
 static void on_answer(int st, const unsigned char *b, size_t n, void *ud) {
-  (void)n; int calendar = (int)(intptr_t)ud; cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *ms = js_arr(j, "metasDetailed"); if (!ms) ms = js_arr(j, "metas");
+  (void)n;
+  uintptr_t context = (uintptr_t)ud;
+  if ((unsigned)(context >> 1) != (profiles_session() & (UINTPTR_MAX >> 1))) return;
+  int calendar = context & 1; cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *ms = js_arr(j, "metasDetailed"); if (!ms) ms = js_arr(j, "metas");
   if (ms && N.eps) { N.gotAny = 1; take(ms, calendar); } else fprintf(stderr, "[notify] a %s catalog didn't answer (%d)\n", calendar ? "calendar" : "new episodes", st);
   net_json_free(j); if (--N.pending <= 0) finish();
 }
@@ -82,9 +86,14 @@ static void ask(void) {
       if (!k) continue;
       char ex2[sizeof ids * 3 + 64] = ""; addon_extra_add(ex2, sizeof ex2, kind ? "calendarVideosIds" : "lastVideosIds", ids);
       char url[sizeof ex2 + 1024]; addon_url(url, sizeof url, base, "catalog", "series", js_str(cat, "id", ""), ex2);
-      N.pending++; net_get(url, on_answer, (void *)(intptr_t)kind);
+      N.pending++; net_get(url, on_answer, (void *)(((uintptr_t)profiles_session() << 1) | (unsigned)kind));
       fprintf(stderr, "[notify] asking %s about %d series (%s)\n", addon_name(ad), k, kind ? "coming" : "new episodes"); } }
   if (--N.pending <= 0) finish();
+}
+void notify_reset(void) {
+  cJSON_Delete(N.eps);
+  cJSON_Delete(N.up);
+  memset(&N, 0, sizeof N);
 }
 void notify_refresh(void) { N.force = 1; }
 void notify_tick(void (*changed)(void)) {

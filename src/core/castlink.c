@@ -2,6 +2,7 @@
    moment to start at), its keys through the app's own keys; the pairing code shows on a small glass pill at the top,
    and a phone connecting or going is said once. */
 #include "core/castlink.h"
+#include "core/profiles.h"
 #include "core/cast.h"
 #include "core/app.h"
 #include "core/keys.h"
@@ -28,6 +29,7 @@ static const char *tv_name(void) { return plat_device_name(); }
 static void on_live_fail(const char *id, const char *code, int back) { if (!cast_phones()) return; fprintf(stderr, "[cast] channel %s did not play (%s)%s: phones told\n", id, code, back ? ", the one before plays on" : "");
   cast_error(T("This channel isn't broadcasting right now"), code, id, back); }
 static void on_play(const CastPlay *p) {
+  if (!profiles_active() || SCR == SCR_PROFILES) return;
   app_activity();
   snprintf(castTitle, sizeof castTitle, "%s", p->title);
   if (live_type(p->type) && *p->id) { /* a channel from a phone: started as one picked here (its own stream found, the channel player, Up / Down along its line-up) */
@@ -43,6 +45,7 @@ static void on_play(const CastPlay *p) {
 /* the phone names a title and this TV finds its stream (its own best-stream choice, as with best stream on here): the
    title's pictures at once, "choosing" told to the phone while it searches, then it plays from pos (0: from the start) */
 static void on_playbest(const CastPlay *p) {
+  if (!profiles_active() || SCR == SCR_PROFILES) return;
   app_activity();
   snprintf(castTitle, sizeof castTitle, "%s", p->title);
   const char *type = *p->type ? p->type : "movie", *id = p->id; char vid[SB_VID];
@@ -54,6 +57,7 @@ static void on_cmd(int cmd, double pos) { static const char *N[] = { "", "pause"
 static void on_track(const char *k, const char *id, int ms) { app_activity(); player_cast_track(k, id, ms); }
 static int on_state(double *pos, double *dur, char *title, int cap) { int s = player_cast_state(pos, dur, title, cap); if (s && !title[0]) snprintf(title, (size_t)cap, "%s", castTitle); return s; } /* (no title known here: the phone's own) */
 static void on_key(int k) {
+  if (k == CAST_K_HOME && (!profiles_active() || SCR == SCR_PROFILES)) return;
   if (k == CAST_K_HOME) { if (player_open()) player_cast(4, 0); else app_go(SCR_HOME, NULL, 1); return; }
   static const int M[] = { 0, K_UP, K_DOWN, K_LEFT, K_RIGHT, K_OK, K_BACK, 0, K_PLAY, K_PAUSE };
   int ak = k > 0 && k < 10 ? M[k] : 0; if (!ak) return; app_key(ak, 1, 0); app_key(ak, 0, 0);
