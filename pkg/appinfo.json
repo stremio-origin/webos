@@ -7,6 +7,8 @@
   "title": "Stremio Origin",
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
+  "splashBackground": "launchSplash.png",
+  "spinnerOnLaunch": false,
   "bgImage": "bgImage.png",
   "imageForRecents": "imageForRecents.png",
   "bgColor": "#0c0b11",
