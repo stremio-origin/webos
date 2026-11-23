@@ -81,14 +81,30 @@ static unsigned char *rasterise(Shape *sh, float vb, int px) {
 /* an outlined icon (stroke-width in the SVG, round caps and joins): coverage from the distance to the path,
    one sample per pixel with a one-pixel soft edge */
 static unsigned char *rasterise_stroke(Shape *sh, float vb, int px, float sw) {
-  unsigned char *out = malloc((size_t)px * px); float k = px / vb, hw = sw * k / 2;
-  for (int y = 0; y < px; y++) for (int x = 0; x < px; x++) {
-    float X = x + .5f, Y = y + .5f, best = 1e9f;
-    for (int pi = 0; pi < sh->n; pi++) { Poly *p = &sh->polys[pi];
-      for (int i = 0; i + 1 < p->n; i++) { float ax = p->p[i].x * k, ay = p->p[i].y * k, bx = p->p[i + 1].x * k, by = p->p[i + 1].y * k;
-        float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 > 0 ? ((X - ax) * dx + (Y - ay) * dy) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
-        float ex = ax + dx * t - X, ey = ay + dy * t - Y, d2 = ex * ex + ey * ey; if (d2 < best) best = d2; } }
-    float c = hw - sqrtf(best) + .5f; out[y * px + x] = (unsigned char)(c <= 0 ? 0 : c >= 1 ? 255 : c * 255 + .5f); }
+  unsigned char *out = calloc((size_t)px * px, 1);
+  float k = px / vb, hw = sw * k / 2, edge = hw + .5f;
+  for (int pi = 0; pi < sh->n; pi++) {
+    Poly *p = &sh->polys[pi];
+    for (int i = 0; i + 1 < p->n; i++) {
+      float ax = p->p[i].x * k, ay = p->p[i].y * k;
+      float bx = p->p[i + 1].x * k, by = p->p[i + 1].y * k;
+      float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      int x0 = (int)fmaxf(0, floorf(fminf(ax, bx) - edge));
+      int y0 = (int)fmaxf(0, floorf(fminf(ay, by) - edge));
+      int x1 = (int)fminf(px, ceilf(fmaxf(ax, bx) + edge));
+      int y1 = (int)fminf(px, ceilf(fmaxf(ay, by) + edge));
+      /* Only pixels within the segment's stroke can contribute coverage. */
+      for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
+        float X = x + .5f, Y = y + .5f;
+        float t = l2 > 0 ? ((X - ax) * dx + (Y - ay) * dy) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        float ex = ax + dx * t - X, ey = ay + dy * t - Y;
+        float c = hw - sqrtf(ex * ex + ey * ey) + .5f;
+        unsigned char coverage = (unsigned char)(c <= 0 ? 0 : c >= 1 ? 255 : c * 255 + .5f);
+        if (coverage > out[y * px + x]) out[y * px + x] = coverage;
+      }
+    }
+  }
   return out;
 }
 
