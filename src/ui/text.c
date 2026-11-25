@@ -806,6 +806,18 @@ static uint32_t upper_cp(uint32_t c, int turkish) {
   if (c >= 0x430 && c <= 0x44F) return c - 0x20;
   if (c >= 0x450 && c <= 0x45F) return c - 0x50;
   if (c >= 0x3B1 && c <= 0x3C9 && c != 0x3C2) return c - 0x20;
+  if (c == 0x3C2) return 0x3A3;
+  switch (c) { /* Greek capitals take no tonos: ά έ ή ί ό ύ ώ → Α Ε Η Ι Ο Υ Ω; ΐ ΰ ϊ ϋ keep only the dialytika */
+    case 0x3AC: case 0x386: return 0x391;
+    case 0x3AD: case 0x388: return 0x395;
+    case 0x3AE: case 0x389: return 0x397;
+    case 0x3AF: case 0x38A: return 0x399;
+    case 0x3CC: case 0x38C: return 0x39F;
+    case 0x3CD: case 0x38E: return 0x3A5;
+    case 0x3CE: case 0x38F: return 0x3A9;
+    case 0x390: case 0x3CA: return 0x3AA;
+    case 0x3B0: case 0x3CB: return 0x3AB;
+  }
   return c;
 }
 void text_upper(char *s, size_t cap) {
