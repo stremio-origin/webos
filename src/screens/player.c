@@ -104,7 +104,7 @@ static float kf(double at, float dur, const float *c, float delay) { if (!at) re
 
 /* ---- state ---- */
 #define MAXBTN 8
-#define MAXROW 64
+#define MAXROW 256
 typedef struct { int k; /* 0 note 1 skel 2 ep 3 src 4 chip; ls: a subtitle row's list, 1 OpenSubtitles 2 the addons' */ char lb[200], sub[120], ov[300], th[512], vl[48]; int on, spin, tool, hid, grey; int i, ls; const cJSON *v; Stream *st; char u[1024]; float d, hh, ww, vw; uint32_t sw; int vwt; } TItem; /* vwt: the value's weight (0: 700), a font row's in its own font */ /* hh, ww, vw: measured on first draw (items are made fresh, zeroed) */
 typedef struct { char title[64], vl[32]; TItem *items; int n; } TCol;
 static float fill_ease(double t);
@@ -372,8 +372,9 @@ static const char *fail_reason(void) {
 /* episodes: a series, or any title whose metadata lists videos and where a video (not the title itself) plays (anime
    and channel addons give their own types: "anime", "tv"...; their ids may be "kitsu:123:5", with no season) */
 static int episodic(void) {
-  if (!strcmp(P.type, "series")) return 1;
-  if (!strcmp(P.type, "movie") || !strcmp(P.type, "other") || !P.vid[0] || !strcmp(P.vid, P.id)) return 0;
+  if (!strcmp(P.type, "series") || !strcasecmp(P.type, "Anime Series")) return 1;
+  if (!strcmp(P.type, "movie") || !strcasecmp(P.type, "Anime Movies") || !strcmp(P.type, "other") || !P.vid[0] || !strcmp(P.vid, P.id)) return 0;
+  if (sb_parse_video_id(P.id, P.vid, NULL, NULL) > 0) return 1;
   const cJSON *v = P.meta ? js_arr(P.meta, "videos") : NULL; return v && cJSON_GetArraySize(v) > 1;
 }
 static Item lib_item(void) { Item it; memset(&it, 0, sizeof it); snprintf(it.id, sizeof it.id, "%s", P.id); snprintf(it.type, sizeof it.type, "%s", P.type); snprintf(it.name, sizeof it.name, "%s", P.name); snprintf(it.poster, sizeof it.poster, "%s", P.poster); snprintf(it.background, sizeof it.background, "%s", P.bg); snprintf(it.logo, sizeof it.logo, "%s", P.logo); return it; }
@@ -1083,12 +1084,12 @@ static void load_skips(void) {
   memset(&P.skOn, 0, sizeof P.skOn); P.sk.tok = ++skTok & 0x3fffffff; if (!P.sk.tok) P.sk.tok = ++skTok; P.sk.d = (int)(dur() + 0.5); P.sk.endAt = now_() + 14; P.sk.pending = 1; /* 1 = still adding jobs */
   /* 0. the file's own chapters, when a reader is there */
   if (player_chapters_hook && !P.isHls) { P.sk.chapWait = 1; P.sk.pending++; player_chapters_hook(P.url, P.isP2p); }
-  char u[440]; const char *vid = P.vid; int ne = 0; const char *c = vid; while ((c = strchr(c, ':'))) { ne++; c++; }
-  if (!strncmp(vid, "kitsu:", 6)) { const char *a = vid + 6; const char *b = strchr(a, ':'); P.sk.en = b ? atoi(b + 1) : 1; char kid[32]; snprintf(kid, sizeof kid, "%.*s", b ? (int)(b - a) : (int)strlen(a), a);
+  char u[440]; const char *vid = P.vid;
+  if (!strncmp(vid, "kitsu:", 6)) { const char *a = vid + 6; const char *b = strchr(a, ':'); int kse = 0, kep = 0; int kp = sb_parse_video_id(P.id, vid, &kse, &kep); P.sk.en = kp > 0 && kep > 0 ? kep : 1; char kid[32]; snprintf(kid, sizeof kid, "%.*s", b ? (int)(b - a) : (int)strlen(a), a);
     if (atoi(kid) > 0) { snprintf(u, sizeof u, "https://kitsu.io/api/edge/anime/%d/mappings?filter%%5BexternalSite%%5D=myanimelist%%2Fanime", atoi(kid)); sk_job(u, SK_KITSU); } }
   const char *imdb = !strncmp(P.id, "tt", 2) ? P.id : !strncmp(vid, "tt", 2) ? vid : NULL;
   if (imdb) { char im[24]; int k = 2; while (k < 22 && isdigit((unsigned char)imdb[k])) k++; snprintf(im, sizeof im, "%.*s", k, imdb);
-    P.sk.isEp = !strcmp(P.type, "series") && ne >= 2; if (P.sk.isEp) { const char *l = strrchr(vid, ':'), *pp = l - 1; while (pp > vid && *pp != ':') pp--; P.sk.se = atoi(pp + 1); P.sk.en = atoi(l + 1); }
+    int se = 0, ep = 0; P.sk.isEp = sb_parse_video_id(P.id, vid, &se, &ep) == 1 && se > 0; if (P.sk.isEp) { P.sk.se = se; P.sk.en = ep; }
     if (P.sk.isEp) snprintf(u, sizeof u, "https://api.theintrodb.org/v3/media?imdb_id=%s&season=%d&episode=%d", im, P.sk.se, P.sk.en); else snprintf(u, sizeof u, "https://api.theintrodb.org/v3/media?imdb_id=%s", im); sk_job(u, SK_TIDB);
     if (P.sk.isEp) snprintf(u, sizeof u, "https://api.introdb.app/segments?imdb_id=%s&season=%d&episode=%d", im, P.sk.se, P.sk.en); else snprintf(u, sizeof u, "https://api.introdb.app/segments?imdb_id=%s&is_movie=true", im); sk_job(u, SK_IDB); }
   if (P.sk.tok) sk_done();
@@ -1363,7 +1364,7 @@ static void go_next(void) {
 /* ---- trays ---- */
 static int focusable(const TItem *it) { return it && it->k != 0 && it->k != 1; }
 static int first_on(const TItem *l, int n) { for (int i = 0; i < n; i++) if (l[i].on && focusable(&l[i])) return i; for (int i = 0; i < n; i++) if (focusable(&l[i])) return i; return -1; }
-static int season_of(const char *vid) { const char *c = strrchr(vid, ':'); if (!c) return 1; const char *p = c - 1; while (p > vid && *p != ':') p--; return *p == ':' ? atoi(p + 1) : 1; }
+static int season_of(const char *vid) { int se = 1, ep = 0; return sb_parse_video_id(P.id, vid, &se, &ep) == 1 && se >= 0 ? se : 1; }
 static TItem *add_item(TItem *list, int *n, int max, int k) { if (*n >= max) return NULL; TItem *it = &list[(*n)++]; memset(it, 0, sizeof *it); it->k = k; return it; }
 static TItem *col_add(TCol *c, int k) { c->items = realloc(c->items, (c->n + 1) * sizeof *c->items); TItem *it = &c->items[c->n++]; memset(it, 0, sizeof *it); it->k = k; return it; }
 static void cols_clear(void) { for (int i = 0; i < 4; i++) { free(P.tray.cols[i].items); P.tray.cols[i].items = NULL; P.tray.cols[i].n = 0; } P.tray.ncols = 0; }
@@ -1622,11 +1623,16 @@ static void tray_data(void) {
     for (int i = 1; i < ns; i++) for (int j = i; j > 0; j--) { int a = ss[j - 1], b = ss[j]; if ((a == 0 && b != 0) || (a != 0 && b != 0 && a > b)) { int tmp = ss[j]; ss[j] = ss[j - 1]; ss[j - 1] = tmp; } else break; }
     int found = 0; for (int i = 0; i < ns; i++) if (ss[i] == P.tray.season) found = 1; if (!found && ns) P.tray.season = ss[0];
     for (int i = 0; i < ns; i++) { P.tray.seasonList[i] = ss[i]; if (ss[i] == 0) snprintf(P.tray.tabs[i], 48, "%s", T("Specials")); else { char n[8]; snprintf(n, sizeof n, "%d", ss[i]); snprintf(P.tray.tabs[i], 48, "%s", T1("Season {n}", "n", n)); } if (ss[i] == P.tray.season) P.tray.tab = i; } P.tray.ntabs = ns;
-    const cJSON *eps[400]; int ne = 0; cJSON_ArrayForEach(v, P.videos) { int sn = cJSON_GetObjectItem(v, "season") ? (int)js_num(v, "season", 1) : 1; if (sn == P.tray.season && ne < 400) eps[ne++] = v; }
-    for (int i = 1; i < ne; i++) for (int j = i; j > 0 && js_num(eps[j - 1], "episode", 0) > js_num(eps[j], "episode", 0); j--) { const cJSON *tmp = eps[j]; eps[j] = eps[j - 1]; eps[j - 1] = tmp; }
+    const cJSON *eps[2048]; int ne = 0; cJSON_ArrayForEach(v, P.videos) { int sn = cJSON_GetObjectItem(v, "season") ? (int)js_num(v, "season", 1) : 1; if (sn == P.tray.season && ne < 2048) eps[ne++] = v; }
+    for (int i = 1; i < ne; i++) for (int j = i; j > 0 && js_num(eps[j - 1], "episode", js_num(eps[j - 1], "number", 0)) > js_num(eps[j], "episode", js_num(eps[j], "number", 0)); j--) { const cJSON *tmp = eps[j]; eps[j] = eps[j - 1]; eps[j - 1] = tmp; }
+    int start = 0;
+    if (ne > MAXROW) {
+      int curI = 0; for (int i = 0; i < ne; i++) if (!strcmp(js_str(eps[i], "id", ""), P.vid)) { curI = i; break; }
+      start = curI - MAXROW / 2; if (start < 0) start = 0; if (start > ne - MAXROW) start = ne - MAXROW;
+    }
     time_t nowT = time(NULL);
     static int wf[WATCH_MAX]; int sp = spoil_mode(); cJSON *wl = sp ? lib_get(P.id) : NULL; memset(wf, 0, sizeof wf); if (wl || (sp && tw_on())) lib_ep_watched_map(wl, P.videos, wf); /* (spoilers: what is watched, once per tray; a show not in the Library: nothing watched, hidden as on its page) */
-    for (int i = 0; i < ne && P.tray.n < MAXROW; i++) { const cJSON *e = eps[i]; TItem *x = add_item(P.tray.row, &P.tray.n, MAXROW, 2); x->v = e; int en = (int)js_num(e, "episode", 0); const char *nm = js_str(e, "name", js_str(e, "title", NULL));
+    for (int i = start; i < ne && P.tray.n < MAXROW; i++) { const cJSON *e = eps[i]; TItem *x = add_item(P.tray.row, &P.tray.n, MAXROW, 2); x->v = e; int en = (int)js_num(e, "episode", js_num(e, "number", 0)); const char *nm = js_str(e, "name", js_str(e, "title", NULL));
       if (nm) snprintf(x->lb, 200, "%d. %s", en, nm); else { char n[8]; snprintf(n, sizeof n, "%d", en); snprintf(x->lb, 200, "%d. %s", en, T1("Episode {n}", "n", n)); }
       const char *rel = js_str(e, "released", js_str(e, "firstAired", "")); int y, m, d; char ds[32] = ""; if (sscanf(rel, "%d-%d-%d", &y, &m, &d) == 3) snprintf(ds, sizeof ds, "%d/%d/%d", d, m, y);
       int up = 0; if (strlen(rel) >= 10) { struct tm tm; memset(&tm, 0, sizeof tm); if (sscanf(rel, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) == 3) { tm.tm_year -= 1900; tm.tm_mon--; up = timegm(&tm) > nowT; } }
@@ -1884,18 +1890,18 @@ static void fill_from_meta(void) {
   if (!P.poster[0]) snprintf(P.poster, sizeof P.poster, "%s", js_str(m, "poster", "")); snprintf(P.year, sizeof P.year, "%.4s", js_str(m, "releaseInfo", js_str(m, "year", "")));
   const cJSON *gs = js_arr(m, "genres"); if (gs && cJSON_GetArraySize(gs) && cJSON_IsString(cJSON_GetArrayItem(gs, 0))) snprintf(P.genre, sizeof P.genre, "%s", cJSON_GetArrayItem(gs, 0)->valuestring);
   { const cJSON *vv = js_arr(m, "videos"); if (!strcmp(P.type, "series") || (vv && cJSON_GetArraySize(vv) > 1 && strcmp(P.type, "movie") && strcmp(P.type, "other"))) P.videos = (cJSON *)vv; }
-  if (P.videos && strcmp(P.vid, P.id)) { P.season = P.episode = -1; /* from the video's own numbers; a series' id ("tt..:s:e") as the fallback (an anime id like "kitsu:123:5" is no season) */
-    { const char *c = strrchr(P.vid, ':'); if (c && !strcmp(P.type, "series")) { const char *p = c - 1; while (p > P.vid && *p != ':') p--; if (*p == ':') { P.season = atoi(p + 1); P.episode = atoi(c + 1); } } }
-    { const cJSON *v0; cJSON_ArrayForEach(v0, P.videos) if (!strcmp(js_str(v0, "id", ""), P.vid)) { if (js_num(v0, "season", -1) >= 0) P.season = (int)js_num(v0, "season", 0); if (js_num(v0, "episode", -1) >= 0) P.episode = (int)js_num(v0, "episode", 0); break; } }
-    const cJSON *cur = NULL, *nxt = NULL, *first = NULL, *v; cJSON_ArrayForEach(v, P.videos) { if (!strcmp(js_str(v, "id", ""), P.vid)) cur = v; int s = (int)js_num(v, "season", -1), e = (int)js_num(v, "episode", -1); if (s == P.season && e == P.episode + 1) nxt = v; if (P.season >= 0 && s == P.season + 1 && (!first || e < (int)js_num(first, "episode", 0))) first = v; }
+  if (P.videos && strcmp(P.vid, P.id)) { P.season = P.episode = -1; /* from the video's own numbers; id suffix as fallback (season-less anime like "kitsu:123:5" keeps season = -1) */
+    { int se = -1, ep = -1, vr = sb_parse_video_id(P.id, P.vid, &se, &ep); if (vr == 1) { P.season = se; P.episode = ep; } else if (vr == 2) P.episode = ep; }
+    { const cJSON *v0; cJSON_ArrayForEach(v0, P.videos) if (!strcmp(js_str(v0, "id", ""), P.vid)) { if (js_num(v0, "season", -1) >= 0) P.season = (int)js_num(v0, "season", 0); double ev = js_num(v0, "episode", js_num(v0, "number", -1)); if (ev >= 0) P.episode = (int)ev; break; } }
+    const cJSON *cur = NULL, *nxt = NULL, *first = NULL, *v; cJSON_ArrayForEach(v, P.videos) { if (!strcmp(js_str(v, "id", ""), P.vid)) cur = v; int s = (int)js_num(v, "season", -1), e = (int)js_num(v, "episode", js_num(v, "number", -1)); if (P.season >= 0 && s == P.season && e == P.episode + 1) nxt = v; if (P.season >= 0 && s == P.season + 1 && (!first || e < (int)js_num(first, "episode", js_num(first, "number", 0)))) first = v; }
     if (!nxt && first) nxt = first; /* last episode of a season -> first of the next one */
     if (cur && !nxt && js_num(cur, "season", -1) < 0) { /* no seasons (anime, channels): the next in the list, by episode number when given, else in order */
-      int ce = (int)js_num(cur, "episode", -1), seen = 0; const cJSON *after = NULL;
-      cJSON_ArrayForEach(v, P.videos) { if (ce >= 0 && (int)js_num(v, "episode", -1) == ce + 1) { nxt = v; break; } if (seen && !after) after = v; if (v == cur) seen = 1; }
+      int ce = (int)js_num(cur, "episode", js_num(cur, "number", P.episode)), seen = 0; const cJSON *after = NULL;
+      cJSON_ArrayForEach(v, P.videos) { if (ce >= 0 && (int)js_num(v, "episode", js_num(v, "number", -1)) == ce + 1) { nxt = v; break; } if (seen && !after) after = v; if (v == cur) seen = 1; }
       if (!nxt) nxt = after; }
     if (nxt) { const char *rel = js_str(nxt, "released", ""); struct tm tm; memset(&tm, 0, sizeof tm); if (strlen(rel) >= 10 && sscanf(rel, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) == 3) { tm.tm_year -= 1900; tm.tm_mon--; if (timegm(&tm) > time(NULL)) nxt = NULL; } } /* not out yet */
     if (cur) snprintf(P.epTitle, sizeof P.epTitle, "%s", js_str(cur, "name", js_str(cur, "title", "")));
-    if (nxt) { P.next.has = 1; snprintf(P.next.vid, 80, "%s", js_str(nxt, "id", "")); if (js_num(nxt, "season", -1) >= 0) snprintf(P.next.se, 32, "S%d · E%d", (int)js_num(nxt, "season", 0), (int)js_num(nxt, "episode", 0)); else if (js_num(nxt, "episode", -1) >= 0) snprintf(P.next.se, 32, "E%d", (int)js_num(nxt, "episode", 0)); else P.next.se[0] = 0; snprintf(P.next.title, 256, "%s", js_str(nxt, "name", js_str(nxt, "title", ""))); snprintf(P.next.thumb, 512, "%s", js_str(nxt, "thumbnail", "")); snprintf(P.next.ov, 600, "%s", js_str(nxt, "overview", js_str(nxt, "description", ""))); }
+    if (nxt) { P.next.has = 1; snprintf(P.next.vid, 80, "%s", js_str(nxt, "id", "")); int ne = (int)js_num(nxt, "episode", js_num(nxt, "number", -1)); if (js_num(nxt, "season", -1) >= 0) snprintf(P.next.se, 32, "S%d · E%d", (int)js_num(nxt, "season", 0), ne >= 0 ? ne : 0); else if (ne >= 0) snprintf(P.next.se, 32, "E%d", ne); else P.next.se[0] = 0; snprintf(P.next.title, 256, "%s", js_str(nxt, "name", js_str(nxt, "title", ""))); snprintf(P.next.thumb, 512, "%s", js_str(nxt, "thumbnail", "")); snprintf(P.next.ov, 600, "%s", js_str(nxt, "overview", js_str(nxt, "description", ""))); }
   } else if (P.type[0] && strcmp(P.type, "other")) P.sim = 1;
 }
 /* the title's metadata: from memory at once, else from the disk cache (that answer can come back before the player
@@ -2006,7 +2012,7 @@ static void prepare(const char *vid, double startAt, int keepSubs) {
   sync_stop(0); memset(&P, 0, sizeof P); sub_reset(); P.subReq = subReq; P.adxReq = adxReq; P.open = 1; P.openedAt = now_(); P.seekT = -1; P.curAud = -1; snprintf(P.curSub, sizeof P.curSub, "off");
   snprintf(P.type, sizeof P.type, "%s", type); snprintf(P.id, sizeof P.id, "%s", id); snprintf(P.vid, sizeof P.vid, "%s", v); if (aud_original_mode()) (void)tmdb_orig_lang(P.id); /* (Original audio: its language on its way while the film loads) */ snprintf(P.name, sizeof P.name, "%s", name); snprintf(P.poster, sizeof P.poster, "%s", poster); snprintf(P.bg, sizeof P.bg, "%s", bg); snprintf(P.logo, sizeof P.logo, "%s", logo);
   P.meta = meta; P.ext = keep; P.nExt = nkeep; P.adx = keepA; P.nAdx = nkeepA; P.startAt = startAt; aspect_load(); set_status("");
-  if (!strcmp(P.type, "series")) { const char *c = strrchr(P.vid, ':'); if (c && c > P.vid) { const char *q = c - 1; while (q > P.vid && *q != ':') q--; if (*q == ':') { P.season = atoi(q + 1); P.episode = atoi(c + 1); } } } /* known from the id, the metadata or not */
+  { int se = -1, ep = -1, vr = sb_parse_video_id(P.id, P.vid, &se, &ep); if (vr == 1) { P.season = se; P.episode = ep; } else if (vr == 2) P.episode = ep; } /* known from the id, the metadata or not */
   memset(&P.pg.g, 0, sizeof P.pg.g); P.pg.age = 0; P.pg.certAge = -1; P.pg.guideIn = P.pg.certIn = 0; P.pg.asked = 0; P.pg.sess++; P.pg.at = P.pg.askAt = 0; mo_set(&P.pgA, 0); mo_set(&P.pgY, -10);
   mo_set(&P.artA, artWas); mo_set(&P.in, again ? 1 : 0); mo_set(&P.lnA, 1); mo_set(&P.pwA, 0); mo_set(&P.pwF, 0); P.pw.on = 0; mo_set(&P.prB, 104); mo_set(&P.subB, SB_H * pos_pct() / 100.0f); mo_set(&P.ttlX, -30); mo_set(&P.barY, 18); mo_set(&P.btnY, 24); mo_set(&P.topY, -12); mo_set(&P.prY, 20); mo_set(&P.skS, 0); mo_set(&P.ccS, 1);
   fill_from_meta(); if (!P.logo[0] && !strncmp(P.id, "tt", 2)) snprintf(P.logo, sizeof P.logo, "https://images.metahub.space/logo/medium/%s/img", P.id);
@@ -2299,8 +2305,7 @@ static void loc_apply(void) {
   int st = tmdb_state(P.type, P.id, 0); if (st == TMDB_PENDING) return; P.locDone = 1; if (st != TMDB_READY) return;
   const TmdbLoc *L = tmdb_loc(P.type, P.id, 0); if (!L) return; const char *nm, *ov;
   if (P.season > 0 && P.episode > 0 && tmdb_episode(L, P.season, P.episode, &nm, &ov) && *nm) snprintf(P.epTitle, sizeof P.epTitle, "%s", nm);
-  if (P.next.has) { int s = 0, e = 0; const char *c = strrchr(P.next.vid, ':'); if (c && c > P.next.vid) { const char *q = c - 1; while (q > P.next.vid && *q != ':') q--; s = atoi(q + 1); e = atoi(c + 1); }
-    if (tmdb_episode(L, s, e, &nm, &ov)) { if (*nm) snprintf(P.next.title, sizeof P.next.title, "%s", nm); if (*ov) snprintf(P.next.ov, sizeof P.next.ov, "%s", ov); } }
+  if (P.next.has) { int s = 0, e = 0; if (sb_parse_video_id(P.id, P.next.vid, &s, &e) == 1 && s > 0 && e > 0 && tmdb_episode(L, s, e, &nm, &ov)) { if (*nm) snprintf(P.next.title, sizeof P.next.title, "%s", nm); if (*ov) snprintf(P.next.ov, sizeof P.next.ov, "%s", ov); } }
 }
 /* a picture that stopped while the TV still says "playing": the time runs on between the TV's reports, so a frozen
    playhead shows as the time pulled back by each report (or, where it is not run on, as a time that does not move) */

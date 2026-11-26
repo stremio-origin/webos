@@ -66,7 +66,8 @@ const char *detail_id(void) { return ID(); }
 /* episodic: a series, or a title of another kind whose details list videos of their own (an addon's anime, a channel);
    a title whose details name a default video plays that one, as a film */
 static int is_series(void) {
-  if (!strcmp(D.p.it.type, "series")) return 1; if (!D.meta || !strcmp(D.p.it.type, "movie") || js_str(js_obj(D.meta, "behaviorHints"), "defaultVideoId", NULL)) return 0;
+  if (!strcmp(D.p.it.type, "series") || !strcasecmp(D.p.it.type, "Anime Series")) return 1;
+  if (!D.meta || !strcmp(D.p.it.type, "movie") || !strcasecmp(D.p.it.type, "Anime Movies") || js_str(js_obj(D.meta, "behaviorHints"), "defaultVideoId", NULL)) return 0;
   const cJSON *v; cJSON_ArrayForEach(v, js_arr(D.meta, "videos")) { const char *id = js_str(v, "id", ""); if (*id && strcmp(id, D.p.it.id)) return 1; } return 0;
 }
 static const char *film_vid(void) { const char *dv = js_str(js_obj(D.meta, "behaviorHints"), "defaultVideoId", NULL); return dv && *dv ? dv : D.p.it.id; }
@@ -98,7 +99,12 @@ static void build_eps(void) {
 static void build_seasons(void) {
   D.ver++; for (int i = 0; i < D.nseasons; i++) free(D.seasons[i].eps); D.nseasons = 0;
   const cJSON *videos = js_arr(D.meta, "videos"); const cJSON *v;
-  cJSON_ArrayForEach(v, videos) { int sn = (int)js_num(v, "season", 0); int k = -1; for (int i = 0; i < D.nseasons; i++) if (D.seasons[i].n == sn) { k = i; break; }
+  int hasPosSeason = 0;
+  cJSON_ArrayForEach(v, videos) if (js_num(v, "season", 0) > 0) { hasPosSeason = 1; break; }
+  cJSON_ArrayForEach(v, videos) {
+    const cJSON *seNode = cJSON_GetObjectItemCaseSensitive(v, "season");
+    int sn = cJSON_IsNumber(seNode) ? (int)seNode->valuedouble : (hasPosSeason ? 0 : 1); /* season-less anime -> Season 1 */
+    int k = -1; for (int i = 0; i < D.nseasons; i++) if (D.seasons[i].n == sn) { k = i; break; }
     if (k < 0) { if (D.nseasons >= MAXSEASON) continue; k = D.nseasons++; D.seasons[k].n = sn; D.seasons[k].eps = NULL; D.seasons[k].neps = 0; }
     Season *s = &D.seasons[k]; s->eps = realloc(s->eps, (s->neps + 1) * sizeof *s->eps); s->eps[s->neps++] = v; }
   /* seasons in order, specials (0) last */
@@ -451,8 +457,7 @@ static void ep_label(const char *vid, char *out, size_t cap) {
   const cJSON *ep = NULL; for (int i = 0; i < D.neps; i++) if (!strcmp(js_str(D.eps[i], "id", ""), vid)) { ep = D.eps[i]; break; }
   int se = -1, en = -1; out[0] = 0;
   if (ep) { se = cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(ep, "season")) ? (int)js_num(ep, "season", -1) : -1; en = (int)js_num(ep, "episode", js_num(ep, "number", -1)); }
-  else { const char *c = strrchr(vid, ':'); int anime = !strncmp(vid, "kitsu:", 6) || !strncmp(vid, "mal:", 4) || !strncmp(vid, "anilist:", 8);
-    if (c) { en = atoi(c + 1); const char *p = c - 1; while (p > vid && *p != ':') p--; if (!anime && *p == ':') se = atoi(p + 1); } }
+  else { int vr = sb_parse_video_id(ID(), vid, &se, &en); if (vr != 1) se = -1; }
   if (en > 0 && se >= 0) snprintf(out, cap, "S%d · E%d", se, en); else if (en > 0) snprintf(out, cap, "E%d", en);
   if (ep) { const char *n = js_str(ep, "name", js_str(ep, "title", "")); if (*n) { size_t l = strlen(out); snprintf(out + l, cap - l, "%s%s", l ? "  ·  " : "", n); } }
 }

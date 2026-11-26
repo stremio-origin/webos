@@ -75,8 +75,9 @@ static void load(void) {
   int cap = cJSON_GetArraySize(lib); if (!cap) return; L.capall = cap * 2; L.all = calloc((size_t)L.capall, sizeof *L.all); /* (room for a collection card per film at most) */
   const cJSON *x; cJSON_ArrayForEach(x, lib) {
     if (js_bool(x, "removed", 0) || !js_str(x, "name", "")[0]) continue;
-    LibIt *o = &L.all[L.nall++]; Item *it = &o->it; const cJSON *st = js_obj(x, "state");
-    snprintf(it->id, sizeof it->id, "%s", js_str(x, "_id", "")); snprintf(it->type, sizeof it->type, "%s", !strcmp(js_str(x, "type", ""), "series") ? "series" : "movie");
+    LibIt *o = &L.all[L.nall++]; memset(o, 0, sizeof *o); Item *it = &o->it; const cJSON *st = js_obj(x, "state");
+    const char *ty = js_str(x, "type", "movie");
+    snprintf(it->id, sizeof it->id, "%s", js_str(x, "_id", "")); snprintf(it->type, sizeof it->type, "%s", *ty ? ty : "movie");
     snprintf(it->name, sizeof it->name, "%s", js_str(x, "name", "")); snprintf(it->poster, sizeof it->poster, "%s", js_str(x, "poster", ""));
     snprintf(it->background, sizeof it->background, "%s", js_str(x, "background", "")); snprintf(it->logo, sizeof it->logo, "%s", js_str(x, "logo", ""));
     const char *vid = js_str(st, "video_id", ""); snprintf(it->videoId, sizeof it->videoId, "%s", *vid ? vid : it->id);
@@ -88,6 +89,15 @@ static void load(void) {
     sb_poster_of(it, o->poster, sizeof o->poster);
   }
   L.nreal = L.nall;
+}
+static int lib_is_ep(const LibIt *o) {
+  const char *t = o->it.type;
+  if (!strcmp(t, "series") || !strcasecmp(t, "Anime Series")) return 1;
+  if (!strcmp(t, "movie") || !strcasecmp(t, "Anime Movies")) return 0;
+  if (sb_parse_video_id(o->it.id, o->it.videoId, NULL, NULL) > 0) return 1;
+  cJSON *m = sb_meta_cached(t, o->it.id); if (m) { const cJSON *vs = js_arr(m, "videos"); if (vs) return cJSON_GetArraySize(vs) > 1; }
+  cJSON *l = lib_get(o->it.id); if (l && js_str(js_obj(l, "state"), "watched", "")[0]) return 1;
+  return 1;
 }
 /* the collections the Library's films and shows are in: one card each, its titles kept in the Library counted. A card
    shows once its collection's details are in and it has two titles or more (never one that turns out to be none);
@@ -110,7 +120,7 @@ static int coll_cards(void) {
 }
 static int pass(const LibIt *o, int f) {
   if (o->ckey[0] || f == F_COLL) return o->ckey[0] && f == F_COLL; /* (a collection's card: under Collections only) */
-  switch (f) { case 0: return 1; case 1: return !strcmp(o->it.type, "movie"); case 2: return !strcmp(o->it.type, "series");
+  switch (f) { case 0: return 1; case 1: return !lib_is_ep(o); case 2: return lib_is_ep(o);
     case 4: return o->cw; case 5: return o->done; default: return !o->done && !o->cw; } /* (3: Collections, above) */
 }
 static int sort_key(void) { const char *s = store_get("libSort", "added"); for (int i = 0; i < 4; i++) if (!strcmp(s, S_KEY[i])) return i; return 0; }
@@ -164,7 +174,9 @@ static void head_facts(const Item *h, const cJSON *m, Facts *F) {
     const cJSON *gs = js_arr(m, "genres"); if (gs) { int n = 0; const cJSON *g; cJSON_ArrayForEach(g, gs) { if (n >= 3 || !cJSON_IsString(g)) break; size_t l = strlen(F->gen); snprintf(F->gen + l, sizeof F->gen - l, "%s%s", n ? T(", ") : "", T(g->valuestring)); n++; } }
     snprintf(F->desc, sizeof F->desc, "%s", js_str(m, "description", "")); }
   else if (o && o->ckey[0]) { char n[16], m[16]; snprintf(n, sizeof n, "%d", o->nIn); snprintf(m, sizeof m, "%d", o->nAll); snprintf(F->bits, sizeof F->bits, "%s  \xc2\xb7  %s  \xc2\xb7  %s", T("Collection"), T1("{n} titles", "n", m), T1("{n} in your Library", "n", n)); snprintf(F->desc, sizeof F->desc, "%s", o->it.description); }
-  else if (o) { char y[16] = ""; if (o->year) snprintf(y, sizeof y, "%d", o->year); snprintf(F->bits, sizeof F->bits, "%s%s%s", T(!strcmp(o->it.type, "series") ? "Series" : "Movie"), y[0] ? "  \xc2\xb7  " : "", y); }
+  else if (o) { char y[16] = ""; if (o->year) snprintf(y, sizeof y, "%d", o->year);
+    const char *kl = (!strcasecmp(o->it.type, "anime") || !strcasecmp(o->it.type, "Anime Movies") || !strcasecmp(o->it.type, "Anime Series")) ? "Anime" : lib_is_ep(o) ? "Series" : "Movie";
+    snprintf(F->bits, sizeof F->bits, "%s%s%s", T(kl), y[0] ? "  \xc2\xb7  " : "", y); }
   if (o && o->cw) { if (o->left < 1) snprintf(F->lft, sizeof F->lft, "%s", T("Less than a minute left")); else { char r[32]; int mn = (int)(o->left + 0.5f); sb_fmt_runtime(mn < 1 ? 1 : mn, r, sizeof r); snprintf(F->lft, sizeof F->lft, "%s", T1("{t} left", "t", r)); } F->left = 1; F->pct = o->pct; }
   else if (o && o->done) snprintf(F->lft, sizeof F->lft, "%s", T("Watched"));
 }

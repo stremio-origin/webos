@@ -48,6 +48,7 @@ void sb_addon_key(const cJSON *addon, char *out, size_t cap);  /* its manifest i
 /* ---- catalogs ---- */
 int  sb_home_defs(CatalogDef *out, int max);
 int  sb_disc_defs(CatalogDef *out, int max);
+int  sb_anime_defs(CatalogDef *out, int max);
 int  sb_disc_defs_f(CatalogDef *out, int max, const char *type, const char *genre); /* Discover filtered: type "" / movie / series, genre "" for any */
 int  sb_disc_genres(char (*out)[48], int max, const char *type); /* the genres the installed catalogs of that type offer */
 /* cached copy first (cb with cached=1), then the fresh one if it differs; the list is malloc'd for the callback owner */
@@ -71,6 +72,8 @@ const char *sb_bg_small(const Item *it, char *buf, size_t cap);
 const char *sb_bg_mid(const Item *it, char *buf, size_t cap);
 const char *sb_logo_of(const Item *it, char *buf, size_t cap);
 int  sb_is_imdb(const char *id);
+/* parses episode video ids ("tt123:1:5", "kitsu:43806:7", "mal:21:1:12"): returns 1 for season+ep, 2 for season-less ep, 0 otherwise */
+int  sb_parse_video_id(const char *itemId, const char *vid, int *outSeason, int *outEp);
 void sb_meta_line(const cJSON *m, char *out, size_t cap);
 int  sb_runtime_min(const char *s);
 void sb_fmt_runtime(int mn, char *out, size_t cap);

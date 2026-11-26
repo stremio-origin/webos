@@ -144,7 +144,7 @@ static void act(int a) {
     case A_PLAY: close(); app_open_item(&it); break;
     case A_RESTART: close(); app_play_from_start(&it); break;
     case A_DETAILS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
-    case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
+    case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series") || !strcasecmp(it.type, "anime") || !strcasecmp(it.type, "Anime Series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
     case A_DISMISS: sound_play(SND_TOGGLE); close(); if (it.cw) { notify_cw_dismiss(&it); tw_play_drop(it.id); } else notify_up_dismiss(&it); /* (Trakt's pause of it: deleted there too) */ app_refresh_boards(); break; /* (the card fades where it stood, the rest glide over) */
     case A_PIN: { int on = !live_pinned(it.id); sound_play(SND_TOGGLE); live_pin(&it, on); fx_start(on ? 1 : 2, on ? "star" : "minus", T(on ? "Added to favorites" : "Removed from favorites")); close(); board_invalidate(); board_rebuild(); break; }
     case A_FORGET: sound_play(SND_TOGGLE); live_forget(it.id); fx_start(2, "minus", T("Removed from Live now")); close(); board_invalidate(); board_rebuild(); break;
@@ -222,9 +222,12 @@ void cwmenu_show(const Item *it) {
   float cur = M.closing ? M.out.v : M.open ? M.op.v : 0;
   if (!strcmp(it->id, LIVE_ALL_ID)) return; /* (the All channels card: nothing to choose) */
   if (app_overlay != &menu) M.under = app_overlay; M.it = *it; M.open = 1; M.closing = 0; M.idx = 0; M.n = 0; app_overlay = &menu;
-  snprintf(M.kind, sizeof M.kind, "%s", T(!strcmp(it->type, "series") ? "Series" : "Movie"));
-  M.sub[0] = 0; const char *c = strrchr(it->videoId, ':');
-  if (c) { const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') { char s[8], e[8]; snprintf(s, sizeof s, "%d", atoi(p + 1)); snprintf(e, sizeof e, "%d", atoi(c + 1)); snprintf(M.sub, sizeof M.sub, "%s", T2("Season {s} · Episode {e}", "s", s, "e", e)); if (it->epName[0]) { size_t l = strlen(M.sub); snprintf(M.sub + l, sizeof M.sub - l, "  ·  %s", it->epName); } } }
+  const char *kl = (!strcasecmp(it->type, "anime") || !strcasecmp(it->type, "Anime Movies") || !strcasecmp(it->type, "Anime Series")) ? "Anime" : !strcmp(it->type, "series") ? "Series" : "Movie";
+  snprintf(M.kind, sizeof M.kind, "%s", T(kl));
+  M.sub[0] = 0; int se = -1, ep = -1, vr = sb_parse_video_id(it->id, it->videoId, &se, &ep);
+  if (vr == 1) { char s[12], e[12]; snprintf(s, sizeof s, "%d", se); snprintf(e, sizeof e, "%d", ep); snprintf(M.sub, sizeof M.sub, "%s", T2("Season {s} · Episode {e}", "s", s, "e", e)); }
+  else if (vr == 2) { char e[12]; snprintf(e, sizeof e, "%d", ep); snprintf(M.sub, sizeof M.sub, "%s", T1("Episode {n}", "n", e)); }
+  if (vr > 0 && it->epName[0]) { size_t l = strlen(M.sub); snprintf(M.sub + l, sizeof M.sub - l, "  ·  %s", it->epName); }
   if (live_type(it->type)) { /* a channel: play it, pick its stream, keep it in Live now or not */
     snprintf(M.kind, sizeof M.kind, "%s", T("Live"));
     add(A_PLAY, "play", T("Play")); add(A_CHSTREAMS, "play", T("Streams"));

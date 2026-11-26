@@ -36,16 +36,16 @@ static const Step LOOP[] = {
   /* the player (with SB_STRESS_PLAY): open, the controls, trays, seeking, away */
   { A_PLAY, 0, 0, 0, 4000 }, K(K_DOWN, 1, 0, 600), K(K_RIGHT, 6, 300, 500), K(K_OK, 1, 0, 800), K(K_DOWN, 2, 300, 300), K(K_BACK, 1, 0, 500), K(K_UP, 1, 0, 300), K(K_RIGHT, 8, 120, 1600), K(K_LEFT, 4, 120, 1600), HOME,
 };
-static const char *NAMES[] = { "sign-in", "home", "discover", "library", "title", "similar", "search", "settings", "player", "menu" };
+static const char *NAMES[] = { "sign-in", "home", "discover", "library", "anime", "title", "similar", "search", "settings", "player", "menu" };
 #define NSTEP ((int)(sizeof LOOP / sizeof *LOOP))
 static int loops, loop, step, done, on, sent; static Uint32 nextAt; static int keyDown;
 
 int stress_on(void) { return on; }
-const char *stress_screen(void) { int tag = player_open() ? 8 : app_overlay ? 9 : (int)SCR; return tag < (int)(sizeof NAMES / sizeof *NAMES) ? NAMES[tag] : "?"; }
+const char *stress_screen(void) { int tag = player_open() ? (int)SCR_N : app_overlay ? (int)SCR_N + 1 : (int)SCR; return tag < (int)(sizeof NAMES / sizeof *NAMES) ? NAMES[tag] : "?"; }
 void stress_init(void) { const char *e = getenv("SB_STRESS"); if (!e) return; loops = atoi(e); if (loops < 1) loops = 1; on = 1; nextAt = SDL_GetTicks() + 3000; fprintf(stderr, "[stress] %d loop(s) of every page\n", loops); }
 void stress_tick(void) {
   if (!on) return;
-  { static int last = -1; int tag = player_open() ? 8 : app_overlay ? 9 : (int)SCR; pace_tag(tag); /* the screen the next frame belongs to */
+  { static int last = -1; int tag = player_open() ? (int)SCR_N : app_overlay ? (int)SCR_N + 1 : (int)SCR; pace_tag(tag); /* the screen the next frame belongs to */
     if (tag != last) { fprintf(stderr, "[stress] -> %s\n", tag < (int)(sizeof NAMES / sizeof *NAMES) ? NAMES[tag] : "?"); last = tag; } }
   if (done || !SDL_TICKS_PASSED(SDL_GetTicks(), nextAt)) return;
   const Step *s = &LOOP[step];

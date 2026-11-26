@@ -24,7 +24,7 @@ static void on_lib(int changed, void *ud) { (void)ud; if (!changed) return; boar
 static void on_addons(int changed, void *ud) {
   (void)ud; if (changed <= 0) return;
   toast(T("Addons updated"), 2600, NULL);
-  board_invalidate(); if (SCR == SCR_HOME && !player_open()) board_rebuild();
+  board_invalidate(); if ((SCR == SCR_HOME || SCR == SCR_DISC || SCR == SCR_ANIME) && !player_open()) board_rebuild();
 }
 void sb_sync_soon(int force) {
   if (!libBoot) return; /* the pull a moment after start covers it */
