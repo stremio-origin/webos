@@ -23,7 +23,8 @@ typedef struct { Item *items; int n; int total; /* total: the metas in the answe
 
 /* url: the first page as asked (also the cache's name); path: the address before the extra part, extra: what the
    first page is asked with (a required property's first option, or none), skip: the catalog takes "skip" (pages) */
-typedef struct { char title[96], type[16], url[512], key[48], path[512], extra[200]; int skip; } CatalogDef;
+#define SB_URL_MAX 4096 /* some addons' catalog/debrid links run past 2 KB (their whole setup sealed in the address) */
+typedef struct { char title[96], type[16], url[SB_URL_MAX], key[48], path[SB_URL_MAX], extra[256]; int skip; } CatalogDef;
 
 int  sb_init(void);
 /* ---- account ---- */
@@ -109,7 +110,6 @@ unsigned lib_version(void);             /* bumps on every change: boards rebuild
 /* url: what plays ("p2p://<infoHash>/<fileIdx>?tr=..." for torrents, "ytid:<id>" for YouTube); ext: an externalUrl
    (opened on another device, never played); hdrs / rhdrs: proxyHeaders' request and response headers ("Name: value"
    lines) sent with every request for it; binge: behaviorHints.bingeGroup; size / hash: videoSize / videoHash */
-#define SB_URL_MAX 4096 /* some addons' debrid links run past 2 KB (their whole setup sealed in the address) */
 typedef struct { char addon[96], name[256], title[512], url[SB_URL_MAX], filename[256]; int p2p;
   char ext[512], hdrs[512], rhdrs[256], binge[96], hash[24]; double size; int notWeb, nsubs; } Stream;
 typedef struct { char name[96]; Stream *items; int n; } StreamGroup;

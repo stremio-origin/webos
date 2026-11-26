@@ -212,13 +212,29 @@ static int lang_score(const char *raw, const char *l) { int ia = lang_index(pref
   if (ia >= 0 && m) { if (m & (1ull << ia)) sc += 60; else if (ie >= 0 && (m & (1ull << ie))) sc += 0; else if (multi) sc -= 20; else sc -= 160; } /* the user's audio named: first; else English (as one with none named, the original); only others named: last */
   if (is >= 0 && is != ia) { const char *sw[] = { "vost", "vostfr", "subbed", "subs", "sub", NULL }; int subWord = 0; for (int k = 0; sw[k]; k++) if (has_word(l, sw[k])) subWord = 1; if (subWord && (m & (1ull << is))) sc += 12; }
   return sc; }
+static int debrid_uncached(const char *nt) {
+  return strstr(nt, "download]") || strstr(nt, "(download)") || strstr(nt, "| download") || strstr(nt, "download to")
+    || strstr(nt, "uncached") || strstr(nt, "needs to download") || strstr(nt, "[tb-]") || strstr(nt, "[rd-]")
+    || strstr(nt, "[ad-]") || strstr(nt, "[pm-]") || strstr(nt, "[dl]") || strstr(nt, "\xe2\x8f\xb3") || strstr(nt, "\xe2\xac\x87");
+}
+#ifndef SB_BEST_PURE
+static int debrid_cached_mark(const char *nt) {
+  if (strstr(nt, "\xe2\x9a\xa1") || strstr(nt, "cached")) return 1;
+  for (const char *p = nt; (p = strchr(p, '[')); p++) {
+    int n = 0; while (p[1 + n] >= 'a' && p[1 + n] <= 'z') n++;
+    if (n >= 2 && n <= 3 && p[1 + n] == '+' && p[2 + n] == ']') return 1;
+  }
+  return 0;
+}
+#endif
 static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestRate *o, int *resOut) {
   char t[2048], l[2048]; best_stream_info(s, t, sizeof t); lower(t, l, sizeof l); blank(l, "._-[]()");
   int p2p = s->p2p;
   static const char *CAM[] = { "cam", "camrip", "hdcam", "ts", "hdts", "telesync", "tc", "telecine", "scr", "screener", "dvdscr" };
   for (size_t i = 0; i < sizeof CAM / sizeof CAM[0]; i++) if (has_word(l, CAM[i])) return 0;
-  if (!p2p) { char nt[1100], raw[1100]; snprintf(raw, sizeof raw, "%s %s", s->name, s->title); lower(raw, nt, sizeof nt); /* debrid, not in the cloud yet */
-    if (strstr(nt, "download]") || strstr(nt, "uncached") || strstr(nt, "needs to download") || strstr(nt, "\xe2\x8f\xb3")) return 0; }
+  char nt[1100] = "";
+  if (!p2p) { char raw[1100]; snprintf(raw, sizeof raw, "%s %s", s->name, s->title); lower(raw, nt, sizeof nt); /* debrid, not in the cloud yet */
+    if (debrid_uncached(nt)) return 0; }
   int sd = p2p ? seeds_of(t) : -1; if (p2p && sd >= 0 && sd < 8) return 0; /* a torrent needs a healthy swarm: a thin one stalls */
   const char *rl = best_res_of(t); int r = res_n(rl), rr = r ? r : 720; char hd[32], au[32], a0[32]; best_hdr_of(t, hd, sizeof hd); best_audio_of(t, au, sizeof au);
   snprintf(a0, sizeof a0, "%s", au); { char *sp = strchr(a0, ' '); if (sp) *sp = 0; }
@@ -243,6 +259,9 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   if (mb) sc += fmin(18, need / by_res(rr, 20, 10, 6, 3, 1.5) * 8); /* more bitrate for the same picture: better */
   double line = mbps ? mbps : (p2p ? 40 : 100), cap = p2p ? fmin(line, sd > 0 ? 2 + sd * 0.8 : 4) : line; /* a swarm gives roughly 0.8 Mbps a seed (1.5 promised too much: an anime swarm far away, a few seeds, crawled) */
   sc += p2p ? (sd < 0 ? -80 : fmin(45, 7 * log(sd + 1) / M_LN2) - 35) : 40; /* seeds unknown: its health can't be told */
+#ifndef SB_BEST_PURE
+  if (!p2p && debrid_cached_mark(nt)) sc += 8; /* instant cached debrid ([TB+], [RD+], ⚡) ahead of unmarked direct links */
+#endif
   if (!o) return 1;
   o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->nodec = nodec; if (resOut) *resOut = r;
   /* the summary: "4K  ·  DV HDR10  ·  EAC3 Atmos 5.1  ·  29.3 GB  ·  484 seeds" */
@@ -291,7 +310,7 @@ void best_facts(const Stream *s, const TvCaps *c, double mbps, double durMin, Be
   int ten = has_word(l, "10bit") || strstr(l, "10 bit") || has_word(l, "hi10") || has_word(l, "hi10p"), hevc = has_word(l, "x265") || has_word(l, "hevc") || has_word(l, "h265") || strstr(l, "h 265");
   int avc = has_word(l, "x264") || has_word(l, "h264") || strstr(l, "h 264") || has_word(l, "avc"), hi10 = (has_word(l, "hi10") || has_word(l, "hi10p") || (ten && avc)) && !hevc;
   int maxr = c->maxRes ? c->maxRes : 1080;
-  int unc = 0; if (!p2p) { char nt[1100], raw[1100]; snprintf(raw, sizeof raw, "%s %s", s->name, s->title); lower(raw, nt, sizeof nt); unc = strstr(nt, "download]") || strstr(nt, "uncached") || strstr(nt, "needs to download") || strstr(nt, "\xe2\x8f\xb3"); }
+  int unc = 0; if (!p2p) { char nt[1100], raw[1100]; snprintf(raw, sizeof raw, "%s %s", s->name, s->title); lower(raw, nt, sizeof nt); unc = debrid_uncached(nt); }
   int dm = best_dts_mode(), dts = dm != 2 && strstr(au, "DTS") != NULL, thd = strstr(au, "TrueHD") != NULL, cdts = dm == 1 ? 1 : c->dts, mute = ((dts && !cdts) || (thd && !c->truehd)) && !other_audio(l);
   double need = mb ? mb * 8 / (durMin * 60) * 1.3 : 0, line = mbps > 0 ? mbps : 0, cap = p2p ? (line > 0 ? fmin(line, sd > 0 ? 2 + sd * 0.8 : 4) : (sd > 0 ? 2 + sd * 0.8 : 0)) : line;
   char rb[16]; snprintf(rb, sizeof rb, "%dp", maxr >= 2160 ? 2160 : maxr);

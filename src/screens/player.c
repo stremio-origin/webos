@@ -1067,7 +1067,7 @@ static void on_sk(int st, const unsigned char *body, size_t len, void *ud) {
 static void sk_ask(int i) {
   const char *c = sk_cached(P.sk.job[i].url);
   if (c) { cJSON *j = cJSON_Parse(c); P.sk.job[i].live = 0; int ok = cJSON_IsObject(j) && cJSON_GetArraySize(j) > 0; sk_answer(i, ok ? j : NULL); cJSON_Delete(j); return; }
-  P.sk.job[i].live = 1; P.sk.job[i].retryAt = 0; net_get(P.sk.job[i].url, on_sk, (void *)(uintptr_t)((P.sk.tok << 2) | (unsigned)i));
+  P.sk.job[i].live = 1; P.sk.job[i].retryAt = 0; net_get_pri(P.sk.job[i].url, on_sk, (void *)(uintptr_t)((P.sk.tok << 2) | (unsigned)i));
 }
 static void sk_job(const char *url, int kind) { int i = 0; while (i < 3 && P.sk.job[i].url[0]) i++; if (i >= 3) return; snprintf(P.sk.job[i].url, sizeof P.sk.job[i].url, "%s", url); P.sk.job[i].kind = kind; P.sk.pending++; sk_ask(i); }
 static void sk_tick(void) {
@@ -1292,6 +1292,13 @@ static const char *src_kind(const char *label) {
   if (strstr(s, "webdl") || strstr(s, "web-dl") || strstr(s, "webrip") || has_word(s, "web") || strstr(s, "amzn") || nf || strstr(s, "dsnp") || strstr(s, "hmax") || strstr(s, "atvp")) return "web";
   return strstr(s, "hdtv") ? "tv" : "";
 }
+static int uncached_debrid(const Stream *s) {
+  if (s->p2p || !strncmp(s->url, "p2p://", 6)) return 0;
+  char raw[1100], nt[1100]; snprintf(raw, sizeof raw, "%s %s", s->name, s->title); lower(raw, nt, sizeof nt);
+  return strstr(nt, "download]") || strstr(nt, "(download)") || strstr(nt, "| download") || strstr(nt, "download to")
+    || strstr(nt, "uncached") || strstr(nt, "needs to download") || strstr(nt, "[tb-]") || strstr(nt, "[rd-]")
+    || strstr(nt, "[ad-]") || strstr(nt, "[pm-]") || strstr(nt, "[dl]") || strstr(nt, "\xe2\x8f\xb3") || strstr(nt, "\xe2\xac\x87");
+}
 static int cached_flag(const char *label) { char s[700]; lower(label, s, sizeof s); if (strstr(s, "cached") || strstr(s, "\xe2\x9a\xa1")) return 1;
   for (const char *p = s; (p = strchr(p, '[')); p++) { int n = 0; while (p[1 + n] >= 'a' && p[1 + n] <= 'z') n++; if (n >= 2 && n <= 3 && p[1 + n] == '+' && p[2 + n] == ']') return 1; } return 0; }
 static void info_hash(const char *u, char *out) { out[0] = 0; const char *p = NULL; if (!strncmp(u, "p2p://", 6)) p = u + 6; else if ((p = strstr(u, "ih="))) p += 3; else if ((p = strstr(u, "/torrents/"))) p += 10;
@@ -1305,7 +1312,7 @@ static int likeness(const Stream *s) {
   char a1[48], a2[48]; audio_of(a, a1, sizeof a1); audio_of(b, a2, sizeof a2); a1[strcspn(a1, " ")] = 0; a2[strcspn(a2, " ")] = 0; if (*a1 && !strcmp(a1, a2)) sc += 10;
   char g1[16], g2[16]; rel_group(a, g1, sizeof g1); rel_group(b, g2, sizeof g2); if (*g1 && !strcmp(g1, g2)) sc += 25;
   const char *k1 = src_kind(a), *k2 = src_kind(b); if (*k1 && !strcmp(k1, k2)) sc += 10;
-  int c1 = cached_flag(a), c2 = cached_flag(b); if (c1 == c2) sc += c1 ? 15 : 5;
+  int c1 = cached_flag(a), c2 = cached_flag(b); if (c2) sc += 15; else if (!c1) sc += 5;
   int p1 = !strncmp(P.nx.url, "p2p://", 6), p2 = !strncmp(s->url, "p2p://", 6); sc += p1 == p2 ? 15 : -15;
   char x1[48], x2[48]; info_hash(P.nx.url, x1); info_hash(s->url, x2); if (*x1 && !strcmp(x1, x2)) sc += 60; /* the same season pack: the next file of the very same torrent */
   return sc;
@@ -1338,9 +1345,9 @@ static void nx_finish(void) {
 }
 static void nx_part(StreamGroup *g, int gi, void *ud) {
   (void)gi; if (P.open && P.nx.tok && (unsigned)(uintptr_t)ud == P.nx.tok && !P.nx.done) {
-    /* the same bingeGroup is the addon's own word that it is the same kind of file: taken at once (the official rule) */
-    if (P.nx.binge[0]) for (int i = 0; i < g->n; i++) { const Stream *s = &g->items[i]; if (s->url[0] && can_play(s) && !strcmp(s->binge, P.nx.binge)) { P.nx.best = *s; P.nx.has = 1; P.nx.bs = 1000; free(g->items); fprintf(stderr, "[player] next episode: same binge group (%s)\n", P.nx.binge); nx_finish(); return; } }
-    for (int i = 0; i < g->n; i++) { const Stream *s = &g->items[i]; if (!s->url[0] || !can_play(s)) continue; int v = likeness(s); if (!P.nx.has || v > P.nx.bs) { P.nx.bs = v; P.nx.best = *s; P.nx.has = 1; } }
+    /* the same bingeGroup is the addon's own word that it is the same kind of file: taken at once when cached */
+    if (P.nx.binge[0]) for (int i = 0; i < g->n; i++) { const Stream *s = &g->items[i]; if (s->url[0] && can_play(s) && !uncached_debrid(s) && !strcmp(s->binge, P.nx.binge)) { P.nx.best = *s; P.nx.has = 1; P.nx.bs = 1000; free(g->items); fprintf(stderr, "[player] next episode: same binge group (%s)\n", P.nx.binge); nx_finish(); return; } }
+    for (int i = 0; i < g->n; i++) { const Stream *s = &g->items[i]; if (!s->url[0] || !can_play(s) || uncached_debrid(s)) continue; int v = likeness(s); if (!P.nx.has || v > P.nx.bs) { P.nx.bs = v; P.nx.best = *s; P.nx.has = 1; } }
     free(g->items); if (P.nx.has && P.nx.bs >= 95) nx_finish(); return; } /* same addon, quality, group: no need to wait for the slow ones */
   free(g->items);
 }
@@ -1735,19 +1742,24 @@ static int tray_key(int k) {
     if (k == K_BACK) { if (P.tray.kind == 5) { P.tray.zone = 0; tray_back(); } else close_tray(); return 1; } /* (Back: out at once, from the tabs or the list) */
     if (P.tray.zone == 1) { int any = 0; for (int i = 0; i < SR.n; i++) if (src_focusable(i)) any = 1;
       if ((k == K_DOWN || k == K_OK) && any) P.tray.zone = 0; else if (k == K_DOWN) P.tray.onBtn = 1; else nudge_start(&P.nudge, k); return 1; }
-    if (k == K_UP || k == K_DOWN) { int d = k == K_DOWN ? 1 : -1, j = -1; for (int i = SR.idx + d; i >= 0 && i < SR.n; i += d) if (src_focusable(i)) { j = i; break; }
-      if (j >= 0) { SR.idx = j; SR.moved = 1; } else if (k == K_DOWN) P.tray.onBtn = 1; else P.tray.zone = 1; }
+    if (k == K_UP || k == K_DOWN || k == K_CH_UP || k == K_CH_DOWN) {
+      int d = (k == K_DOWN || k == K_CH_DOWN) ? 1 : -1, steps = (k == K_CH_UP || k == K_CH_DOWN) ? 6 : 1, j = -1;
+      for (int s = 0, cur = SR.idx; s < steps; s++) { int nx = -1; for (int i = cur + d; i >= 0 && i < SR.n; i += d) if (src_focusable(i)) { nx = i; break; } if (nx < 0) break; j = cur = nx; }
+      if (j >= 0) { SR.idx = j; SR.moved = 1; } else if (d > 0 && k == K_DOWN) P.tray.onBtn = 1; else P.tray.zone = 1; }
     else if (k == K_OK) src_choose(SR.idx);
     else if (k == K_BACK) tray_back();
     return 1; }
   if (P.tray.zone == 1) {
     if ((k == K_LEFT && P.tray.tab > 0) || (k == K_RIGHT && P.tray.tab < P.tray.ntabs - 1)) tray_tab(P.tray.tab + (k == K_RIGHT ? 1 : -1));
-    else if ((k == K_DOWN || k == K_OK) && P.tray.ncols) P.tray.zone = 2;
-    else if ((k == K_DOWN || k == K_OK) && P.tray.idx >= 0) P.tray.zone = 0;
-    else if (k == K_BACK) tray_back(); else if (k != K_OK) nudge_start(&P.nudge, k);
+    else if ((k == K_DOWN || k == K_CH_DOWN || k == K_OK) && P.tray.ncols) P.tray.zone = 2;
+    else if ((k == K_DOWN || k == K_CH_DOWN || k == K_OK) && P.tray.idx >= 0) P.tray.zone = 0;
+    else if (k == K_BACK) tray_back(); else if (k != K_OK) nudge_start(&P.nudge, k == K_CH_UP ? K_UP : k);
     return 1; }
   if (P.tray.zone == 2) { TCol *col = &P.tray.cols[P.tray.c];
-    if (k == K_UP || k == K_DOWN) { int n = step_in(col->items, col->n, P.tray.r[P.tray.c], k == K_DOWN ? 1 : -1); if (n >= 0) P.tray.r[P.tray.c] = n; else if (k == K_DOWN) P.tray.onBtn = 1; else if (P.tray.ntabs) P.tray.zone = 1; else nudge_start(&P.nudge, k);
+    if (k == K_UP || k == K_DOWN || k == K_CH_UP || k == K_CH_DOWN) {
+      int d = (k == K_DOWN || k == K_CH_DOWN) ? 1 : -1, steps = (k == K_CH_UP || k == K_CH_DOWN) ? 6 : 1, n = -1;
+      for (int s = 0, cur = P.tray.r[P.tray.c]; s < steps; s++) { int nx = step_in(col->items, col->n, cur, d); if (nx < 0) break; n = cur = nx; }
+      if (n >= 0) P.tray.r[P.tray.c] = n; else if (d > 0 && k == K_DOWN) P.tray.onBtn = 1; else if (d < 0 && P.tray.ntabs) P.tray.zone = 1; else nudge_start(&P.nudge, d > 0 ? K_DOWN : K_UP);
       if (n >= 0 && P.tray.kind == 4 && !strncmp(col->items[n].u, "lang:", 5)) { snprintf(P.subLang, sizeof P.subLang, "%s", col->items[n].u + 5); render_tray(0); } } /* the language under the focus: its subtitles beside it */
     else if (k == K_LEFT || k == K_RIGHT) { int c0 = P.tray.c; for (int c = P.tray.c + (k == K_RIGHT ? 1 : -1); c >= 0 && c < P.tray.ncols; c += k == K_RIGHT ? 1 : -1) if (P.tray.r[c] >= 0) { P.tray.c = c; break; } if (P.tray.c == c0) nudge_start(&P.nudge, k); }
     else if (k == K_OK) choose(tray_cur()); else if (k == K_BACK) tray_back();

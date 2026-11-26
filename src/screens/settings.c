@@ -25,6 +25,7 @@
 #include "ui/prompts.h"
 #include "ui/sound.h"
 #include "ui/orbs.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -326,7 +327,7 @@ static void on_sync_addons(int changed, void *ud) { (void)ud; /* what happened, 
   else if (ad) toast(T1("Addons updated: {a} added", "a", na), 2600, NULL);
   else if (rm) toast(T1("Addons updated: {r} removed", "r", nr), 2600, NULL);
   else toast(T("Addons updated"), 2200, NULL); /* the same addons, their order or settings changed */
-  if (changed > 0) board_invalidate(); cats[5].n = addon_opts(); if (S.cat == 5 && S.idx >= cats[5].n) S.idx = cats[5].n - 1; S.dirty = 1; }
+  if (changed > 0) board_invalidate(); set_count(addonS, addon_opts()); S.dirty = 1; }
 static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate(); }
 static void sync_now(void) { toast(T("Syncing…"), 1500, NULL); sb_pull_library(on_sync_lib, NULL); sb_sync_addons(on_sync_addons, NULL); }
 /* the best stream: switched on only once the line is measured (once, kept); the row says why meanwhile */
@@ -366,7 +367,7 @@ static void set_val(Setting *o, const char *v, int dir) {
   if (!strcmp(o->k, "defaultAudioTrack")) store_set("enableDefaultAudioTrack", strcmp(v, "orig") ? "true" : "false"); /* (a language: picked by itself; Original: the film's own. Kept for the phone's remote and older builds) */
   if (!strcmp(o->k, "bgTrailer") || !strcmp(o->k, "seekPreviews")) play_layout(); /* its volume row comes and goes with it, right under it */
   if (!strcmp(o->k, "traktRows") || !strcmp(o->k, "traktMarks") || !strcmp(o->k, "traktCw")) board_invalidate(); /* Trakt's rows come and go on Home */
-  if (!strncmp(o->k, "adOn_", 5)) { board_invalidate(); cats[5].n = addon_opts(); return; } /* an addon on/off here: rows, metadata and streams follow */
+  if (!strncmp(o->k, "adOn_", 5)) { board_invalidate(); set_count(addonS, addon_opts()); return; } /* an addon on/off here: rows, metadata and streams follow */
   if (!strcmp(o->k, "bingeWatch")) store_set("enableNextVideo", v);
   if (!strcmp(o->k, "p2pTcpOnly")) p2p_connections_changed();
   if (!strcmp(o->k, "accent")) accent_apply();

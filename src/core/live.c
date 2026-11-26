@@ -20,7 +20,7 @@ int live_type(const char *type) { return type && (!strcmp(type, "tv") || !strcmp
 /* ---- the channels: every live catalog's list ---- */
 #define MAXCAT 64
 /* a channel kept small (thousands of them: a full card's fields would be megabytes), made into a card when it is used */
-static struct { CatalogDef def; LiveCh *ch; int n, cap, skip; } cats[MAXCAT]; /* skip: where the next page starts */ static int ncat; static unsigned catGen; static double catAt = -1e9;
+static struct { CatalogDef *def; LiveCh *ch; int n, cap, skip; } cats[MAXCAT]; /* skip: where the next page starts */ static int ncat; static unsigned catGen; static double catAt = -1e9;
 static double now_s(void) { return SDL_GetTicks() / 1000.0; }
 #define MAXCH 1000 /* channels kept per catalog */
 static void ch_of(const Item *it, LiveCh *c) { snprintf(c->id, sizeof c->id, "%s", it->id); snprintf(c->type, sizeof c->type, "%s", it->type); snprintf(c->name, sizeof c->name, "%s", it->name);
@@ -43,28 +43,31 @@ static int cat_add(int i, const ItemList *l) { /* the answer's channels, each on
 static void on_page(ItemList *l, int more, void *ud) { /* the next page of a catalog that pages: every channel of it, not its first page alone */
   int i; if (!cok(ud, &i) || !l) { if (l) itemlist_free(l); return; }
   int got = l->total > l->n ? l->total : l->n, add = cat_add(i, l); itemlist_free(l); cats[i].skip += got;
-  if (got && add && more != 0 && cats[i].n < MAXCH) sb_catalog_page(&cats[i].def, cats[i].skip, on_page, ctok(i));
-  else fprintf(stderr, "[live] %s: %d channels\n", cats[i].def.title, cats[i].n);
+  if (got && add && more != 0 && cats[i].n < MAXCH && cats[i].def) sb_catalog_page(cats[i].def, cats[i].skip, on_page, ctok(i));
+  else if (cats[i].def) fprintf(stderr, "[live] %s: %d channels\n", cats[i].def->title, cats[i].n);
 }
 static void on_cat(ItemList *l, int cached, void *ud) {
   int i; if (!cok(ud, &i) || !l) { if (l) itemlist_free(l); return; }
   if (!l->n) { if (l->total == -2) cats[i].n = 0; itemlist_free(l); return; } /* (an empty answer leaves what was there; a list the addon no longer serves goes) */
   int got = l->total > l->n ? l->total : l->n; cats[i].n = 0; cat_add(i, l); itemlist_free(l); cats[i].skip = got;
-  (void)cached; if (cats[i].def.skip && got) sb_catalog_page(&cats[i].def, cats[i].skip, on_page, ctok(i)); /* its next pages (the cached copy too: a fresh one comes only when it differs) */
+  (void)cached; if (cats[i].def && cats[i].def->skip && got) sb_catalog_page(cats[i].def, cats[i].skip, on_page, ctok(i)); /* its next pages (the cached copy too: a fresh one comes only when it differs) */
 }
 void live_refresh(int force) {
-  static CatalogDef all[128]; static unsigned lastSig; int n = sb_home_defs(all, 128), k = 0;
+  CatalogDef *all = calloc(128, sizeof *all); if (!all) return;
+  static unsigned lastSig; int n = sb_home_defs(all, 128), k = 0;
   unsigned sig = 2166136261u; for (int i = 0; i < n; i++) if (live_type(all[i].type)) for (const char *p = all[i].url; *p; p++) sig = (sig ^ (unsigned char)*p) * 16777619u; /* (the live catalogs the addons offer now) */
-  if (!force && now_s() - catAt < 600 && sig == lastSig) return; /* (asked again every 10 minutes, or at once when the addons changed: one turned off or removed takes its channels with it) */
+  if (!force && now_s() - catAt < 600 && sig == lastSig) { free(all); return; } /* (asked again every 10 minutes, or at once when the addons changed: one turned off or removed takes its channels with it) */
   lastSig = sig; catAt = now_s(); catGen++;
   for (int i = 0; i < n && k < MAXCAT; i++) if (live_type(all[i].type)) {
-    if (k >= ncat || strcmp(cats[k].def.url, all[i].url)) cats[k].n = 0;
-    cats[k].def = all[i]; if (ncat < k + 1) ncat = k + 1; /* (a cached answer comes back at once, inside the call) */ sb_catalog_url(all[i].url, all[i].type, 500, on_cat, ctok(k)); k++; }
-  for (int i = k; i < ncat; i++) { free(cats[i].ch); memset(&cats[i], 0, sizeof cats[i]); }
-  ncat = k;
+    if (k >= ncat || !cats[k].def || strcmp(cats[k].def->url, all[i].url)) cats[k].n = 0;
+    if (!cats[k].def) cats[k].def = calloc(1, sizeof *cats[k].def);
+    if (!cats[k].def) continue;
+    *cats[k].def = all[i]; if (ncat < k + 1) ncat = k + 1; /* (a cached answer comes back at once, inside the call) */ sb_catalog_url(all[i].url, all[i].type, 500, on_cat, ctok(k)); k++; }
+  for (int i = k; i < ncat; i++) { free(cats[i].def); free(cats[i].ch); memset(&cats[i], 0, sizeof cats[i]); }
+  ncat = k; free(all);
 }
 int live_catalogs(void) { return ncat; }
-int live_catalog(int i, const char **title, const LiveCh **ch) { if (i < 0 || i >= ncat) return -1; if (title) *title = cats[i].def.title; if (ch) *ch = cats[i].ch; return cats[i].n; }
+int live_catalog(int i, const char **title, const LiveCh **ch) { if (i < 0 || i >= ncat || !cats[i].def) return -1; if (title) *title = cats[i].def->title; if (ch) *ch = cats[i].ch; return cats[i].n; }
 
 /* ---- recent and pinned (kept on this TV: liveRecent, livePins; each an entry with what a card needs) ---- */
 static cJSON *entry(const Item *it) { cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "id", it->id); cJSON_AddStringToObject(o, "type", it->type); cJSON_AddStringToObject(o, "name", it->name);
@@ -274,7 +277,7 @@ static void probe_tick(void);
 static void recheck_tick(void) { static double t0, lastAt; static int next; double now = now_s(); if (!t0) t0 = now;
   if (now - t0 < 15 || now - lastAt < 2 || next >= ncat) return;
   { extern int hub_on(void); extern float app_idle(void); if (player_open() || hub_on() || app_idle() < 3) return; } /* (only when nothing moves: a list's items are 100-450 ms of work on a TV, never under the grid, a preview or a film) */
-  lastAt = now; if (cats[next].def.url[0]) sb_catalog_recheck(cats[next].def.url, cats[next].def.type, 500, on_cat, ctok(next)); next++; }
+  lastAt = now; if (cats[next].def && cats[next].def->url[0]) sb_catalog_recheck(cats[next].def->url, cats[next].def->type, 500, on_cat, ctok(next)); next++; }
 void live_tick(void) { recheck_tick();
   { static int lg = -1; static double at; if (lg < 0) lg = getenv("SB_LIVELOG") != NULL; if (lg && now_s() - at > 2) { at = now_s(); pthread_mutex_lock(&L.mu); fprintf(stderr, "[livelog] search: asked %d peek %d streams %d next %d found %d busy %d done %d tok %u | preview %d\n", L.asked, L.peek, L.ns, L.next, L.found, L.busy, L.done, L.tok, PK.st); pthread_mutex_unlock(&L.mu); } } /* (development) */
   probe_tick(); switch_tick();
@@ -343,7 +346,7 @@ void live_peek_stop(void) { if (L.asked && L.peek) { pthread_mutex_lock(&L.mu); 
 const char *live_catalog_of(const char *id) { /* the catalog a channel is in (its title): kept once found, looked for again a second later when not */
   static char last[SB_ID]; static const char *t; static unsigned g; static double at; if (!id) return NULL;
   if (g == catGen && !strcmp(last, id) && (t || now_s() - at < 1)) return t; g = catGen; snprintf(last, sizeof last, "%s", id); t = NULL; at = now_s();
-  for (int c = 0; c < ncat && !t; c++) for (int i = 0; i < cats[c].n; i++) if (!strcmp(cats[c].ch[i].id, id)) { t = cats[c].def.title; break; }
+  for (int c = 0; c < ncat && !t; c++) if (cats[c].def) for (int i = 0; i < cats[c].n; i++) if (!strcmp(cats[c].ch[i].id, id)) { t = cats[c].def->title; break; }
   return t; }
 void live_reach_set(const char *id, int st) { if (id && *id) reach_set(id, st); }
 int live_reach(const char *id) { if (!id || !*id) return 0;

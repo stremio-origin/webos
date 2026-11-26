@@ -261,7 +261,7 @@ void subs_list(const char *type, const char *vid, void (*cb)(SubEntry *, int, in
 /* ---- the addons' lists: every installed subtitles addon for this video, asked with the file's hash, size and name
    when known (/subtitles/{type}/{id}/videoHash=..&videoSize=..&filename=...json); the subtitles the stream carries first.
    The built-in list above is never mixed in. ---- */
-typedef struct { char name[64], base[512]; int from, order; } FindSrc;
+typedef struct { char name[64], base[SB_URL_MAX]; int from, order; } FindSrc;
 struct FindQ { unsigned tok; SubQuery q; FindSrc src[16]; int nsrc, pending, nok; SubEntry *all; int n, cap; void (*cb)(SubEntry *, int, int, int, void *); void *ud; };
 static void list_parse(SubJob *j) {
   cJSON *js = j->body && j->status == 200 ? cJSON_ParseWithLength((const char *)j->body, j->len) : NULL; const cJSON *arr = js_arr(js, "subtitles"), *s;
@@ -311,8 +311,11 @@ static void *find_main(void *a) { plat_thread_background(5);
   if (q->filename[0]) addon_extra_add(ex, sizeof ex, "filename", q->filename);
   fprintf(stderr, "[subs] asking %d source(s) for %s (%s%s%s%s)\n", f->nsrc, q->type, q->hash[0] ? "hash " : "", q->size > 0 ? "size " : "", q->filename[0] ? "file name" : "", q->hash[0] || q->size > 0 || q->filename[0] ? "" : "no file facts"); /* (which facts were sent, never the file's name, hash or the title: a shared log does not say what was watched from them) */
   int ns = f->nsrc; /* f may be gone once the last request is out */
-  for (int i = 0; i < ns; i++) { SubJob *j = calloc(1, sizeof *j); char url[2400]; addon_url(url, sizeof url, f->src[i].base, "subtitles", q->type, q->vid, ex);
-    j->url = strdup(url); j->list = 1; j->fq = f; j->src = i; job_start(j); }
+  size_t ucap = SB_URL_MAX + 1024; char *url = malloc(ucap);
+  for (int i = 0; i < ns; i++) { SubJob *j = calloc(1, sizeof *j);
+    if (url) addon_url(url, ucap, f->src[i].base, "subtitles", q->type, q->vid, ex);
+    j->url = strdup(url ? url : ""); j->list = 1; j->fq = f; j->src = i; job_start(j); }
+  free(url);
   return NULL;
 }
 int subs_addons_for(const char *type, const char *vid) { return addon_count_subs(type, vid); }

@@ -27,7 +27,6 @@
 #define NF 7
 #define NB (NF + 1)          /* the categories, then the sort */
 #define COLS 5
-#define MAXSHOW 200
 #define LW 300.0f            /* the posters */
 #define LH 450.0f
 #define LSTEP 352.0f
@@ -80,7 +79,7 @@ static void load(void) {
     snprintf(it->name, sizeof it->name, "%s", js_str(x, "name", "")); snprintf(it->poster, sizeof it->poster, "%s", js_str(x, "poster", ""));
     snprintf(it->background, sizeof it->background, "%s", js_str(x, "background", "")); snprintf(it->logo, sizeof it->logo, "%s", js_str(x, "logo", ""));
     const char *vid = js_str(st, "video_id", ""); snprintf(it->videoId, sizeof it->videoId, "%s", *vid ? vid : it->id);
-    o->year = atoi(js_str(x, "year", "")); if (!o->year) o->year = atoi(js_str(x, "releaseInfo", ""));
+    o->year = atoi(js_str(x, "year", "")); if (!o->year) o->year = atoi(js_str(x, "releaseInfo", "")); if (!o->year) o->year = atoi(js_str(x, "released", ""));
     o->added = iso_ms(cJSON_GetObjectItemCaseSensitive(x, "_ctime")); if (!o->added) o->added = iso_ms(cJSON_GetObjectItemCaseSensitive(x, "_mtime"));
     o->seen = iso_ms(cJSON_GetObjectItemCaseSensitive(st, "lastWatched"));
     CwInfo ci; o->cw = lib_cw_info(it, &ci); if (o->cw) { o->pct = ci.pct; o->left = ci.leftMin; it->progress = ci.pct; it->left = ci.leftMin; }
@@ -127,7 +126,7 @@ static void render(void) {
   free(L.items); L.items = NULL; L.n = 0; g_sk = sort_key();
   for (int t = 0; t < NF; t++) { L.counts[t] = 0; for (int j = 0; j < L.nall; j++) if (pass(&L.all[j], t)) L.counts[t]++; snprintf(L.cnt[t], sizeof L.cnt[t], "%d", L.counts[t]); }
   int *tmp = malloc((L.nall ? L.nall : 1) * sizeof *tmp), m = 0; for (int j = 0; j < L.nall; j++) if (pass(&L.all[j], L.tab)) tmp[m++] = j;
-  qsort(tmp, m, sizeof *tmp, cmp); L.n = m < MAXSHOW ? m : MAXSHOW; L.items = tmp;
+  qsort(tmp, m, sizeof *tmp, cmp); L.n = m; L.items = tmp;
   if (L.idx > L.n - 1) L.idx = L.n ? L.n - 1 : 0;
   timer_start(&L.gridIn, 0.3f + 0.12f); /* (the pill row keeps its motion: a filter applied on the move must not snap it) */ /* a new filter or order: the cards rise into place one column after another */
 }
@@ -258,17 +257,25 @@ static int key(int k) {
     else if (k == K_LEFT) { if (L.ri > 0) L.ri--; else nudge_start(&L.nudge, k); }
     if (L.ri != r0) sound_play(SND_FILTER); /* the filters' own tap */
     if ((k == K_RIGHT || k == K_LEFT) && L.ri < NF && L.ri != L.tab) { L.tab = L.ri; L.idx = 0; render(); } /* a filter applies as the focus lands on it */
-    else if (k == K_UP) { topnav_focus(); rail_paint(0); return 1; }
+    else if (k == K_UP || k == K_CH_UP) { topnav_focus(); rail_paint(0); return 1; }
     else if (k == K_OK && L.ri == NB - 1) { int si = (sort_key() + 1) % 4; store_set("libSort", S_KEY[si]); sound_play(SND_FILTER); L.idx = 0; timer_start(&L.press, 0.25f); render(); paint(); return 1; } /* OK on the sort: the next order */
-    else if (k == K_DOWN || (k == K_OK && L.ri < NF)) { L.ri = L.tab; if (L.n) L.zone = 1; else nudge_start(&L.nudge, k); } /* down (or OK) into the titles */
+    else if (k == K_DOWN || k == K_CH_DOWN || (k == K_OK && L.ri < NF)) { L.ri = L.tab; if (L.n) L.zone = 1; else nudge_start(&L.nudge, K_DOWN); } /* down (or OK) into the titles */
     else if (k == K_BACK) return 0;
     paint(); return 1; }
   int i0 = L.idx;
   if (k == K_RIGHT) { if (L.idx % COLS < COLS - 1 && L.idx < L.n - 1) L.idx++; else nudge_start(&L.nudge, k); }
   else if (k == K_LEFT) { if (L.idx % COLS > 0) L.idx--; else nudge_start(&L.nudge, k); }
   else if (k == K_DOWN) { if (L.idx + COLS < L.n) L.idx += COLS; else if (L.idx / COLS < (L.n - 1) / COLS) L.idx = L.n - 1; else nudge_start(&L.nudge, k); }
+  else if (k == K_CH_DOWN) {
+    if (L.idx / COLS < (L.n - 1) / COLS) { int nx = L.idx + COLS * 5; L.idx = nx < L.n ? nx : L.n - 1; }
+    else nudge_start(&L.nudge, K_DOWN);
+  }
   else if (k == K_UP) { if (L.idx >= COLS) L.idx -= COLS; else { L.zone = 0; L.ri = L.tab; } }
-  else if (k == K_BACK) return 0;
+  else if (k == K_CH_UP) {
+    if (L.idx >= COLS) L.idx = L.idx >= COLS * 5 ? L.idx - COLS * 5 : L.idx % COLS;
+    else { L.zone = 0; L.ri = L.tab; }
+  }
+  else if (k == K_BACK) { if (L.idx >= COLS) { L.idx = L.idx % COLS < L.n ? L.idx % COLS : 0; paint(); return 1; } return 0; }
   (void)i0; paint(); return 1;
 }
 static void tick(float dt) {
