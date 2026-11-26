@@ -195,9 +195,10 @@ int sb_disc_cats(const char *type, CatalogDef *out, char (*addon)[64], int max) 
 static const cJSON *disc_cat_of(const CatalogDef *d) { int ai, ci; if (sscanf(d->key, "dc%d_%d", &ai, &ci) != 2) return NULL; cJSON *a = sb_addons(); const cJSON *ad = a ? cJSON_GetArrayItem(a, ai) : NULL;
   return ad ? cJSON_GetArrayItem(js_arr(js_obj(ad, "manifest"), "catalogs"), ci) : NULL; }
 int sb_disc_cat_genres(const CatalogDef *d, char (*out)[48], int max, int *required) {
-  *required = 0; const cJSON *cat = disc_cat_of(d), *opts = NULL, *o; int req = 0, n = 0; static const char *const G[] = { "genre" };
+  if (required) *required = 0;
+  const cJSON *cat = disc_cat_of(d), *opts = NULL, *o; int req = 0, n = 0; static const char *const G[] = { "genre" };
   if (!cat || !addon_cat_extra(cat, "genre", &req, &opts, NULL) || !opts) return 0;
-  *required = req; (void)G;
+  if (required) *required = req; (void)G;
   cJSON_ArrayForEach(o, opts) if (cJSON_IsString(o) && o->valuestring[0] && n < max) copy_str(out[n++], 48, o->valuestring);
   return n;
 }
@@ -253,8 +254,15 @@ int sb_disc_genres(char (*out)[48], int max, const char *type) {
     for (int i = 0; i < (int)(sizeof D / sizeof *D) && n < max; i++) snprintf(out[n++], 48, "%s", D[i]); }
   return n;
 }
+static void iso_year(const char *s, char *out, size_t cap) {
+  if (!s || strlen(s) < 4) return;
+  for (int i = 0; i < 4; i++) if (s[i] < '0' || s[i] > '9') return;
+  int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
+  if (y >= 1900 && y <= 2100) snprintf(out, cap, "%.4s", s);
+}
 void sb_meta_line(const cJSON *m, char *out, size_t cap) {
-  const char *rel = js_str(m, "releaseInfo", NULL); char yr[32] = ""; if (rel) copy_str(yr, sizeof yr, rel); else { double y = js_num(m, "year", 0); if (y) snprintf(yr, sizeof yr, "%d", (int)y); else copy_str(yr, sizeof yr, js_str(m, "year", "")); }
+  const char *rel = js_str(m, "releaseInfo", NULL); char yr[32] = ""; if (rel && *rel) copy_str(yr, sizeof yr, rel); else { double y = js_num(m, "year", 0); if (y) snprintf(yr, sizeof yr, "%d", (int)y); else copy_str(yr, sizeof yr, js_str(m, "year", "")); }
+  if (!yr[0]) iso_year(js_str(m, "released", NULL), yr, sizeof yr);
   const char *rt = js_str(m, "runtime", ""); const cJSON *ir = cJSON_GetObjectItemCaseSensitive(m, "imdbRating"); char irs[16] = "";
   if (cJSON_IsNumber(ir)) snprintf(irs, sizeof irs, "%.1f", ir->valuedouble); else if (cJSON_IsString(ir) && ir->valuestring[0]) copy_str(irs, sizeof irs, ir->valuestring);
   snprintf(out, cap, "%s%s%s%s%s%s", yr, (*yr && (*rt || *irs)) ? "   " : "", rt, (*rt && *irs) ? "   " : "", *irs ? "IMDb " : "", irs);
