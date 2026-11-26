@@ -396,11 +396,11 @@ static void ep_decide(void) {
   int rp = lib_ep_rank(P.videos, cur, &sp); if (rn >= 0 && rp >= 0 && sp != 0 && rn < rp) { P.epState = 2; fprintf(stderr, "[lib] an earlier episode: the series stays at its place until this one is watched a while\n"); }
 }
 static void ep_back_check(void) {
-  if (P.epState != 2 || P.played < fmin(BACK_S, dur() > 0 ? dur() * 0.4 : BACK_S)) return;
+  if (sb_incognito() || P.epState != 2 || P.played < fmin(BACK_S, dur() > 0 ? dur() * 0.4 : BACK_S)) return;
   P.epState = 1; cJSON *l = lib_get(P.id); int n = l ? lib_unwatch_after(l, P.videos, P.vid) : 0;
   fprintf(stderr, "[lib] watching again from this episode: it is the series' place now, %d later episode(s) unwatched\n", n);
 }
-static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrailer || d <= 0 || live_title() || getenv("SB_PLAY_NOSAVE")) return; /* (a live broadcast: no place in Continue Watching, nothing to resume) */ /* (SB_PLAY_NOSAVE: development plays leave the library alone) */
+static void save_progress(int push) { double d = dur(); if (sb_incognito() || !P.id[0] || P.isTrailer || d <= 0 || live_title() || getenv("SB_PLAY_NOSAVE")) return; /* (incognito / live broadcast / dev play: no place in Continue Watching, nothing saved) */
   ep_decide(); if (P.epState != 1) return; /* an earlier episode not watched long enough yet, or a special: the series keeps its place */
   int ep = episodic() && P.next.has && P.next.vid[0];
   if (P.marked && !ep) return; /* watched to the credits, nothing after it: out of Continue Watching (marking it set its place to the start) */
@@ -412,7 +412,7 @@ static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrai
   if (push) fprintf(stderr, "[lib] place kept: %s at %.0f of %.0f s\n", P.vid, video_time(), d);
   P.lastSave = now_(); }
 static void mark_watched(void) {
-  if (P.isTrailer || P.marked || live_title() || getenv("SB_PLAY_NOSAVE")) return; P.marked = 1; Item it = lib_item(); cJSON *l = lib_get(P.id); if (!l) l = lib_new_item(&it);
+  if (sb_incognito() || P.isTrailer || P.marked || live_title() || getenv("SB_PLAY_NOSAVE")) return; P.marked = 1; Item it = lib_item(); cJSON *l = lib_get(P.id); if (!l) l = lib_new_item(&it);
   if (episodic() && P.videos && strcmp(P.vid, P.id)) { snprintf(it.videoId, sizeof it.videoId, "%s", P.vid); lib_episode_watched(&it, P.videos); } /* it and the aired ones before it; the show's place on to the next (a special: itself) */
   else if (!strcmp(P.type, "series") && P.vid[0] && strcmp(P.vid, P.id)) { snprintf(it.videoId, sizeof it.videoId, "%s", P.vid); lib_episode_watched(&it, NULL); } /* its episode list not here yet: from the cached one (never as a film) */
   else lib_set_movie_watched(l, 1);
@@ -570,6 +570,7 @@ static int variant_ok(const char *have, const char *want) { return !strcmp(lang_
 static int show_prefs_on(void) { return !strcmp(P.type, "series") && !P.isTrailer && P.id[0]; }
 static const cJSON *show_pref(void) { if (!show_prefs_on()) return NULL; cJSON *a = store_node("showPrefs"); return cJSON_IsObject(a) ? cJSON_GetObjectItemCaseSensitive(a, P.id) : NULL; }
 static void show_pref_put(const char *k, const char *v) { /* v NULL: that one forgotten (back to the settings') */
+  if (sb_incognito()) return;
   cJSON *a = store_node("showPrefs"); cJSON *n = cJSON_IsObject(a) ? cJSON_Duplicate(a, 1) : cJSON_CreateObject(); cJSON *o = cJSON_GetObjectItemCaseSensitive(n, P.id); if (!o) { o = cJSON_CreateObject(); cJSON_AddItemToObject(n, P.id, o); }
   cJSON_DeleteItemFromObjectCaseSensitive(o, k); if (v) cJSON_AddStringToObject(o, k, v); if (!cJSON_GetArraySize(o)) cJSON_DeleteItemFromObjectCaseSensitive(n, P.id); store_set_node("showPrefs", n); }
 static void show_pref_sub(void) { /* the subtitle on now, chosen by hand */
@@ -1018,7 +1019,7 @@ static void sk_finish(void) {
   if (has[2] && d && ee[2] > d) ee[2] = d;
   /* credits learned from this show's other episodes: how long before the end they start */
   if (episodic()) { char lk[96]; snprintf(lk, sizeof lk, "creditsOff_%s", P.id);
-    if (has[2] && d && d - ss[2] > 10 && d - ss[2] < 600) { char v[16]; snprintf(v, sizeof v, "%d", (int)(d - ss[2] + 0.5)); store_set(lk, v); }
+    if (has[2] && d && d - ss[2] > 10 && d - ss[2] < 600) { if (!sb_incognito()) { char v[16]; snprintf(v, sizeof v, "%d", (int)(d - ss[2] + 0.5)); store_set(lk, v); } }
     else if (!has[2] && d > 600) { double off = atof(store_get(lk, "0")); if (off > 90) off = 90; /* (another episode's: never earlier than with no credits known at all) */ if (off > 10) { has[2] = 1; ss[2] = d - off; ee[2] = d; } } }
   fprintf(stderr, "[player] skips from %d sources: intro %.0f-%.0f recap %.0f-%.0f credits %.0f-%.0f\n", P.sk.nsrc, has[0] ? ss[0] : -1, ee[0], has[1] ? ss[1] : -1, ee[1], has[2] ? ss[2] : -1, ee[2]);
   if (!has[0] && !has[1] && !has[2]) return;
@@ -1235,7 +1236,7 @@ static void apply_aspect(void) {
 static void next_aspect(void) {
   static const char *A[3] = { "fit", "fill", "zoom" }; static const char *N[3] = { "Original", "Fill the screen", "Zoom" }; int i = 0; for (int k = 0; k < 3; k++) if (!strcmp(A[k], P.aspect)) i = k;
   int n = (i + 1) % 3; char key[96]; aspect_key(key, sizeof key);
-  snprintf(P.aspect, sizeof P.aspect, "%s", A[n]); store_set(key, P.aspect); apply_aspect();
+  snprintf(P.aspect, sizeof P.aspect, "%s", A[n]); if (!sb_incognito()) store_set(key, P.aspect); apply_aspect();
   /* paused: the TV shows the new size with its next frame, when play resumes (asking for the same frame again was a
      seek: the stream buffered, a trailer jumped back) */
   int b = btn_index("asp"); if (b >= 0) { snprintf(P.btns[b].lb, 48, "%s", T(N[n])); P.btns[b].lw = text_width(P.btns[b].lb, 24, 700, 0) + 22; } /* the button names the mode it is in */
@@ -2073,7 +2074,7 @@ static void play_stream(const Stream *s, const char *vid, double startAt) {
   P.st = *s; snprintf(P.url, sizeof P.url, "%s", s->url); snprintf(P.alt, sizeof P.alt, "%s", nextAlt); nextAlt[0] = 0;
   if ((s->hdrs[0] || s->rhdrs[0]) && !strncmp(s->url, "http", 4)) { hproxy_url(s->url, s->hdrs, s->rhdrs, P.url, sizeof P.url); fprintf(stderr, "[player] the stream wants its own headers: through %s\n", P.url); } /* every request for it carries them */
   char info[700]; sb_stream_info(s, info, sizeof info); snprintf(P.sname, sizeof P.sname, "%s", info); snprintf(P.saddon, sizeof P.saddon, "%s", s->addon);
-  if (!P.isTrailer && strcmp(P.type, "other")) sb_remember_stream(P.id, P.vid, s); /* the torrent itself, resolved again next time */
+  if (!P.isTrailer && strcmp(P.type, "other") && !sb_incognito()) sb_remember_stream(P.id, P.vid, s); /* the torrent itself, resolved again next time */
   if (!strncmp(P.url, "ytid:", 5)) { /* a YouTube video: found as the trailers are, behind the title art */
     P.resolving = 1; set_status(""); p2pTok++; P.ytTok = trailer_find(NULL, P.url + 5, 0, on_yt, (void *)(uintptr_t)p2pTok); return; }
   if (!strncmp(P.url, "p2p://", 6)) { /* the engine finds the peers and the file while the title art shows how it goes */
@@ -2231,7 +2232,7 @@ static void finish_close(void) { if (hub_on() && hub_player_mode()) hub_close();
 static int closeNext, closeSim, closeArt; static double closeAt, closeT0; /* closeArt: closed on the loading screen (its line and words fade as the logo flies back) */
 static void close_player(int goNext, int goSim) {
   if (!P.open || P.closing) return; if (bestTok) { best_choose_cancel(bestTok); bestTok = 0; } P.closing = 1; ps_hold(0); sp_verify_reset(); np_stop(); NP.vid[0] = 0; /* (the next episode's pictures made so far: kept) */ /* (a lighter copy not taken yet: it reads on freely, nothing plays) */ closeArt = !P.live && P.artA.v > 0.999f; closeT0 = now_(); sx_begin_quick(0); /* the player's logo moves back to the page */ closeNext = goNext; closeSim = goSim; P.ssOn = 0; P.nx.tok = 0; P.sk.tok = 0;
-  scrobble_player_end(video_time(), dur(), 0); save_progress(1); video_pause(); /* (Test playback: nothing told, nothing kept) */
+  if (!sb_incognito()) scrobble_player_end(video_time(), dur(), 0); save_progress(1); video_pause(); /* (Test playback: nothing told, nothing kept) */
   /* the title's own picture fades back over the paused frame, the video goes, then the cover fades onto the app */
   closeAt = now_() + (closeArt ? 0.01 : 0.26); /* the cover fades back over the paused frame (see css()); from the loading screen the art fades at once, under the logo on its way back */
 }
@@ -2440,8 +2441,8 @@ void player_tick(float dt) {
   close_step(); if (P.closing) return;
   if (P.resolving) { const char *st = p2p_status(); if (strcmp(st, status)) set_status(st); return; } /* the art: nothing for a few seconds, then why it is slow ("Finding peers…", "Getting the file list…") */
   VidState vs = video_state();
-  /* Trakt: what plays, every frame (it decides when to tell; trailers and live broadcasts never) */
-  if (!P.isTrailer && !live_bcast()) { int ep = episodic(); ScrobbleItem si = { P.type, P.id, P.name, P.year, ep ? P.season : -1, ep ? P.episode : -1 };
+  /* Trakt: what plays, every frame (it decides when to tell; trailers, live broadcasts and incognito never) */
+  if (!P.isTrailer && !live_bcast() && !sb_incognito()) { int ep = episodic(); ScrobbleItem si = { P.type, P.id, P.name, P.year, ep ? P.season : -1, ep ? P.episode : -1 };
     scrobble_player(&si, vs == VID_PLAYING && video_live() ? 1 : paused() ? 2 : 0, video_time(), dur()); }
   if (P.started && mkv && !P.isTrailer && !P.isP2p && !sp_active()) { static double spAt; if (now_() - spAt > 0.1) { spAt = now_(); double t0 = video_time(), b0 = video_buffered_end(); char sk[300]; snprintf(sk, sizeof sk, "%s|%s|%.0f|%.0f", P.id, P.vid, P.size, dur()); sp_player_tick(prev_src_pick(), sk, 0, live_bcast() || !strcmp(P.type, "tv") || !strcmp(P.type, "channel"), t0, dur(), b0 > t0 ? b0 - t0 : -1, (vs == VID_BUFFERING || vs == VID_LOADING) && !P.pw.on, paused() || P.pw.on); } } /* (seek previews not started yet: asked ten times a second, so they start the moment the index is in) */
   { static double last = -9; static int was; double d = dur(); double f = P.seekT >= 0 ? P.seekT : P.hvOn && d > 0 ? P.hvP * d : -1; int on = f >= 0; /* the remote's scrub, or the pointer over the bar: its pictures first (told as it moves) */
@@ -2507,7 +2508,7 @@ void player_tick(float dt) {
     if (vs == VID_PLAYING && at_credits() && !P.marked) { mark_watched(); save_progress(1); } /* the credits: watched, everywhere, at once */
     if (vs == VID_PLAYING && now_() - P.lastSave >= 10) save_progress(0);
     if (vs == VID_ENDED && !P.ended && live_reload("the stream ended")) vs = video_state();
-    if (vs == VID_ENDED && !P.ended) { P.ended = 1; scrobble_player_end(video_time(), dur(), 1); save_progress(1); mark_watched(); if (strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false") && P.next.has) P.endGoAt = now_() + 0.6; else close_player(0, 0); }
+    if (vs == VID_ENDED && !P.ended) { P.ended = 1; if (!sb_incognito()) scrobble_player_end(video_time(), dur(), 1); save_progress(1); mark_watched(); if (strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false") && P.next.has) P.endGoAt = now_() + 0.6; else close_player(0, 0); }
     if (P.endGoAt && now_() >= P.endGoAt) { P.endGoAt = 0; go_next(); if (!P.open || P.closing) return; }
     check_prompt();
     if (P.prompt.autoN && (P.prompt.k == 1 || P.prompt.k == 2) && now_() - P.prompt.t0 >= P.prompt.adur && !paused()) prompt_go(0);
@@ -2701,7 +2702,7 @@ static void draw_subs_(void) {
 /* the videos whose "Previews ready" has been seen (the store, the last 200, newest last): it is said once a video */
 static int ready_seen(const char *vid) { const char *l = store_get("prevReadySeen", ""); size_t n = strlen(vid); if (!n) return 0;
   for (const char *p = l; (p = strstr(p, vid)); p += n) if ((p == l || p[-1] == ' ') && (p[n] == ' ' || !p[n])) return 1; return 0; }
-static void ready_mark(const char *vid) { if (!vid || !*vid || ready_seen(vid)) return; const char *l = store_get("prevReadySeen", ""); char b[8192]; snprintf(b, sizeof b, "%s%s%s", l, *l ? " " : "", vid);
+static void ready_mark(const char *vid) { if (sb_incognito() || !vid || !*vid || ready_seen(vid)) return; const char *l = store_get("prevReadySeen", ""); char b[8192]; snprintf(b, sizeof b, "%s%s%s", l, *l ? " " : "", vid);
   int words = 1; for (const char *p = b; *p; p++) words += *p == ' '; char *q = b; while (words > 200 && (q = strchr(q, ' '))) { q++; words--; } /* (the oldest go) */
   store_set("prevReadySeen", q && words <= 200 ? q : b); }
 /* under the controls while the previews are up: the film a little darker, a light vignette (one stretched quad) */

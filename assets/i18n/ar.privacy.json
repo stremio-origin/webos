@@ -1,0 +1,14 @@
+{
+  "Speed test": "اختبار السرعة",
+  "Set for {n} Mbps · Updated automatically on launch": "مضبوط على {n} ميجابت/ث · يُحدّث تلقائيًا عند الفتح",
+  "Testing your connection. Stay here a few seconds": "جارٍ اختبار الاتصال. انتظر بضع ثوانٍ",
+  "Measuring connection in the background…": "جارٍ قياس سرعة الاتصال في الخلفية…",
+  "Last measured: {n} Mbps · Runs automatically on launch · OK to test now": "آخر قياس: {n} ميجابت/ث · يعمل تلقائيًا عند الفتح · اضغط OK للاختبار الآن",
+  "Runs automatically in the background on launch · OK to test now": "يعمل تلقائيًا في الخلفية عند الفتح · اضغط OK للاختبار الآن",
+  "Connection speed: {n} Mbps": "سرعة الاتصال: {n} ميجابت/ث",
+  "Incognito": "التصفح الخفي",
+  "Incognito mode": "وضع التصفح الخفي",
+  "Watch without saving progress, Continue Watching, or Trakt history": "شاهد دون حفظ التقدّم أو متابعة المشاهدة أو سجل Trakt",
+  "Incognito mode on — watch history paused": "وضع التصفح الخفي مفعّل — تم إيقاف سجل المشاهدة",
+  "Incognito mode off": "تم إيقاف وضع التصفح الخفي"
+}

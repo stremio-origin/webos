@@ -463,7 +463,7 @@ static void caps_landed(const TvCaps *c, int sure, int dtsCfg) {
 #define WARM_MS 1000
 #define END_MS 7000
 static struct { volatile int stop; Uint32 t0; long long bytes; pthread_mutex_t mu; volatile int piece, refused; } SP = { 0, 0, 0, PTHREAD_MUTEX_INITIALIZER, SPEED_PIECE, 0 };
-static int speedBusy; static double speedAt; static void (*speedCb)(int, double, void *); static void *speedUd; static volatile int speedDropped;
+static int speedBusy; static volatile int speedBg; static double speedAt; static void (*speedCb)(int, double, void *); static void *speedUd; static volatile int speedDropped;
 typedef struct { long long got; } SpeedRun; /* one piece's bytes, taken back if it did not answer 2xx */
 static int speed_sink(const unsigned char *p, size_t n, void *ud) {
   (void)p; Uint32 el = SDL_GetTicks() - SP.t0;
@@ -472,7 +472,7 @@ static int speed_sink(const unsigned char *p, size_t n, void *ud) {
   return 1;
 }
 static void *speed_one(void *arg) {
-  (void)arg; int refused = 0;
+  (void)arg; plat_thread_background(10); int refused = 0;
   for (;;) { Uint32 el = SDL_GetTicks() - SP.t0; if (SP.stop || el >= END_MS) break;
     char url[96]; snprintf(url, sizeof url, SPEED_BASE "%d", SP.piece); SpeedRun r = { 0 };
     int st = net_stream_sync(url, (int)(END_MS - el) + 300, speed_sink, &r);
@@ -482,13 +482,13 @@ static void *speed_one(void *arg) {
   return NULL;
 }
 static void *speed_boss(void *arg) {
-  (void)arg; pthread_t w[SPEED_WORKERS]; int nw = 0;
+  (void)arg; plat_thread_background(10); pthread_t w[SPEED_WORKERS]; int nw = 0;
   for (int i = 0; i < SPEED_WORKERS; i++) if (!pthread_create(&w[nw], NULL, speed_one, NULL)) nw++;
   while (!SP.stop && SDL_GetTicks() - SP.t0 < END_MS) SDL_Delay(20);
   Uint32 now = SDL_GetTicks(); SP.stop = 1;
   for (int i = 0; i < nw; i++) pthread_join(w[i], NULL);
   double secs = fmax(0.5, ((double)((now - SP.t0) < END_MS ? (now - SP.t0) : END_MS) - WARM_MS) / 1000), mbps = floor(SP.bytes * 8 / secs / 1e5 + 0.5) / 10;
-  fprintf(stderr, "[best] speed: %.1f Mbps (%lld bytes in %.1f s, pieces of %.1f MB)%s%s\n", mbps, SP.bytes, secs, SP.piece / 1e6, speedDropped ? ", cancelled" : "", SP.refused ? ", the test server refused some" : "");
+  fprintf(stderr, "[best] speed%s: %.1f Mbps (%lld bytes in %.1f s, pieces of %.1f MB)%s%s\n", speedBg ? " (bg)" : "", mbps, SP.bytes, secs, SP.piece / 1e6, speedDropped ? ", cancelled" : "", SP.refused ? ", the test server refused some" : "");
   if (SP.refused) fprintf(stderr, "[best] speed: the test server answered %d\n", SP.refused);
   pthread_mutex_lock(&mailMu); mail.speedOk = SP.bytes > 0 && mbps > 0; mail.mbps = mbps; mail.speedReady = 1; pthread_mutex_unlock(&mailMu);
   return NULL;
@@ -498,19 +498,32 @@ double best_speed_live(void) { /* the speed so far, once the first second has pa
   pthread_mutex_lock(&SP.mu); long long by = SP.bytes; pthread_mutex_unlock(&SP.mu); return by * 8.0 / ((el - WARM_MS) / 1000.0) / 1e6; }
 double best_net_mbps(void) { return atof(store_get("netMbps", "0")); }
 int best_speed_busy(void) { return speedBusy; }
+int best_speed_bg(void) { return speedBusy && speedBg; }
 double best_speed_since(void) { return speedBusy ? app_now() - speedAt : -1; }
-void best_speed_run(void (*cb)(int, double, void *), void *ud) {
-  if (speedBusy) return;
-  speedBusy = 1; speedAt = app_now(); speedCb = cb; speedUd = ud; speedDropped = 0;
+static void speed_start(int bg, void (*cb)(int, double, void *), void *ud) {
+  speedBusy = 1; speedBg = bg; speedAt = app_now(); speedCb = cb; speedUd = ud; speedDropped = 0;
   SP.stop = 0; SP.bytes = 0; SP.piece = SPEED_PIECE; SP.refused = 0; SP.t0 = SDL_GetTicks();
-  pthread_t t; if (pthread_create(&t, NULL, speed_boss, NULL)) { speedBusy = 0; if (cb) cb(0, 0, ud); return; } pthread_detach(t);
+  pthread_t t; if (pthread_create(&t, NULL, speed_boss, NULL)) { speedBusy = 0; speedBg = 0; speedCb = NULL; speedUd = NULL; if (cb) cb(0, 0, ud); return; } pthread_detach(t);
+}
+void best_speed_run(void (*cb)(int, double, void *), void *ud) {
+  if (speedBusy) {
+    if (speedBg && !speedDropped) { speedBg = 0; speedCb = cb; speedUd = ud; }
+    return;
+  }
+  speed_start(0, cb, ud);
+}
+void best_speed_run_bg(void) {
+  if (speedBusy) return;
+  speed_start(1, NULL, NULL);
 }
 void best_speed_cancel(void) { if (!speedBusy) return; speedDropped = 1; SP.stop = 1; }
 static void speed_landed(int ok, double mbps) {
-  speedBusy = 0; if (speedDropped) return;
+  void (*cb)(int, double, void *) = speedCb; void *ud = speedUd;
+  speedBusy = 0; speedBg = 0; speedCb = NULL; speedUd = NULL;
+  if (speedDropped) return;
   if (ok) { char b[32]; snprintf(b, sizeof b, "%.1f", mbps); size_t n = strlen(b); if (n > 2 && !strcmp(b + n - 2, ".0")) b[n - 2] = 0; store_set("netMbps", b);
     snprintf(b, sizeof b, "%.0f", (double)time(NULL) * 1000); store_set("netAt", b); }
-  if (speedCb) speedCb(ok, mbps, speedUd);
+  if (cb) cb(ok, mbps, ud);
 }
 
 /* ---- choosing for Play ------------------------------------------------------------------------------- */

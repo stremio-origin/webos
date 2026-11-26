@@ -102,7 +102,7 @@ void scrobble_init(void) {
 }
 int scrobble_state(void) { if (!A.inited) scrobble_init(); return A.state; }
 const char *scrobble_user(void) { return A.user; }
-int scrobble_on(void) { return scrobble_state() == TRAKT_LINKED && strcmp(store_get("traktScrobble", "true"), "false") != 0; }
+int scrobble_on(void) { return scrobble_state() == TRAKT_LINKED && strcmp(store_get("traktScrobble", "true"), "false") != 0 && strcmp(store_get("incognito", "false"), "true") != 0; }
 
 /* ---- connecting with a device code ---- */
 static struct { int on, busy, done, over; unsigned tok; char device[160], code[24], url[160], err[160]; double interval, until, nextAt; void (*cb)(int, void *); void *ud; } L;

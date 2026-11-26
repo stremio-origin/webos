@@ -25,6 +25,7 @@
 #include "ui/prompts.h"
 #include "ui/sound.h"
 #include "ui/orbs.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,8 +80,9 @@ static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" 
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 11
 #define MAXROWS 48
-static Setting playBase[14], playS[10], seekS[6], subsS[11], audS[4], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[10];
+static Setting playBase[16], playS[13], seekS[6], subsS[11], audS[4], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[10];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
+static int speedForAuto; /* 1 when foreground speed test was kicked off by flipping autoBest on */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
 #define WX 160.0f            /* the grid's left edge */
@@ -203,7 +205,8 @@ static unsigned usbSeen;
 static void set_count(const Setting *opts, int n) { for (int i = 0; i < ncat; i++) if (cats[i].opts == opts) { cats[i].n = n; if (S.cat == i && S.idx >= n) S.idx = n > 0 ? n - 1 : 0; } }
 static void play_layout(void) {
   int on = strcmp(store_get("bgTrailer", "true"), "false") != 0, n = 0;
-  playS[n++] = playBase[4]; playS[n++] = playBase[1]; playS[n++] = playBase[12]; playS[n++] = playBase[8]; playS[n++] = playBase[2]; { const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7]; }
+  playS[n++] = playBase[4]; playS[n++] = playBase[14]; playS[n++] = playBase[15];
+  playS[n++] = playBase[1]; playS[n++] = playBase[12]; playS[n++] = playBase[8]; playS[n++] = playBase[2]; { const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7]; }
   playS[n++] = playBase[13]; /* torrents: how they connect, then their USB cache, last */
   iUsb = n; playS[n++] = playBase[5]; /* the USB cache, last */
   set_count(playS, n);
@@ -236,6 +239,8 @@ static void build(void) {
   set_s(&playBase[2], "aspectMode", "Picture size", "Original, fill the screen or zoom", ASPECT, 3, "fit");
   set_s(&playBase[3], "bgTrailer", "Background trailers", "A trailer plays behind Home after a few seconds", OO, 2, "true");
   set_s(&playBase[4], "autoBest", "Play the best stream automatically", "", OO, 2, "false");
+  set_act(&playBase[14], "__speedtest", "Speed test", "");
+  set_s(&playBase[15], "incognito", "Incognito mode", "Watch without saving progress, Continue Watching, or Trakt history", OO, 2, "false");
   set_s(&playBase[7], "dv7Convert", "Dolby Vision for Blu-ray copies", "Their picture is converted on this TV so it shows in Dolby Vision, not HDR10", OO, 2, "true");
   set_s(&playBase[6], "bgTrailerVol", "Volume", "The sound comes up softly to this level", SVOL, 10, "70"); playBase[6].sub = 1; /* (shown right under the trailers while they are on: play_layout; drawn as theirs, set in) */
   usb_row();
@@ -329,14 +334,23 @@ static void on_sync_addons(int changed, void *ud) { (void)ud; /* what happened, 
   if (changed > 0) board_invalidate(); cats[5].n = addon_opts(); if (S.cat == 5 && S.idx >= cats[5].n) S.idx = cats[5].n - 1; S.dirty = 1; }
 static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate(); }
 static void sync_now(void) { toast(T("Syncing…"), 1500, NULL); sb_pull_library(on_sync_lib, NULL); sb_sync_addons(on_sync_addons, NULL); }
-/* the best stream: switched on only once the line is measured (once, kept); the row says why meanwhile */
-static int ab_busy(const Setting *o) { return !strcmp(o->k, "autoBest") && best_speed_busy(); }
-static void on_speed(int ok, double mbps, void *ud) { (void)mbps; (void)ud;
+/* speed test: runs automatically in the background on launch, and manually via Speed test (or autoBest if unmeasured) */
+static int ab_busy(const Setting *o) {
+  if (!best_speed_busy()) return 0;
+  if (speedForAuto && !best_speed_bg()) return !strcmp(o->k, "autoBest");
+  return !strcmp(o->k, "__speedtest");
+}
+static void on_speed(int ok, double mbps, void *ud) { (void)mbps; (void)ud; speedForAuto = 0;
   if (!ok) { toast(T("Could not check the connection. Try again in a moment"), 2600, NULL); return; }
-  store_set("autoBest", "true"); toast(T1("Your connection: {n} Mbps. Play now starts the best stream", "n", store_get("netMbps", "0")), 3800, NULL); }
+  store_set("autoBest", "true"); S.dirty = 1; toast(T1("Your connection: {n} Mbps. Play now starts the best stream", "n", store_get("netMbps", "0")), 3800, NULL); }
+static void on_speed_manual(int ok, double mbps, void *ud) { (void)mbps; (void)ud; speedForAuto = 0; S.dirty = 1;
+  if (!ok) { toast(T("Could not check the connection. Try again in a moment"), 2600, NULL); return; }
+  toast(T1("Connection speed: {n} Mbps", "n", store_get("netMbps", "0")), 3200, NULL); }
 int settings_apply_pref(const char *k, const char *v) {
   if (!strcmp(store_get(k, ""), v)) return 0;
-  if (!strcmp(k, "autoBest") && !strcmp(v, "true") && !best_on()) { if (!best_speed_busy()) { best_caps_probe(NULL, NULL); best_speed_run(on_speed, NULL); } return 1; } /* (on only once this TV's line is measured, as here) */
+  if (!strcmp(k, "autoBest") && !strcmp(v, "true") && !best_on()) {
+    if (best_net_mbps() > 0 && (!best_speed_busy() || best_speed_bg())) { best_caps_probe(NULL, NULL); store_set("autoBest", "true"); S.dirty = 1; return 1; }
+    if (!best_speed_busy() || best_speed_bg()) { speedForAuto = 1; best_caps_probe(NULL, NULL); best_speed_run(on_speed, NULL); } return 1; }
   if (!strcmp(k, "uiLang")) { store_set("uiLang", v); i18n_init(plat_asset_dir(), v); text_set_rtl(i18n_rtl()); text_gc(); board_invalidate(); /* the whole app in the phone's language, at once */
     if (SCR == SCR_SET) { int c = S.cat, i = S.idx, z = S.zone; enter(NULL); S.cat = c; S.idx = i; S.zone = z == 2 ? 1 : z; show_cat(c, 0); S.enterAt = app_now() - 10; } return 1; }
   store_set(k, v); S.dirty = 1;
@@ -351,18 +365,32 @@ static void ab_tick(void) {
   { const char *m = store_get("accent", "logo"), *d = !strcmp(m, "logo") ? "Dynamic: the colours of the logo of the title you open" : !strcmp(m, "adaptive") ? "Dynamic: the colours of the poster of the title you open" : "One colour everywhere in the app"; /* the accent row says what its choice does */
     if (strcmp(lookS[0].ds, d)) { snprintf(lookS[0].ds, sizeof lookS[0].ds, "%s", d); S.dirty = 1; } }
   best_tick();
-  /* (the row's words are made here, translated, with the kept speed in them) */
-  char d[192]; if (best_speed_busy()) snprintf(d, sizeof d, "%s", T("Testing your speed. Stay here a few seconds"));
-  else if (best_on()) snprintf(d, sizeof d, "%s", T1("Set for {n} Mbps. New network? Switch off and on again", "n", store_get("netMbps", "0")));
+  if (!best_speed_busy()) speedForAuto = 0;
+  int rel = 0;
+  /* autoBest description */
+  char d[192];
+  if (best_speed_busy() && !best_speed_bg() && speedForAuto) snprintf(d, sizeof d, "%s", T("Testing your speed. Stay here a few seconds"));
+  else if (best_on() && best_net_mbps() > 0) snprintf(d, sizeof d, "%s", T1("Set for {n} Mbps · Updated automatically on launch", "n", store_get("netMbps", "0")));
   else snprintf(d, sizeof d, "%s", T("Play starts the best stream for this TV and your internet speed"));
-  if (strcmp(playBase[4].ds, d)) { snprintf(playBase[4].ds, sizeof playBase[4].ds, "%s", d); playBase[4].raw = 0; play_layout(); S.dirty = 1; }
+  if (strcmp(playBase[4].ds, d)) { snprintf(playBase[4].ds, sizeof playBase[4].ds, "%s", d); playBase[4].raw = 0; rel = 1; }
+  /* Speed test row description */
+  char sd[192];
+  if (best_speed_busy() && !best_speed_bg() && !speedForAuto) snprintf(sd, sizeof sd, "%s", T("Testing your connection. Stay here a few seconds"));
+  else if (best_speed_busy() && best_speed_bg()) snprintf(sd, sizeof sd, "%s", T("Measuring connection in the background…"));
+  else if (best_net_mbps() > 0) snprintf(sd, sizeof sd, "%s", T1("Last measured: {n} Mbps · Runs automatically on launch · OK to test now", "n", store_get("netMbps", "0")));
+  else snprintf(sd, sizeof sd, "%s", T("Runs automatically in the background on launch · OK to test now"));
+  if (strcmp(playBase[14].ds, sd)) { snprintf(playBase[14].ds, sizeof playBase[14].ds, "%s", sd); playBase[14].raw = 0; rel = 1; }
+  if (rel) { play_layout(); S.dirty = 1; }
 }
 static void set_val(Setting *o, const char *v, int dir) {
   if (strcmp(store_get(o->k, o->d ? o->d : ""), v)) { sound_play(SND_TOGGLE); orbs_pulse(ORB_DONE, is_switch(o) ? 0.45f : 0.3f); } /* a switch or a choice: its own tone, and the glows feel it */
-  if (!strcmp(o->k, "autoBest") && !strcmp(v, "true") && !best_on()) { if (!best_speed_busy()) { best_caps_probe(NULL, NULL); best_speed_run(on_speed, NULL); } return; }
+  if (!strcmp(o->k, "autoBest") && !strcmp(v, "true") && !best_on()) {
+    if (best_net_mbps() > 0 && (!best_speed_busy() || best_speed_bg())) { best_caps_probe(NULL, NULL); store_set("autoBest", "true"); S.dirty = 1; return; }
+    if (!best_speed_busy() || best_speed_bg()) { speedForAuto = 1; best_caps_probe(NULL, NULL); best_speed_run(on_speed, NULL); } return; }
   if (!strcmp(o->k, "uiLang")) { if (strcmp(v, store_get("uiLang", "auto"))) { store_set("uiLang", v); i18n_init(plat_asset_dir(), v); text_set_rtl(i18n_rtl()); text_gc(); board_invalidate();
       int c = S.cat, i = S.idx, z = S.zone; enter(NULL); S.cat = c; S.idx = i; S.zone = z == 2 ? 1 : z; show_cat(c, 0); S.enterAt = app_now() - 10; } return; } /* the same place, in the new language */
   store_set(o->k, v); S.dirty = 1;
+  if (!strcmp(o->k, "incognito")) toast(!strcmp(v, "true") ? T("Incognito mode on — watch history paused") : T("Incognito mode off"), 2200, NULL);
   if (!strcmp(o->k, "defaultAudioTrack")) store_set("enableDefaultAudioTrack", strcmp(v, "orig") ? "true" : "false"); /* (a language: picked by itself; Original: the film's own. Kept for the phone's remote and older builds) */
   if (!strcmp(o->k, "bgTrailer") || !strcmp(o->k, "seekPreviews")) play_layout(); /* its volume row comes and goes with it, right under it */
   if (!strcmp(o->k, "traktRows") || !strcmp(o->k, "traktMarks") || !strcmp(o->k, "traktCw")) board_invalidate(); /* Trakt's rows come and go on Home */
@@ -390,8 +418,8 @@ static float right_w(const Setting *o, int focused) { /* what sits right of the 
 }
 #define DS_PX 26     /* a setting's description: 26 px on 34 px lines, at most 3 lines */
 #define DS_LH 34.0f
-/* the words under a row: only About's rows and the best stream's (its connection measured) keep them */
-static int keep_ds(const Setting *o) { return (o >= supS && o < supS + sizeof supS / sizeof *supS) || !strcmp(o->k, "autoBest"); }
+/* the words under a row: About's rows and Playback's key status rows keep them */
+static int keep_ds(const Setting *o) { return (o >= supS && o < supS + sizeof supS / sizeof *supS) || !strcmp(o->k, "autoBest") || !strcmp(o->k, "__speedtest") || !strcmp(o->k, "incognito"); }
 static int ds_lines(const Setting *o) { if (!o->ds[0] || !keep_ds(o)) return 0; int n = text_wrap_count(o->raw ? o->ds : T(o->ds), CLW - 48 - right_w(o, 0), 3, DS_PX, 400, 0); return n < 1 ? 1 : n; }
 static unsigned hash_s(const char *s, unsigned h) { while (*s) h = h * 31 + (unsigned char)*s++; return h; }
 /* what a row draws beside its words, measured once: again when the layout is redone, its value or the language
@@ -492,7 +520,7 @@ static int key(int k) {
     if (S.cat != c) { S.idx = 0; show_cat(S.cat, S.cat > c ? 1 : -1); } /* (on Log out: who is signed in, its card) */
     return 1; }
   Cat *cat = &cats[S.cat]; Setting *op = S.idx < cat->n ? &cat->opts[S.idx] : NULL;
-  if (best_speed_busy()) { if (k == K_BACK) { best_speed_cancel(); toast(T("Speed test stopped"), 1800, NULL); } else nudge_start(&S.nudge, k); return 1; } /* the test: held on its row, in view, till it lands; Back stops it */
+  if (best_speed_busy() && !best_speed_bg()) { if (k == K_BACK) { speedForAuto = 0; best_speed_cancel(); toast(T("Speed test stopped"), 1800, NULL); } else nudge_start(&S.nudge, k); return 1; } /* foreground test: held on its row till it lands; Back stops it; background startup test never locks UI */
   if (wnBtn) { if (cat->opts != supS) wnBtn = 0;
     else { if (k == K_OK) welcome_show_whatsnew(); else if (k == K_DOWN) wnBtn = 0; else if (k == K_LEFT || k == K_BACK) { wnBtn = 0; S.zone = 0; } else nudge_start(&S.nudge, k); return 1; } }
   if (k == K_UP && S.idx == 0 && cat->opts == supS) { wnBtn = 1; return 1; } /* up from About's first row: What's new */
@@ -518,6 +546,7 @@ static int key(int k) {
       if (!strcmp(op->k, "__traktOff")) { trakt_key_clear(); relang(); toast(T("The Trakt id is gone"), 2000, NULL); return 1; }
       if (!strcmp(op->k, "__keys")) { settings_open_keys(); return 1; }
       if (!strcmp(op->k, "__traktUnlink")) { scrobble_unlink(); board_invalidate(); trakt_relayout(); toast(T("Trakt is disconnected"), 2000, NULL); return 1; }
+      if (!strcmp(op->k, "__speedtest")) { speedForAuto = 0; best_caps_probe(NULL, NULL); best_speed_run(on_speed_manual, NULL); return 1; }
       if (!strcmp(op->k, "__sync")) sync_now(); else if (!strcmp(op->k, "__logs")) logcard_show(); else if (!strcmp(op->k, "__guide")) welcome_show_guide();
       else if (!strcmp(op->k, "__support")) { if (welcome_github_url()[0]) { supWant = !supWant; tween_to(&supK, (float)supWant, 0.5f, EASE_IN_OUT); orbs_pulse(supWant ? ORB_RIGHT : ORB_LEFT, 0.6f); } } /* the other code, turned over */ else if (!strcmp(op->k, "__upd")) update_install(); else if (!strcmp(op->k, "__check")) { if (update_state() != UPD_CHECKING) toast(T("Checking for updates…"), 1500, NULL); update_check(1); } else if (!strcmp(op->k, "__discord")) discord_card(); else if (!strcmp(op->k, "__logout")) logout(); return 1; } /* (only Log out signs out: a row with no action of its own does nothing) */
     if (is_switch(op)) { set_val(op, !strcmp(cur_val(op), "true") ? "false" : "true", 0); return 1; } /* a switch: OK flips it */
@@ -535,7 +564,7 @@ static void tick(float dt) {
   hl_tick(&S.hc, dt); hl_tick(&S.ho, dt); hl_tick(&S.hp, dt);
   { int inZ = S.zone == 1 && S.cat == S.shown; for (int i = 0; i < S.optN; i++) { tween_tick(&S.ra[i].swK, dt); tween_tick(&S.ra[i].swC, dt); tween_tick(&S.ra[i].dy, dt); tween_to(&S.ra[i].fk, inZ && i == S.idx ? 1 : 0, 0.18f, EASE_CSS_EASE); tween_tick(&S.ra[i].fk, dt); } }
   for (int i = 0; i < ncat && i < 32; i++) { tween_to(&catFk[i], S.zone == 0 && i == S.cat ? 1 : 0, 0.18f, EASE_CSS_EASE); tween_to(&catCk[i], S.zone != 0 && i == S.cat ? 1 : 0, 0.18f, EASE_CSS_EASE); tween_tick(&catFk[i], dt); tween_tick(&catCk[i], dt); } /* (the categories' colours too) */
-  { int kz = S.zone + (best_speed_busy() ? 10 : 0); if (kz != S.keysZone) { S.keysZone = kz; S.keysAt = app_now(); } } /* each new set of key hints fades in */
+  { int kz = S.zone + ((best_speed_busy() && !best_speed_bg()) ? 10 : 0); if (kz != S.keysZone) { S.keysZone = kz; S.keysAt = app_now(); } } /* each new set of key hints fades in */
   /* the categories scroll only as far as the focus needs; the panel keeps the focused row clear of its bottom edge */
   float cb = S.catY[S.cat] + 64, cy = cb > COLH - 60 ? cb - COLH + 60 : 0; tween_to(&S.catsY, -cy, 0.22f, EASE_CSS_EASE);
   hl_to(&S.hc, S.catY[S.cat], 64, 1, S.zone == 0 ? (cats[S.cat].out ? RGB(0xc7, 0x5a, 0x5a) : ACC) : WHITE_A(24)); /* the section you are in: a light glass mark, not a dark one */
@@ -1085,7 +1114,7 @@ static void draw(void) {
   /* ---- the key hints: each new set fades in ---- */
   { struct { int k, k2; const char *l; } ks[3]; int n = 0; /* the remote's keys, as everywhere */
     if (S.zone == 0) { ks[n].k = K_OK; ks[n].k2 = 0; ks[n++].l = cats[S.cat].out ? T("Log out") : cats[S.cat].opts == traktS && trakt_st() != TRAKT_LINKED ? T("Connect Trakt") : T("Open"); /* (on Log out, OK signs out; on Trakt not connected, it shows the code) */ ks[n].k = K_BACK; ks[n].k2 = 0; ks[n++].l = T("Leave settings"); }
-    else if (S.zone == 1 && best_speed_busy()) { ks[n].k = K_BACK; ks[n].k2 = 0; ks[n++].l = T("Stop the test"); }
+    else if (S.zone == 1 && best_speed_busy() && !best_speed_bg()) { ks[n].k = K_BACK; ks[n].k2 = 0; ks[n++].l = T("Stop the test"); }
     else if (S.zone == 1) { ks[n].k = K_LEFT; ks[n].k2 = K_RIGHT; ks[n++].l = T("Change"); ks[n].k = K_OK; ks[n].k2 = 0; ks[n++].l = T("All choices"); ks[n].k = K_BACK; ks[n].k2 = 0; ks[n++].l = T("Go to the categories"); }
     else { ks[n].k = K_OK; ks[n].k2 = 0; ks[n++].l = T("Confirm"); ks[n].k = K_BACK; ks[n].k2 = 0; ks[n++].l = T("Cancel"); }
     float kt = since(S.keysAt), ka = kt < 0.2f ? ease_apply(EASE_CSS_EASE, kt / 0.2f) : 1;

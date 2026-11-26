@@ -492,6 +492,34 @@ static void chip_act(int i, int b) { (void)b; Scr tg = chipScr(i); Scr cur = (SC
   if (tg == SCR_SEARCH || tg == SCR_SET) topnav_key(K_OK); /* opens it, the highlight inside */
   else if (i != ci || !app_is_board(SCR)) { topNav.idx = -1; topnav_switch(i); }
   else topnav_enter_content(); }
+static void incognito_pill_draw(float cx0, float cx1) {
+  if (!sb_incognito()) return;
+  int rtl = app_rtl();
+  float cw = text_width(app_clock_12() ? "00:00 PM" : "00:00", 38, 600, -0.6f);
+  float clkL = rtl ? 48 - 26 : SB_W - 48 - cw - 26;
+  float clkR = rtl ? 48 + cw + 26 : SB_W - 48 + 26;
+  const char *lbl = T("Incognito");
+  float tw = text_width(lbl, 21, 600, 0.2f);
+  float h = 46, fullW = 16 + 22 + 8 + tw + 16;
+  float room = rtl ? (cx0 - (clkR + 14) - 14) : ((clkL - 14) - cx1 - 14);
+  int compact = room < fullW;
+  float w = compact ? h : fullW;
+  float x = rtl ? (clkR + 14) : (clkL - 14 - w);
+  float y = 50 - h / 2;
+  uint32_t tint = ACC2 | 0xff000000u;
+  gfx_rrect(x, y, w, h, h / 2, RGBA(18, 16, 28, 185));
+  gfx_rrect(x, y, w, h, h / 2, col_alpha(tint, 0.20f));
+  gfx_ring(x, y, w, h, h / 2, 1.3f, col_alpha(tint, 0.55f));
+  if (compact) {
+    icon_draw("eyeOff", x + (w - 22) / 2, y + (h - 22) / 2, 22, ACC3);
+  } else if (rtl) {
+    icon_draw("eyeOff", x + w - 16 - 22, y + (h - 22) / 2, 22, ACC3);
+    text_draw(lbl, x + w - 16 - 22 - 8, y + (h - text_line_height(21)) / 2, 21, 600, WHITE_A(240), 0.2f, 0, ALIGN_RIGHT);
+  } else {
+    icon_draw("eyeOff", x + 16, y + (h - 22) / 2, 22, ACC3);
+    text_draw(lbl, x + 16 + 22 + 8, y + (h - text_line_height(21)) / 2, 21, 600, WHITE_A(240), 0.2f, 0, ALIGN_LEFT);
+  }
+}
 void topnav_draw(void) {
   if (!topNav.laidOut) topnav_paint();
   int signin = SCR == SCR_LOGIN; float pg = revpanel_page_k(); /* the reviews risen into the title page: the bar goes up and away for its buttons */
@@ -505,9 +533,10 @@ void topnav_draw(void) {
        out from under it as they come in, Search and Settings just after (an Android app opening from its place) */
     float op = ease_apply(EASE_SNAP, app_reveal_x(0.05f, 0.6f)), opT = ease_apply(EASE_SNAP, app_reveal_x(0.15f, 0.5f)), opC = app_reveal_x(0.3f, 0.4f);
     float hx0 = topNav.chipX[NAV_HOME] - 8, hx1 = topNav.chipX[NAV_HOME] + topNav.chipW[NAV_HOME] + 8, hc = (hx0 + hx1) / 2;
+    int cFirst = app_rtl() ? NAV_LIB : NAV_DISC, cLast = app_rtl() ? NAV_DISC : NAV_LIB;
+    float cx0 = topNav.chipX[cFirst] - 8, cx1 = topNav.chipX[cLast] + topNav.chipW[cLast] + 8;
     /* the tabs' capsule: one piece of glass behind the three, brighter while the bar has the focus */
     { static Tween lit; tween_to(&lit, topNav.active ? 1 : 0, 0.3f, EASE_CSS_EASE); tween_tick(&lit, DT);
-      float cx0 = topNav.chipX[NAV_DISC] - 8, cx1 = topNav.chipX[NAV_LIB] + topNav.chipW[NAV_LIB] + 8;
       { static float lean; float want = topNav.active && topNav.idx >= NAV_DISC ? ((topNav.px.v + topNav.pw.v / 2 - cx0) / (cx1 - cx0) - 0.5f) * 0.12f : 0; lean += (want - lean) * fminf(1, DT * 0.8f); /* the light leans a little towards the focused tab, slowly */
         lgSpotLean = lean; }
       { float gx = hx0 + (cx0 - hx0) * op, gy = 50 - 39, gw = (hx1 - hx0) + ((cx1 - cx0) - (hx1 - hx0)) * op, gh = 78; if (topNav.active && topNav.idx >= NAV_DISC) lg_squish(&gx, &gy, &gw, &gh, nx, ny); /* the focus pushed against the end: the capsule bulges with it */
@@ -542,6 +571,7 @@ void topnav_draw(void) {
     update_pill_draw(topNav.chipX[NAV_SET]); /* under the Settings icon, which is its rounded end */
     corner_draw(NAV_SEARCH, "nav_search", RGB(0x2f, 0xd6, 0x6b), 0); /* green key: Search */
     corner_draw(NAV_SET, "nav_set", RGB(0xef, 0x3b, 0x3b), topNav.setRot.v); /* red key: Settings */
+    incognito_pill_draw(cx0, cx1);
     if (opC < 0.999f) gfx_opacity_pop();
   }
   if (lift < 0) gfx_offset_pop();

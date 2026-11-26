@@ -51,6 +51,7 @@ static void replace_in(char *s, size_t cap, const char *from, const char *to) {
 
 /* ---- account ------------------------------------------------------------------------------ */
 int sb_init(void) { return 1; }
+int sb_incognito(void) { return !strcmp(store_get("incognito", "false"), "true"); }
 const char *sb_auth_key(void) { return store_get("authKey", NULL); }
 int sb_signed_in(void) { return sb_auth_key() != NULL; }
 const char *sb_user_email(void) { return js_str(store_node("user"), "email", ""); }
@@ -614,6 +615,7 @@ float lib_trakt_resume(const char *id, const char *vid) {
   return (double)t->at * 1000 > (js_obj(l, "state") ? lib_last_ms(l) : 0) + TW_NEWER ? t->pct : 0; }
 static char progId[SB_ID]; static Uint32 progPushT;
 void lib_set_progress(const char *id, const Item *it, const char *vid, double to, double dur, int force) {
+  if (sb_incognito()) return;
   cJSON *l = lib_get(id); if (!l) l = lib_new_item(it); cJSON *s = cJSON_GetObjectItemCaseSensitive(l, "state"); if (!s) { s = cJSON_CreateObject(); cJSON_AddItemToObject(l, "state", s); }
   if (it && !strcmp(it->id, id)) { /* its pictures and name from the title playing now: art kept wrong once (a title cast over another) is put right */
     const char *k[4] = { "name", "poster", "background", "logo" }, *v[4] = { it->name, it->poster, it->background, it->logo };
@@ -862,7 +864,7 @@ static void trakt_hand(const Item *it, const cJSON *videos, int on) {
   tw_mark_eps(sid, se, n, on); free(se); cJSON_Delete(own);
 }
 void lib_set_watched(const Item *it, const cJSON *videos, int on) { set_watched(it, videos, on); trakt_hand(it, videos, on); } /* (by hand) */
-void lib_episode_watched(const Item *it, const cJSON *videos) { set_watched(it, videos, 1); } /* (the player, at the end: Trakt hears it from the scrobble, never twice) */
+void lib_episode_watched(const Item *it, const cJSON *videos) { if (sb_incognito()) return; set_watched(it, videos, 1); } /* (the player, at the end: Trakt hears it from the scrobble, never twice) */
 void lib_toggle_watched(const Item *it, const cJSON *videos) { /* the direction read from the same episode list the mark uses */
   cJSON *l = lib_get(it->id); int w;
   if (l && (!strcmp(it->type, "series") || ep_item(it)) && videos && cJSON_GetArraySize(videos)) w = ep_item(it) ? ep_flag(l, videos, it->videoId) : lib_series_watched(l, videos); else w = lib_is_marked_watched(it);
@@ -1072,7 +1074,7 @@ int sb_resume_stream(const char *id, const char *vid, Stream *out) {
   return out->url[0] != 0;
 }
 void sb_remember_stream(const char *id, const char *vid, const Stream *s) {
-  if (!s->url[0]) return;
+  if (sb_incognito() || !s->url[0]) return;
   cJSON *all = store_node("streams"); if (!cJSON_IsObject(all)) { all = cJSON_CreateObject(); store_set_node("streams", all); }
   char k[200]; snprintf(k, sizeof k, "%s_%s", id, vid); cJSON_DeleteItemFromObjectCaseSensitive(all, k);
   cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "url", s->url); cJSON_AddStringToObject(o, "name", s->name); cJSON_AddStringToObject(o, "addon", s->addon); cJSON_AddStringToObject(o, "title", s->title);
