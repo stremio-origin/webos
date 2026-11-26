@@ -25,6 +25,7 @@
 #include "ui/prompts.h"
 #include "ui/sound.h"
 #include "ui/orbs.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -327,7 +328,7 @@ static void on_sync_addons(int changed, void *ud) { (void)ud; /* what happened, 
   else if (rm) toast(T1("Addons updated: {r} removed", "r", nr), 2600, NULL);
   else toast(T("Addons updated"), 2200, NULL); /* the same addons, their order or settings changed */
   if (changed > 0) board_invalidate(); cats[5].n = addon_opts(); if (S.cat == 5 && S.idx >= cats[5].n) S.idx = cats[5].n - 1; S.dirty = 1; }
-static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate(); }
+static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate_home(); }
 static void sync_now(void) { toast(T("Syncing…"), 1500, NULL); sb_pull_library(on_sync_lib, NULL); sb_sync_addons(on_sync_addons, NULL); }
 /* the best stream: switched on only once the line is measured (once, kept); the row says why meanwhile */
 static int ab_busy(const Setting *o) { return !strcmp(o->k, "autoBest") && best_speed_busy(); }

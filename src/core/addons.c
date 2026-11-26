@@ -2,7 +2,9 @@
 #include "core/stremio.h"
 #include "core/json.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* as encodeURIComponent: what the addon SDK's router decodes */
 void addon_urlenc(const char *s, char *out, size_t cap) {
@@ -77,9 +79,42 @@ int addon_cat_accepts(const cJSON *cat, const char *const *names, int n) {
   for (int i = 0; each_extra(cat, i, &nm, &req, &o); i++) { if (!req) continue; int got = 0; for (int k = 0; k < n; k++) if (!strcmp(names[k], nm)) got = 1; if (!got) return 0; }
   return 1;
 }
+static int parse_year_opt(const char *s) {
+  if (!s || strlen(s) != 4) return 0;
+  for (int i = 0; i < 4; i++) if (s[i] < '0' || s[i] > '9') return 0;
+  int y = atoi(s);
+  return (y >= 1900 && y <= 2100) ? y : 0;
+}
+static const char *pick_default_opt(const cJSON *o) {
+  const cJSON *f = o ? cJSON_GetArrayItem(o, 0) : NULL;
+  if (!cJSON_IsString(f) || !f->valuestring) return NULL;
+  /* Year option lists (e.g. Cinemeta "year"): pick the current calendar year (or latest <= current year)
+     so a future year at index 0 or an ascending year list never hides this year's latest releases. */
+  int n = cJSON_GetArraySize(o);
+  if (n >= 2 && parse_year_opt(f->valuestring)) {
+    const cJSON *s = cJSON_GetArrayItem(o, 1);
+    if (cJSON_IsString(s) && parse_year_opt(s->valuestring)) {
+      time_t now = time(NULL); struct tm tm; localtime_r(&now, &tm);
+      int curY = tm.tm_year + 1900;
+      const char *bestLe = NULL, *bestAny = NULL; int yLe = 0, yAny = 0;
+      const cJSON *el;
+      cJSON_ArrayForEach(el, o) {
+        if (!cJSON_IsString(el) || !el->valuestring) continue;
+        int y = parse_year_opt(el->valuestring);
+        if (!y) continue;
+        if (y == curY) return el->valuestring;
+        if (y <= curY && y > yLe) { yLe = y; bestLe = el->valuestring; }
+        if (y > yAny) { yAny = y; bestAny = el->valuestring; }
+      }
+      if (bestLe) return bestLe;
+      if (bestAny) return bestAny;
+    }
+  }
+  return f->valuestring;
+}
 int addon_cat_default_extra(const cJSON *cat, char *out, size_t cap) {
   out[0] = 0; const char *nm; int req; const cJSON *o;
-  for (int i = 0; each_extra(cat, i, &nm, &req, &o); i++) { if (!req) continue; const cJSON *f = o ? cJSON_GetArrayItem(o, 0) : NULL; if (!cJSON_IsString(f)) return -1; addon_extra_add(out, cap, nm, f->valuestring); }
+  for (int i = 0; each_extra(cat, i, &nm, &req, &o); i++) { if (!req) continue; const char *v = pick_default_opt(o); if (!v) return -1; addon_extra_add(out, cap, nm, v); }
   return 0;
 }
 void addon_cache_hints(const cJSON *j, AddonCache *c) {

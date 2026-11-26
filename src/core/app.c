@@ -380,9 +380,10 @@ void topnav_switch(int i) {
 static void topnav_flush(int drop) { if (topNav.want < 0) return; int w = topNav.want; topNav.want = -1; if (drop) return; topNav.idx = -1; topnav_switch(w); }
 static void topnav_enter_content(void) {
   topNav.active = 0; Scr t = chipScr(topNav.idx);
-  extern void board_from_bar(void), lib_from_bar(void);
-  if (SCR == SCR_HOME || SCR == SCR_DISC) board_from_bar();   /* a board: its first row (Discover: its spotlight) */
-  else if (SCR == SCR_LIB) lib_from_bar();                    /* the Library: its categories */
+  extern int board_from_bar(void); extern void lib_from_bar(void);
+  if (SCR == SCR_HOME || SCR == SCR_DISC) {
+    if (!board_from_bar()) { topNav.active = 1; nudge_start(&topNav.nudge, K_DOWN); topnav_paint(); return; }
+  } else if (SCR == SCR_LIB) lib_from_bar();                    /* the Library: its categories */
   else if (t != SCR_SEARCH && t != SCR_SET && screens[SCR] && screens[SCR]->key) screens[SCR]->key(K_DOWN); /* Search and Settings keep their own top highlight */
   topnav_paint();
 }
@@ -947,7 +948,7 @@ static void key_dispatch(int k, int repeat) {
   if (screens[SCR] && screens[SCR]->key) screens[SCR]->key(k);
 }
 void app_text(const char *utf8) { idle_touch(); if (app_overlay && app_overlay->text) app_overlay->text(utf8); else if (screens[SCR] && screens[SCR]->text) screens[SCR]->text(utf8); }
-void app_refresh_boards(void) { extern void board_invalidate(void); extern void board_refresh_quiet(void); board_invalidate(); if (app_is_board(SCR)) board_refresh_quiet(); } /* in place: no row replays its entrance */
+void app_refresh_boards(void) { extern void board_invalidate_home(void); extern void board_refresh_quiet(void); board_invalidate_home(); if (SCR == SCR_HOME) board_refresh_quiet(); } /* in place: only Home carries Continue Watching */
 void app_init(void) {
   vig_tex(0); vig_tex(1); /* both shadings made at start: the first title page would make its own mid-zoom */
   topNav.want = -1; NOW = SDL_GetTicks() / 1000.0; lastIn = NOW; lastNav = NOW; bgMode = 0; tween_set(&toastA, 0);
