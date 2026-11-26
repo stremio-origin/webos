@@ -346,6 +346,10 @@ int best_dur(const cJSON *meta, const char *type) {
   const cJSON *rt = meta ? cJSON_GetObjectItemCaseSensitive(meta, "runtime") : NULL; char b[64] = "";
   if (cJSON_IsString(rt) && rt->valuestring) snprintf(b, sizeof b, "%s", rt->valuestring); else if (cJSON_IsNumber(rt)) snprintf(b, sizeof b, "%g", rt->valuedouble);
   int d = sb_runtime_min(b); if (d) return d;
+  if (type && (!strcmp(type, "anime") || !strcasecmp(type, "Anime Series"))) {
+    const cJSON *vs = meta ? cJSON_GetObjectItemCaseSensitive(meta, "videos") : NULL;
+    return cJSON_IsArray(vs) && cJSON_GetArraySize(vs) == 1 ? 100 : 24;
+  }
   { const char *id = js_str(meta, "id", ""); int anime = !strncmp(id, "kitsu:", 6) || !strncmp(id, "mal:", 4) || !strncmp(id, "anilist:", 8); const cJSON *g; cJSON_ArrayForEach(g, js_arr(meta, "genres")) if (cJSON_IsString(g) && (!strcasecmp(g->valuestring, "anime") || !strcasecmp(g->valuestring, "animation"))) anime = anime || (type && !strcmp(type, "series"));
     if (anime) return type && !strcmp(type, "series") ? 24 : 100; } /* (an anime episode: 24 min, not 45: its bitrate was taken for half what it is) */
   return type && !strcmp(type, "series") ? 45 : 110;

@@ -39,6 +39,67 @@ static double tms(const cJSON *v) { /* _mtime as epoch ms or ISO text */
   return 0;
 }
 int sb_is_imdb(const char *id) { return id && id[0] == 't' && id[1] == 't'; }
+static int digits_span(const char *s, const char *end, int *out) {
+  if (!s || s >= end) return 0;
+  long v = 0;
+  for (const char *p = s; p < end; p++) {
+    if (*p < '0' || *p > '9') return 0;
+    v = v * 10 + (*p - '0');
+    if (v > 999999) return 0;
+  }
+  if (out) *out = (int)v;
+  return 1;
+}
+int sb_parse_video_id(const char *itemId, const char *vid, int *outSeason, int *outEp) {
+  if (outSeason) *outSeason = -1;
+  if (outEp) *outEp = -1;
+  if (!vid || !*vid) return 0;
+  if (itemId && *itemId) {
+    size_t il = strlen(itemId);
+    if (!strcmp(vid, itemId)) return 0;
+    if (!strncmp(vid, itemId, il) && vid[il] == ':') {
+      const char *rest = vid + il + 1, *end = rest + strlen(rest), *c = strchr(rest, ':');
+      int s = -1, e = -1;
+      if (c && !strchr(c + 1, ':') && digits_span(rest, c, &s) && digits_span(c + 1, end, &e)) {
+        if (outSeason) *outSeason = s;
+        if (outEp) *outEp = e;
+        return 1;
+      }
+      if (!c && digits_span(rest, end, &e)) {
+        if (outEp) *outEp = e;
+        return 2;
+      }
+    }
+  }
+  const char *end = vid + strlen(vid), *cLast = strrchr(vid, ':');
+  if (!cLast || cLast == vid) return 0;
+  int e = -1;
+  if (!digits_span(cLast + 1, end, &e)) return 0;
+  const char *cPrev = cLast - 1;
+  while (cPrev > vid && *cPrev != ':') cPrev--;
+  if (*cPrev != ':') return 0;
+  const char *cFirst = strchr(vid, ':');
+  int s = -1;
+  if (cFirst < cPrev) {
+    if (digits_span(cPrev + 1, cLast, &s)) {
+      if (outSeason) *outSeason = s;
+      if (outEp) *outEp = e;
+      return 1;
+    }
+    return 0;
+  }
+  int tt = vid[0] == 't' && vid[1] == 't' && digits_span(vid + 2, cFirst, NULL);
+  if (tt && digits_span(cFirst + 1, cLast, &s)) {
+    if (outSeason) *outSeason = s;
+    if (outEp) *outEp = e;
+    return 1;
+  }
+  if (!tt) {
+    if (outEp) *outEp = e;
+    return 2;
+  }
+  return 0;
+}
 static void copy_str(char *dst, size_t cap, const char *s) { if (!cap) return; if (!s) { dst[0] = 0; return; } size_t n = strlen(s); if (n >= cap) n = cap - 1; memmove(dst, s, n); dst[n] = 0; }
 /* picture addresses are rewritten for every card in every frame: a plain search (the library's strstr prepares each
    needle first, and printf copies), both measured on the TV's drawing thread */
@@ -128,30 +189,60 @@ void sb_sync_addons(void (*cb)(int, void *), void *ud) {
   ChBox *x = malloc(sizeof *x); x->cb = cb; x->ud = ud; net_post_json(STREMIO_API "/api/addonCollectionGet", body, on_addons, x); free(body);
 }
 /* ---- catalogs ------------------------------------------------------------------------------ */
-static const char *type_label(const char *t) { return !strcmp(t, "movie") ? T("Movies") : !strcmp(t, "series") ? T("Series") : t; }
+static const char *type_label(const char *t) {
+  if (!strcasecmp(t, "movie") || !strcasecmp(t, "anime movies")) return T("Movies");
+  if (!strcasecmp(t, "series") || !strcasecmp(t, "anime series")) return T("Series");
+  if (!strcasecmp(t, "anime") || !strcasecmp(t, "other") || !strcasecmp(t, "tv") || !strcasecmp(t, "channel")) return "";
+  return t;
+}
+static void cat_row_title(const char *cnm, const char *cid, const char *ctype, char *out, size_t cap) {
+  const char *nm = (cnm && *cnm) ? cnm : cid;
+  const char *suf = type_label(ctype);
+  if (suf && *suf) snprintf(out, cap, "%s%s%s", nm, *nm ? " · " : "", suf);
+  else snprintf(out, cap, "%s", nm);
+}
+static void ascii_low(const char *s, char *out, size_t cap) {
+  copy_str(out, cap, s ? s : "");
+  for (char *q = out; *q; q++) if (*q >= 'A' && *q <= 'Z') *q += 32;
+}
+static int has_anime_word(const char *low) {
+  return strstr(low, "anime") || strstr(low, "kitsu") || strstr(low, "myanimelist") || strstr(low, "anisearch") || strstr(low, "anilist");
+}
+/* 1 = dedicated anime catalog/addon (shown first on Anime), 2 = anime service row inside a general addon (e.g. Crunchyroll), 0 = non-anime */
+static int anime_cat_rank(const cJSON *ad, const cJSON *cat) {
+  const cJSON *m = js_obj(ad, "manifest");
+  char mlow[256], clow[320], tlow[64], ilow[128];
+  snprintf(mlow, sizeof mlow, "%s %s", js_str(m, "id", ""), js_str(m, "name", ""));
+  ascii_low(mlow, mlow, sizeof mlow);
+  const char *ctype = js_str(cat, "type", ""), *cid = js_str(cat, "id", ""), *cnm = js_str(cat, "name", "");
+  ascii_low(ctype, tlow, sizeof tlow); ascii_low(cid, ilow, sizeof ilow);
+  snprintf(clow, sizeof clow, "%s %s %s", ctype, cid, cnm); ascii_low(clow, clow, sizeof clow);
+  if (strstr(tlow, "anime") || has_anime_word(mlow) || has_anime_word(clow)) return 1;
+  if (strstr(clow, "crunchyroll") || strstr(clow, "hidive") || strstr(clow, "funimation") ||
+      !strcmp(ilow, "cru") || !strcmp(ilow, "streaming.cru")) return 2;
+  return 0;
+}
 static void def_url(CatalogDef *d) { snprintf(d->url, sizeof d->url, "%s%s%s.json", d->path, d->extra[0] ? "/" : "", d->extra); }
 static void def_set(CatalogDef *d, const char *title, const char *type, const char *path, const char *extra, int skip, const char *key) {
   memset(d, 0, sizeof *d); copy_str(d->title, sizeof d->title, title); copy_str(d->type, sizeof d->type, type); copy_str(d->path, sizeof d->path, path);
   copy_str(d->extra, sizeof d->extra, extra ? extra : ""); d->skip = skip; copy_str(d->key, sizeof d->key, key); def_url(d);
 }
-/* every installed catalog a board can show, in addon order (as the official board): one asked with nothing chosen,
-   or with the first option of each required property (Cinemeta's "year" with this year); never one that needs a
-   search or a list of ids. from: how many to pass over first */
+/* every installed non-anime catalog a board can show, in addon order (anime catalogs live on SCR_ANIME) */
 static int board_defs(CatalogDef *out, int max, int from) {
   int n = 0, seen = 0; cJSON *a = sb_addons(); const cJSON *ad; if (!a) return 0; int ai = 0;
   cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
     if (cats) cJSON_ArrayForEach(cat, cats) {
       const char *ctype = js_str(cat, "type", NULL), *cid = js_str(cat, "id", NULL); char ex[200];
-      if (ctype && cid && *ctype && *cid && addon_cat_default_extra(cat, ex, sizeof ex) == 0 && seen++ >= from && n < max) {
+      if (ctype && cid && *ctype && *cid && !anime_cat_rank(ad, cat) && addon_cat_default_extra(cat, ex, sizeof ex) == 0 && seen++ >= from && n < max) {
         CatalogDef *d = &out[n++]; const char *nm = js_str(cat, "name", ""); char title[96], key[48], path[512], te[96], ie[300];
-        snprintf(title, sizeof title, "%s%s%s", nm, *nm ? " · " : "", type_label(ctype)); snprintf(key, sizeof key, "a%d_%d", ai, ci);
+        cat_row_title(nm, cid, ctype, title, sizeof title); snprintf(key, sizeof key, "a%d_%d", ai, ci);
         addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
         def_set(d, title, ctype, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key); }
       ci++; }
     ai++; }
   return n;
 }
-/* Home: every installed catalog, in the addons' order (it showed the first 8 and dropped the rest) */
+/* Home: every installed non-anime catalog, in the addons' order, plus Trakt rows last */
 int sb_home_defs(CatalogDef *out, int max) {
   int n = board_defs(out, max, 0);
   if (!n) {
@@ -159,36 +250,75 @@ int sb_home_defs(CatalogDef *out, int max) {
       { "Top Rated · Movies", "movie", CINEMETA "/catalog/movie/imdbRating", "cin_m_ir" }, { "Top Rated · Series", "series", CINEMETA "/catalog/series/imdbRating", "cin_s_ir" } };
     for (int i = 0; i < 4 && n < max; i++) def_set(&out[n++], defs[i][0], defs[i][1], defs[i][2], NULL, 1, defs[i][3]);
   }
-  n += traktrows_defs(out + n, max - n); /* Trakt's rows last, as the official Trakt addon's come (none when the account has that addon) */
+  if (n < max) n += traktrows_defs(out + n, max - n); /* Trakt's rows last, as the official Trakt addon's come (none when the account has that addon) */
   return n;
 }
-/* Discover, as the official app's: a type, one of that type's catalogs (every installed addon's, in their order, Cinemeta
-   first as it is installed first), and the catalog's own genres; the listing is that catalog asked with them. Live
-   types stay in All channels. A catalog is offered when it can be asked as it is (a required property: its first option,
-   as the official app does) and never when it needs a search or a list of ids */
+/* Anime: dedicated anime addons/catalogs first (rank 1), followed by anime streaming rows like Crunchyroll (rank 2) */
+int sb_anime_defs(CatalogDef *out, int max) {
+  int n = 0; cJSON *a = sb_addons(); if (!a) return 0;
+  for (int pass = 1; pass <= 2 && n < max; pass++) {
+    int ai = 0; const cJSON *ad;
+    cJSON_ArrayForEach(ad, a) {
+      if (!sb_addon_on(ad)) { ai++; continue; }
+      const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
+      if (cats) cJSON_ArrayForEach(cat, cats) {
+        const char *ctype = js_str(cat, "type", NULL), *cid = js_str(cat, "id", NULL), *cnm = js_str(cat, "name", ""); char ex[200];
+        if (ctype && cid && *ctype && *cid && n < max && anime_cat_rank(ad, cat) == pass && addon_cat_default_extra(cat, ex, sizeof ex) == 0) {
+          CatalogDef *d = &out[n++]; char title[96], key[48], path[512], te[96], ie[300];
+          cat_row_title(cnm, cid, ctype, title, sizeof title); snprintf(key, sizeof key, "an%d_%d", ai, ci);
+          addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+          def_set(d, title, ctype, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key);
+        }
+        ci++;
+      }
+      ai++;
+    }
+  }
+  return n;
+}
 static int disc_cat_ok(const cJSON *cat, char *ex, size_t cap) { const char *t = js_str(cat, "type", NULL), *id = js_str(cat, "id", NULL);
   return t && id && *t && *id && strcmp(t, "tv") && strcmp(t, "channel") && addon_cat_default_extra(cat, ex, cap) == 0; }
+static int type_is_anime_raw(const char *t) {
+  char low[32]; ascii_low(t, low, sizeof low);
+  return strstr(low, "anime") != NULL;
+}
 int sb_disc_types(char (*out)[16], int max) {
-  int n = 0; cJSON *a = sb_addons(); const cJSON *ad; static const char *const first[] = { "movie", "series" };
-  for (int f = 0; f < 3; f++) { if (a) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) continue; const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat;
-      if (cats) cJSON_ArrayForEach(cat, cats) { char ex[200]; if (!disc_cat_ok(cat, ex, sizeof ex)) continue; const char *t = js_str(cat, "type", "");
+  int n = 0, hasAnime = 0; cJSON *a = sb_addons(); const cJSON *ad; static const char *const first[] = { "movie", "series" };
+  for (int f = 0; f < 3; f++) {
+    if (a) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) continue; const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat;
+      if (cats) cJSON_ArrayForEach(cat, cats) { char ex[200]; if (!disc_cat_ok(cat, ex, sizeof ex)) continue;
+        if (anime_cat_rank(ad, cat) > 0) hasAnime = 1;
+        const char *t = js_str(cat, "type", "");
+        if (type_is_anime_raw(t)) continue; /* unified under "anime" below */
         if (f < 2 ? strcmp(t, first[f]) : (!strcmp(t, "movie") || !strcmp(t, "series"))) continue; /* (films, then series, then the rest as met) */
-        int dup = 0; for (int i = 0; i < n && !dup; i++) dup = !strcmp(out[i], t); if (!dup && n < max) copy_str(out[n++], 16, t); } } }
+        int dup = 0; for (int i = 0; i < n && !dup; i++) dup = !strcmp(out[i], t); if (!dup && n < max) copy_str(out[n++], 16, t); } }
+    if (f == 1 && hasAnime && n < max) copy_str(out[n++], 16, "anime");
+  }
   if (!n && max >= 2) { copy_str(out[0], 16, "movie"); copy_str(out[1], 16, "series"); n = 2; }
   return n;
 }
 int sb_disc_cats(const char *type, CatalogDef *out, char (*addon)[64], int max) {
-  int n = 0, ai = 0; cJSON *a = sb_addons(); const cJSON *ad;
-  if (a) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
-    if (cats) cJSON_ArrayForEach(cat, cats) { char ex[200];
-      if (n < max && disc_cat_ok(cat, ex, sizeof ex) && !strcmp(js_str(cat, "type", ""), type)) {
-        char key[48], path[512], te[96], ie[300]; const char *nm = js_str(cat, "name", ""), *cid = js_str(cat, "id", "");
-        snprintf(key, sizeof key, "dc%d_%d", ai, ci); addon_urlenc(type, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
-        def_set(&out[n], *nm ? nm : cid, type, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key);
-        if (addon) copy_str(addon[n], 64, js_str(js_obj(ad, "manifest"), "name", "")); n++; }
-      ci++; }
-    ai++; }
-  if (!n && max > 0) { int sr = !strcmp(type, "series"); def_set(&out[0], "Popular", sr ? "series" : "movie", sr ? CINEMETA "/catalog/series/top" : CINEMETA "/catalog/movie/top", NULL, 1, sr ? "dcs" : "dcm"); if (addon) copy_str(addon[0], 64, "Cinemeta"); n = 1; }
+  int n = 0; cJSON *a = sb_addons(); const cJSON *ad;
+  int wantAnime = type && !strcmp(type, "anime");
+  int maxPass = wantAnime ? 2 : 1;
+  if (a) for (int pass = 1; pass <= maxPass && n < max; pass++) {
+    int ai = 0;
+    cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *man = js_obj(ad, "manifest"), *cats = js_arr(man, "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
+      if (cats) cJSON_ArrayForEach(cat, cats) { char ex[200]; const char *ct = js_str(cat, "type", ""), *nm = js_str(cat, "name", ""), *cid = js_str(cat, "id", "");
+        if (n < max && disc_cat_ok(cat, ex, sizeof ex)) {
+          int ar = anime_cat_rank(ad, cat);
+          int match = wantAnime ? (ar == pass) : (!strcmp(ct, type) && ar != 1);
+          if (match) {
+            char key[48], path[512], te[96], ie[300];
+            snprintf(key, sizeof key, "dc%d_%d", ai, ci); addon_urlenc(ct, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+            def_set(&out[n], *nm ? nm : cid, ct, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key);
+            if (addon) copy_str(addon[n], 64, js_str(man, "name", "")); n++;
+          }
+        }
+        ci++; }
+      ai++; }
+  }
+  if (!n && max > 0 && !wantAnime) { int sr = !strcmp(type, "series"); def_set(&out[0], "Popular", sr ? "series" : "movie", sr ? CINEMETA "/catalog/series/top" : CINEMETA "/catalog/movie/top", NULL, 1, sr ? "dcs" : "dcm"); if (addon) copy_str(addon[0], 64, "Cinemeta"); n = 1; }
   return n;
 }
 /* the catalog behind a Discover def (its key "dc<addon>_<catalog>") */
@@ -605,7 +735,7 @@ int lib_cw_info(const Item *it, CwInfo *out) {
   const TwPlay *t = tw_play_of(it->id); if (t && (double)t->at * 1000 > (s ? lib_last_ms(l) : 0) + TW_NEWER) { copy_str(out->vid, sizeof out->vid, t->vid); out->pct = t->pct; out->leftMin = 0; return 1; } /* (Trakt's pause is the newer) */
   if (!s) return 0;
   double to = js_num(s, "timeOffset", 0), d = js_num(s, "duration", 0); if (!(to > 0) || !(d > 0) || to > d * 0.96) return 0;
-  const char *vid = js_str(s, "video_id", ""); if (!strcmp(it->type, "series") && !*vid) return 0;
+  const char *vid = js_str(s, "video_id", ""); if ((!strcmp(it->type, "series") || !strcasecmp(it->type, "Anime Series")) && !*vid) return 0;
   copy_str(out->vid, sizeof out->vid, *vid ? vid : it->id); out->pct = (float)(to / d); out->leftMin = (float)((d - to) / 60000.0); return 1;
 }
 /* where to resume a title's video from Trakt: its pause there is the newer than the library's (0..1), 0 none */
@@ -635,8 +765,10 @@ static int ordered_ids(const cJSON *videos, char ids[][80], int max) { /* (seaso
   int n = 0, cap = cJSON_GetArraySize(videos); if (cap > max) cap = max; if (cap <= 0) return 0; const cJSON *v; /* (on the heap: a long series' keys are too big for a stack) */
   double (*keys)[3] = malloc((size_t)cap * sizeof *keys), (*tmp)[3] = malloc((size_t)cap * sizeof *tmp); const cJSON **ptr = malloc((size_t)cap * sizeof *ptr);
   if (!keys || !tmp || !ptr) { free(keys); free(tmp); free(ptr); return 0; }
-  cJSON_ArrayForEach(v, videos) { if (n >= cap) break; const cJSON *s = cJSON_GetObjectItemCaseSensitive(v, "season"), *e = cJSON_GetObjectItemCaseSensitive(v, "episode"); int both = cJSON_IsNumber(s) && cJSON_IsNumber(e);
-    keys[n][0] = both ? s->valuedouble : -1e18; keys[n][1] = both ? e->valuedouble : -1e18; keys[n][2] = n; ptr[n] = v; n++; }
+  cJSON_ArrayForEach(v, videos) { if (n >= cap) break; const cJSON *s = cJSON_GetObjectItemCaseSensitive(v, "season"), *e = cJSON_GetObjectItemCaseSensitive(v, "episode");
+    if (!cJSON_IsNumber(e)) e = cJSON_GetObjectItemCaseSensitive(v, "number");
+    int hasS = cJSON_IsNumber(s), hasE = cJSON_IsNumber(e);
+    keys[n][0] = hasS && hasE ? s->valuedouble : -1e18; keys[n][1] = hasE ? e->valuedouble : -1e18; keys[n][2] = n; ptr[n] = v; n++; }
   for (int i = 0; i < n; i++) { tmp[i][0] = keys[i][0]; tmp[i][1] = keys[i][1]; tmp[i][2] = keys[i][2]; }
   qsort(tmp, n, sizeof tmp[0], cmp_vid);
   for (int i = 0; i < n; i++) copy_str(ids[i], 80, js_str(ptr[(int)tmp[i][2]], "id", ""));
@@ -746,19 +878,31 @@ int lib_movie_watched(const cJSON *l) { if (tw_movie(js_str(l, "_id", ""))) retu
 int lib_series_watched(const cJSON *l, const cJSON *videos) {
   if (!videos || !cJSON_GetArraySize(videos)) return 0; const cJSON *s = js_obj(l, "state"); char sid[SB_ID]; show_id_of(l, videos, sid, sizeof sid); /* (l NULL: a show not in the library, its marks from Trakt alone) */
   if (!tw_show_known(sid) && (!s || (!js_str(s, "watched", "")[0] && !js_arr(s, "watchedEpisodes")))) return 0;
-  static int flags[WATCH_MAX]; lib_ep_watched_map(l, videos, flags); int k = 0, n = 0; const cJSON *v; time_t now = time(NULL);
-  cJSON_ArrayForEach(v, videos) { const cJSON *se = cJSON_GetObjectItemCaseSensitive(v, "season"); if (!cJSON_IsNumber(se) || se->valuedouble == 0) { k++; continue; }
+  static int flags[WATCH_MAX]; lib_ep_watched_map(l, videos, flags); int k = 0, n = 0, hasPosSeason = 0; const cJSON *v; time_t now = time(NULL);
+  cJSON_ArrayForEach(v, videos) if (js_num(v, "season", 0) > 0) { hasPosSeason = 1; break; }
+  cJSON_ArrayForEach(v, videos) { if (k >= WATCH_MAX) break;
+    const cJSON *se = cJSON_GetObjectItemCaseSensitive(v, "season");
+    if (hasPosSeason ? (!cJSON_IsNumber(se) || se->valuedouble <= 0) : (cJSON_IsNumber(se) && se->valuedouble == 0)) { k++; continue; }
     const char *rel = js_str(v, "released", js_str(v, "firstAired", NULL)); double r = 0; if (rel) { cJSON tmp = { 0 }; tmp.type = cJSON_String; tmp.valuestring = (char *)rel; r = tms(&tmp); }
-    if (!r || r > (double)now * 1000) { k++; continue; } n++; if (!flags[k]) return 0; k++; }
+    if (hasPosSeason ? (!r || r > (double)now * 1000) : (rel && *rel && (!r || r > (double)now * 1000))) { k++; continue; }
+    n++; if (!flags[k]) return 0; k++; }
   return n > 0;
 }
+static int meta_slot_any(const char *type, const char *id) {
+  int s = type && *type ? meta_slot(type, id) : -1;
+  if (s < 0) s = meta_slot("series", id);
+  if (s < 0) s = meta_slot("anime", id);
+  return s;
+}
+static cJSON *meta_cached_any(const char *type, const char *id) { int s = meta_slot_any(type, id); return s >= 0 ? metaMem[s].meta : NULL; }
+static int type_may_have_eps(const char *t) { return t && (!strcmp(t, "series") || !strcasecmp(t, "anime") || !strcasecmp(t, "Anime Series")); }
 /* the badge is asked for every card in every frame and a series' answer decodes its bitfield against every episode:
    it is kept per title until the library or the metadata cache moves (a series: also each minute, it counts only
    the episodes aired by now). A hit touches the metadata as the lookup did, so the titles on screen stay cached. */
 typedef struct { char id[SB_ID]; unsigned char series, on; unsigned lv, mv; long mn; int slot; } WMemo;
 static WMemo wMemo[256];
 int lib_item_watched(const Item *it) {
-  int series = !strcmp(it->type, "series"); long mn = series ? (long)(time(NULL) / 60) : 0;
+  int series = type_may_have_eps(it->type); long mn = series ? (long)(time(NULL) / 60) : 0;
   unsigned h = 2166136261u; for (const char *p = it->id; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
   WMemo *w = NULL;
   for (int k = 0; k < 8; k++) { WMemo *e = &wMemo[(h + k) & 255]; if (!e->id[0] || (!strcmp(e->id, it->id) && e->series == series)) { w = e; break; } }
@@ -766,11 +910,19 @@ int lib_item_watched(const Item *it) {
   unsigned lv = libVer + (tw_ver() * 2u + (unsigned)tw_on()) * 7919u; /* (Trakt's marks move it too, and their switch) */
   if (w->id[0] && w->lv == lv && w->mv == metaVer && w->mn == mn && !strcmp(w->id, it->id) && w->series == series) { if (w->slot >= 0) metaMem[w->slot].use = ++metaUse; return w->on; }
   cJSON *l = lib_get(it->id); int on = 0, slot = -1;
-  if (l || tw_on()) { if (series) { slot = meta_slot("series", it->id); on = lib_series_watched(l, js_arr(slot >= 0 ? metaMem[slot].meta : NULL, "videos")); } else on = l ? lib_movie_watched(l) : tw_movie(it->id); }
+  if (l || tw_on()) {
+    if (series) {
+      slot = meta_slot_any(it->type, it->id);
+      const cJSON *vids = js_arr(slot >= 0 ? metaMem[slot].meta : NULL, "videos");
+      if (vids && cJSON_GetArraySize(vids) > 1) on = lib_series_watched(l, vids);
+      else if (!strcmp(it->type, "series") || !strcasecmp(it->type, "Anime Series")) on = lib_series_watched(l, vids);
+      else on = l ? lib_movie_watched(l) : tw_movie(it->id);
+    } else on = l ? lib_movie_watched(l) : tw_movie(it->id);
+  }
   copy_str(w->id, sizeof w->id, it->id); w->series = (unsigned char)series; w->on = (unsigned char)on; w->lv = lv; w->mv = metaVer; w->mn = mn; w->slot = slot;
   return on;
 }
-static const cJSON *videos_cached(const char *id, cJSON **own);
+static const cJSON *videos_cached(const char *type, const char *id, cJSON **own);
 /* ---- marking watched by hand: one model for a film, a whole show and an episode (the player's credits use it too) ----
    episode ON : it and every aired episode before it watched (the specials left as they are); the show's place moves
                 to the start of the next aired episode ("Next episode" in Continue Watching), or, nothing next out,
@@ -813,20 +965,30 @@ static void series_mark_ep(cJSON *l, const cJSON *videos, const char *vid, int o
   }
 }
 static void series_mark_all(cJSON *l, const cJSON *videos, int on) {
-  double now = (double)time(NULL) * 1000; static const char *ids[2048]; int n = 0; const cJSON *v;
-  cJSON_ArrayForEach(v, videos) { if (on && ep_special(v)) continue; double r = ep_aired(v); if (on && (!r || r > now)) continue; if (n < 2048) ids[n++] = js_str(v, "id", ""); }
+  double now = (double)time(NULL) * 1000; static const char *ids[WATCH_MAX]; int n = 0, hasPosSeason = 0; const cJSON *v;
+  cJSON_ArrayForEach(v, videos) if (js_num(v, "season", 0) > 0) { hasPosSeason = 1; break; }
+  cJSON_ArrayForEach(v, videos) {
+    const cJSON *se = cJSON_GetObjectItemCaseSensitive(v, "season");
+    if (on && (hasPosSeason ? (!cJSON_IsNumber(se) || se->valuedouble <= 0) : (cJSON_IsNumber(se) && se->valuedouble == 0))) continue;
+    double r = ep_aired(v);
+    if (on && (hasPosSeason ? (!r || r > now) : (r > now))) continue;
+    const char *id = js_str(v, "id", ""); if (*id && n < WATCH_MAX) ids[n++] = id;
+  }
   if (n) lib_set_eps_watched(l, videos, ids, n, on); place_drop(l);
 }
 int lib_is_marked_watched(const Item *it) {
-  cJSON *l = lib_get(it->id); if (!l && !tw_on()) return 0; if (strcmp(it->type, "series") && !ep_item(it)) return l ? lib_movie_watched(l) : tw_movie(it->id);
-  cJSON *own = NULL; const cJSON *videos = videos_cached(it->id, &own); int w = 0;
-  if (videos) w = ep_item(it) ? ep_flag(l, videos, it->videoId) : lib_series_watched(l, videos);
+  cJSON *l = lib_get(it->id); if (!l && !tw_on()) return 0; if (!type_may_have_eps(it->type) && !ep_item(it)) return l ? lib_movie_watched(l) : tw_movie(it->id);
+  cJSON *own = NULL; const cJSON *videos = videos_cached(it->type, it->id, &own); int w = 0;
+  if (ep_item(it)) w = videos ? ep_flag(l, videos, it->videoId) : 0;
+  else if (videos && cJSON_GetArraySize(videos) > 1) w = lib_series_watched(l, videos);
+  else if (!strcmp(it->type, "series") || !strcasecmp(it->type, "Anime Series")) w = videos ? lib_series_watched(l, videos) : 0;
+  else w = l ? lib_movie_watched(l) : tw_movie(it->id);
   cJSON_Delete(own); return w;
 }
 /* a title's name and pictures from its metadata (memory or disk copy): a library entry made from an episode's card or
    row had the episode's name or none, and a nameless entry is never in a row (fresh: replace all, else fill the gaps) */
 static void lib_fill_art(cJSON *l, const char *type, const char *id, int fresh) {
-  cJSON *own = NULL; const cJSON *mo = sb_meta_cached(type, id);
+  cJSON *own = NULL; const cJSON *mo = meta_cached_any(type, id);
   if (!mo) { char ck[SB_ID + 48], mk[SB_ID + 32]; snprintf(mk, sizeof mk, "%s_%s", type, id); meta_ck(ck, sizeof ck, mk); size_t cl; unsigned char *t = cache_read(ck, 0, &cl); if (t) { own = cJSON_Parse((const char *)t); free(t); } mo = js_obj(own, "meta"); if (!mo) mo = own; }
   if (mo) { const char *k[4] = { "name", "poster", "background", "logo" };
     for (int i = 0; i < 4; i++) { const char *v = js_str(mo, k[i], ""); if (*v && (fresh || !js_str(l, k[i], "")[0])) { cJSON_DeleteItemFromObjectCaseSensitive(l, k[i]); cJSON_AddStringToObject(l, k[i], v); } } }
@@ -835,9 +997,12 @@ static void lib_fill_art(cJSON *l, const char *type, const char *id, int fresh) 
 static cJSON *lib_for_mark(const Item *it) { cJSON *l = lib_get(it->id); int fresh = !l; if (!l) l = lib_new_item(it); if (fresh || !js_str(l, "name", "")[0]) lib_fill_art(l, it->type, it->id, fresh); return l; }
 static void set_watched(const Item *it, const cJSON *videos, int on) {
   cJSON *l = lib_for_mark(it);
-  if (strcmp(it->type, "series") && !ep_item(it)) { lib_set_movie_watched(l, on); return; }
-  cJSON *own = NULL; if (!videos || !cJSON_GetArraySize(videos)) videos = videos_cached(it->id, &own); /* (its episodes from the disk copy when not in memory) */
-  if (videos) { if (ep_item(it)) series_mark_ep(l, videos, it->videoId, on); else series_mark_all(l, videos, on); }
+  if (!type_may_have_eps(it->type) && !ep_item(it)) { lib_set_movie_watched(l, on); return; }
+  cJSON *own = NULL; if (!videos || !cJSON_GetArraySize(videos)) videos = videos_cached(it->type, it->id, &own); /* (its episodes from the disk copy when not in memory) */
+  if (ep_item(it)) { if (videos) series_mark_ep(l, videos, it->videoId, on); }
+  else if (videos && cJSON_GetArraySize(videos) > 1) series_mark_all(l, videos, on);
+  else if (!strcmp(it->type, "series") || !strcasecmp(it->type, "Anime Series")) { if (videos) series_mark_all(l, videos, on); }
+  else lib_set_movie_watched(l, on);
   cJSON_Delete(own);
 }
 /* a mark by hand, told to Trakt as the library takes it (see traktwatch.h: only what Trakt lacks is added, unmarking
@@ -845,8 +1010,8 @@ static void set_watched(const Item *it, const cJSON *videos, int on) {
    whole show, every aired episode (on) or every one (off) */
 static void trakt_hand(const Item *it, const cJSON *videos, int on) {
   if (!tw_on()) return;
-  if (strcmp(it->type, "series") && !ep_item(it)) { tw_mark_movie(it->id, on); return; }
-  cJSON *own = NULL; if (!videos || !cJSON_GetArraySize(videos)) videos = videos_cached(it->id, &own); int nv = cJSON_GetArraySize(videos); if (!videos || nv <= 0) { cJSON_Delete(own); return; }
+  if (!type_may_have_eps(it->type) && !ep_item(it)) { tw_mark_movie(it->id, on); return; }
+  cJSON *own = NULL; if (!videos || !cJSON_GetArraySize(videos)) videos = videos_cached(it->type, it->id, &own); int nv = cJSON_GetArraySize(videos); if (!videos || nv <= 0) { cJSON_Delete(own); return; }
   int *se = malloc(sizeof *se * 2 * (size_t)nv), n = 0; if (!se) { cJSON_Delete(own); return; }
   int me = ep_item(it) ? ep_index(videos, it->videoId) : -1; const cJSON *mev = me >= 0 ? cJSON_GetArrayItem(videos, me) : NULL;
   double ms = js_num(mev, "season", -1), mn = js_num(mev, "episode", -1); /* (the order is season, then number: compared straight, never sorted for each) */
@@ -865,14 +1030,20 @@ void lib_set_watched(const Item *it, const cJSON *videos, int on) { set_watched(
 void lib_episode_watched(const Item *it, const cJSON *videos) { set_watched(it, videos, 1); } /* (the player, at the end: Trakt hears it from the scrobble, never twice) */
 void lib_toggle_watched(const Item *it, const cJSON *videos) { /* the direction read from the same episode list the mark uses */
   cJSON *l = lib_get(it->id); int w;
-  if (l && (!strcmp(it->type, "series") || ep_item(it)) && videos && cJSON_GetArraySize(videos)) w = ep_item(it) ? ep_flag(l, videos, it->videoId) : lib_series_watched(l, videos); else w = lib_is_marked_watched(it);
+  if (l && (type_may_have_eps(it->type) || ep_item(it)) && videos && cJSON_GetArraySize(videos)) w = ep_item(it) ? ep_flag(l, videos, it->videoId) : (cJSON_GetArraySize(videos) > 1 || !strcmp(it->type, "series") || !strcasecmp(it->type, "Anime Series")) ? lib_series_watched(l, videos) : lib_movie_watched(l); else w = lib_is_marked_watched(it);
   lib_set_watched(it, videos, !w); }
 
 /* the series' episode list from the memory or the disk copy of its metadata (any age); *own = what to free */
-static const cJSON *videos_cached(const char *id, cJSON **own) {
-  *own = NULL; cJSON *m = sb_meta_cached("series", id); if (m) return js_arr(m, "videos");
-  char ck[SB_ID + 48], mk[SB_ID + 32]; snprintf(mk, sizeof mk, "series_%s", id); meta_ck(ck, sizeof ck, mk); size_t cl; unsigned char *t = cache_read(ck, 0, &cl); if (!t) return NULL;
-  *own = cJSON_Parse((const char *)t); free(t); const cJSON *mo = js_obj(*own, "meta"); return js_arr(mo ? mo : *own, "videos");
+static const cJSON *videos_cached(const char *type, const char *id, cJSON **own) {
+  *own = NULL; cJSON *m = meta_cached_any(type, id); if (m) return js_arr(m, "videos");
+  const char *tys[3] = { type && *type ? type : "series", "series", "anime" };
+  for (int i = 0; i < 3; i++) {
+    if (i > 0 && !strcmp(tys[i], tys[0])) continue;
+    char ck[SB_ID + 48], mk[SB_ID + 32]; snprintf(mk, sizeof mk, "%s_%s", tys[i], id); meta_ck(ck, sizeof ck, mk); size_t cl; unsigned char *t = cache_read(ck, 0, &cl);
+    if (!t) continue;
+    *own = cJSON_Parse((const char *)t); free(t); const cJSON *mo = js_obj(*own, "meta"); return js_arr(mo ? mo : *own, "videos");
+  }
+  return NULL;
 }
 /* one-time fixes for items older builds wrote: the private watched list goes into the shared bitfield, and
    removed:false + temp:true (which every app shows in the Library) becomes the official removed:true + temp:true */
@@ -881,8 +1052,9 @@ static int lib_migrate_legacy(void) {
   cJSON_ArrayForEach(it, lib) { cJSON *s = cJSON_GetObjectItemCaseSensitive(it, "state");
     if (cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(it, "removed")) && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it, "temp"))) { set_bool(it, "removed", 1); lib_save(it); ch = 1; }
     const cJSON *we = js_arr(s, "watchedEpisodes"); if (!we || !cJSON_GetArraySize(we)) continue;
-    const char *id = js_str(it, "_id", "");
-    if (!strcmp(js_str(it, "type", ""), "series")) { cJSON *own; const cJSON *vids = videos_cached(id, &own); int n = cJSON_GetArraySize(vids); if (!vids || !n) { cJSON_Delete(own); continue; }
+    const char *id = js_str(it, "_id", ""), *ty = js_str(it, "type", "");
+    if (type_may_have_eps(ty)) { cJSON *own; const cJSON *vids = videos_cached(ty, id, &own); int n = cJSON_GetArraySize(vids); if (!vids || !n) { cJSON_Delete(own); continue; }
+      if (n > WATCH_MAX) n = WATCH_MAX;
       int *flags = calloc(n, sizeof *flags); ep_watched_raw(it, vids, flags); ep_encode(s, vids, flags); free(flags); cJSON_Delete(own); }
     else { int mine = 0; const cJSON *e; cJSON_ArrayForEach(e, we) if (cJSON_IsString(e) && !strcmp(e->valuestring, id)) mine = 1;
       if (mine && !(js_num(s, "timesWatched", 0) > 0)) { cJSON_DeleteItemFromObjectCaseSensitive(s, "timesWatched"); cJSON_AddNumberToObject(s, "timesWatched", 1); } }

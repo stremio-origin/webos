@@ -231,13 +231,14 @@ void card_prep(CardPrep *cp, const Item *it, int wide, const char *artOverride) 
     snprintf(cp->pre, sizeof cp->pre, "%s", artOverride); } /* the card shows the address as a poster; the fetch ahead asks for it as given */
   else { if (wide) sb_bg_small(it, cp->art, sizeof cp->art); else sb_poster_of(it, cp->art, sizeof cp->art); snprintf(cp->pre, sizeof cp->pre, "%s", cp->art); }
   if (!wide) return;
-  const char *c = strrchr(it->videoId, ':'); int ep = 0, se = 0;
-  if (c) { ep = atoi(c + 1); const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') se = atoi(p + 1); }
-  if (c && se >= 0) snprintf(cp->lbl, sizeof cp->lbl, "%s  S%d E%d", it->name, se, ep); else snprintf(cp->lbl, sizeof cp->lbl, "%s", it->name);
+  int se = -1, ep = -1, vr = sb_parse_video_id(it->id, it->videoId, &se, &ep);
+  if (vr == 1 && se >= 0) snprintf(cp->lbl, sizeof cp->lbl, "%s  S%d E%d", it->name, se, ep);
+  else if (vr == 2 && ep >= 0) snprintf(cp->lbl, sizeof cp->lbl, "%s  E%d", it->name, ep);
+  else snprintf(cp->lbl, sizeof cp->lbl, "%s", it->name);
   if (it->left > 0) { if (it->left < 1) snprintf(cp->left, sizeof cp->left, "%s", T("Less than a minute left")); else { char r[32]; sb_fmt_runtime((int)(it->left + 0.5f) < 1 ? 1 : (int)(it->left + 0.5f), r, sizeof r); snprintf(cp->left, sizeof cp->left, "%s", T1("{t} left", "t", r)); }
     cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; }
   else if (it->cw && it->newEp) { char nn[12]; snprintf(nn, sizeof nn, "%d", it->newEp); snprintf(cp->left, sizeof cp->left, "%s", it->newEp > 1 ? T1("{n} new episodes", "n", nn) : T("New episode")); cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; }
-  else if (it->cw && c && it->progress <= 0) { snprintf(cp->left, sizeof cp->left, "%s", T("Next episode")); cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; } /* a series waiting at its next episode (part watched with no length known, Trakt's pause: its bar alone) */
+  else if (it->cw && vr > 0 && it->progress <= 0) { snprintf(cp->left, sizeof cp->left, "%s", T("Next episode")); cp->leftW = text_width(cp->left, 22, 700, 0.2f) + 26; } /* a series waiting at its next episode (part watched with no length known, Trakt's pause: its bar alone) */
   else if (it->airAt > 0) { /* Upcoming: when it airs, by the TV's own day */
     time_t now = time(NULL), at = (time_t)it->airAt; struct tm a, b; localtime_r(&now, &a); localtime_r(&at, &b);
     a.tm_hour = b.tm_hour = 12; a.tm_min = b.tm_min = a.tm_sec = b.tm_sec = 0; int days = (int)((mktime(&b) - mktime(&a) + 43200) / 86400); char nd[12]; snprintf(nd, sizeof nd, "%d", days);

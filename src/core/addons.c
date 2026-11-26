@@ -39,8 +39,8 @@ static int serves(const cJSON *ad, const char *resource, const char *type, const
   return 0;
 }
 int addon_serves(const cJSON *ad, const char *resource, const char *type, const char *id) { return serves(ad, resource, type, id, NULL); }
-/* subtitles: an addon that declares them is asked for movies and series whatever its types say (prefixes still apply) */
-int addon_serves_subs(const cJSON *ad, const char *type, const char *id) { static const char *const MS[] = { "movie", "series", NULL }; return serves(ad, "subtitles", type, id, MS); }
+/* subtitles: an addon that declares them is asked for movies, series and anime whatever its types say (prefixes still apply) */
+int addon_serves_subs(const cJSON *ad, const char *type, const char *id) { static const char *const MS[] = { "movie", "series", "anime", "Anime Movies", "Anime Series", NULL }; return serves(ad, "subtitles", type, id, MS); }
 int addon_count_subs(const char *type, const char *id) {
   cJSON *a = sb_addons(); const cJSON *ad; int n = 0; if (a) cJSON_ArrayForEach(ad, a) if (addon_serves_subs(ad, type, id)) n++; return n;
 }
