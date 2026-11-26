@@ -21,11 +21,13 @@ void best_caps_probe(void (*cb)(const TvCaps *c, void *ud), void *ud);
 /* ---- the line ---- */
 double best_net_mbps(void);            /* the last measured speed, 0 = never measured */
 int  best_speed_busy(void);
+int  best_speed_bg(void);              /* 1 when a silent background speed test is running */
 double best_speed_live(void);          /* the running test's speed so far in Mbps (0 before it has one) */
 double best_speed_since(void);         /* seconds since the running test began (-1 when none runs) */
-/* three parallel downloads for about 7 s on workers; cb(ok, mbps) on the main thread. Does nothing (and never
-   calls cb) while a test runs, as the helper's endpoint did */
+/* six parallel downloads for about 7 s on workers; cb(ok, mbps) on the main thread. If a background test is
+   already running, best_speed_run promotes it to foreground and delivers cb when it finishes. */
 void best_speed_run(void (*cb)(int ok, double mbps, void *ud), void *ud);
+void best_speed_run_bg(void);          /* silent background measurement on app launch (never locks UI) */
 void best_speed_cancel(void);          /* stops the downloads; cb is not called */
 
 int  best_on(void);                    /* the setting */

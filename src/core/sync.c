@@ -2,13 +2,14 @@
 #include "core/away.h"
 #include "core/sync.h"
 #include "core/app.h"
+#include "core/best.h"
 #include "core/i18n.h"
 #include "screens/board.h"
 #include "screens/player.h"
 #include "platform/plat.h"
 #include <SDL2/SDL.h>
 
-static double bootAt, idleAt; static int libBoot, addonBoot, away;
+static double bootAt, idleAt; static int libBoot, addonBoot, speedBoot, away;
 static volatile int resumed;               /* set from SDL's event watch, read once a frame */
 static int rebuildWanted; static double rebuildSince;
 
@@ -42,6 +43,13 @@ void sync_tick(void) {
   notify_tick(on_notify);
   if (!libBoot && now - bootAt >= 0.7) { libBoot = 1; sb_pull_library(on_lib, NULL); }
   if (!addonBoot && now - bootAt >= 0.9) { addonBoot = 1; sb_sync_addons(on_addons, NULL); }
+  /* Run a silent background speed test once after app launch settles so Auto Best / Settings always has a fresh speed,
+     without blocking UI or stealing bandwidth if playback starts. */
+  if (best_speed_bg() && (player_open() || away)) best_speed_cancel();
+  if (!speedBoot && app_splash_done && !away && !player_open() && now - bootAt >= 8.0) {
+    speedBoot = 1;
+    best_speed_run_bg();
+  }
   if (resumed) { resumed = 0; if (sb_signed_in()) { sb_sync_soon(1); if (addonBoot) sb_sync_addons(on_addons, NULL); } /* (the addons too: one set up again on another device meanwhile) */ extern void app_trailer_wait(void); app_trailer_wait(); } /* back from another app, or relaunched (a phone's relaunch: its play comes before any trailer) */
   if (now - idleAt >= 240) { idleAt = now; if (!away && app_idle() > 20 && sb_signed_in()) sb_sync_soon(0); }
   if (rebuildWanted && (app_idle() >= 0.7 || now - rebuildSince >= 5)) {

@@ -81,7 +81,7 @@ static void take_out(const char *key, const char *id) { cJSON *a = list_of(key);
 int live_pinned(const char *id) { cJSON *a = list_of("livePins"); return a && index_in(a, id) >= 0; }
 void live_pin(const Item *it, int on) { if (on) put_first("livePins", it, 30); else take_out("livePins", it->id); }
 void live_forget(const char *id) { take_out("liveRecent", id); take_out("livePins", id); }
-static void played(const Item *it) { put_first("liveRecent", it, 30); }
+static void played(const Item *it) { if (sb_incognito()) return; put_first("liveRecent", it, 30); }
 int live_used(void) {
   cJSON *p = list_of("livePins"); if (p && cJSON_GetArraySize(p)) return 1;
   cJSON *r = list_of("liveRecent"); double cut = (double)time(NULL) - 30 * 86400.0; const cJSON *o; if (r) cJSON_ArrayForEach(o, r) if (js_num(o, "at", 0) >= cut) return 1;
