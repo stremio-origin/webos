@@ -15,9 +15,11 @@
 #include "core/hit.h"
 #include "core/net.h"
 #include "core/coll.h"
+#include "core/tmdb.h"
+#include <stdlib.h>
 
 #define COLS 6
-static struct { DetailParams p; ItemList items; int idx; char title[300], sub[200]; int loading, empty, person, coll, pendTmdb; double pendAt; unsigned collVer; char from[16], ckey[24]; double loadT0; struct { float x, y; int shown; Timer1 pop; } ring; Tween gridY; Timer1 fade; Nudge nudge; unsigned gen; } G;
+static struct { DetailParams p; ItemList items; int idx; char title[300], sub[200]; int loading, empty, person, coll, pendTmdb; double pendAt; unsigned collVer; char from[16], ckey[24]; double loadT0; struct { float x, y; int shown; Timer1 pop; } ring; Tween gridY; Timer1 fade; Nudge nudge; unsigned gen; char fbUrl[512]; int tmdbId, triedSim; unsigned openGen; } G;
 #define MAXPT 48
 typedef struct { char id[16], type[8], name[128]; } PT;
 typedef struct { char who[16]; int n; PT t[MAXPT]; } PersonMem;
@@ -49,11 +51,45 @@ static void person_load(void) {
   for (const char *s = q; *s && o + 4 < sizeof u; s++) { unsigned char c = *s; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '!' || c == '~' || c == '*' || c == '\'' || c == '(' || c == ')') u[o++] = c; else o += snprintf(u + o, sizeof u - o, "%%%02X", c); }
   u[o] = 0; net_get(u, on_person, (void *)(uintptr_t)G.gen);
 }
+static void on_tmdb_find(int st, const unsigned char *body, size_t len, void *ud);
 static void on_cat(ItemList *l, int cached, void *ud) {
   (void)cached; if ((unsigned)(uintptr_t)ud != G.gen || SCR != SCR_SIM) { itemlist_free(l); return; }
   itemlist_clear(&G.items); G.items.items = calloc(30, sizeof(Item)); G.items.n = 0;
   for (int i = 0; i < l->n && G.items.n < 30; i++) { if (!strcmp(l->items[i].id, G.p.it.id)) continue; G.items.items[G.items.n++] = l->items[i]; }
   itemlist_free(l); G.loading = 0; G.empty = G.items.n == 0; timer_start(&G.fade, 0.3f); G.idx = 0; G.ring.shown = 0;
+}
+static void fallback_cinemeta(void) { if (G.fbUrl[0]) sb_catalog_url(G.fbUrl, G.p.it.type, 31, on_cat, (void *)(uintptr_t)G.gen); else { G.loading = 0; G.empty = 1; } }
+static void tmdb_list(int similar);
+static void on_tmdb_list(int st, const unsigned char *body, size_t len, void *ud) {
+  (void)len; if ((unsigned)(uintptr_t)ud != G.gen || SCR != SCR_SIM) return;
+  cJSON *j = st == 200 ? net_json(body) : NULL; const cJSON *res = js_arr(j, "results"); int ser = !strcmp(G.p.it.type, "series");
+  ItemList l; memset(&l, 0, sizeof l); l.items = calloc(30, sizeof(Item)); const cJSON *r;
+  if (l.items && res) cJSON_ArrayForEach(r, res) { if (l.n >= 30) break;
+    int tid = (int)js_num(r, "id", 0); const char *nm = js_str(r, ser ? "name" : "title", ""), *pp = js_str(r, "poster_path", "");
+    if (tid <= 0 || tid == G.tmdbId || !*nm || !*pp) continue; /* (no poster: a card with nothing on it) */
+    Item *it = &l.items[l.n++]; snprintf(it->id, sizeof it->id, "tmdb:%d", tid); snprintf(it->type, sizeof it->type, "%s", ser ? "series" : "movie");
+    snprintf(it->name, sizeof it->name, "%s", nm); snprintf(it->poster, sizeof it->poster, "https://image.tmdb.org/t/p/w342%s", pp); }
+  net_json_free(j);
+  if (l.n < 6) { free(l.items); if (!G.triedSim) { G.triedSim = 1; tmdb_list(1); } else fallback_cinemeta(); return; } /* (few recommendations: its similar titles; none: Cinemeta) */
+  itemlist_clear(&G.items); G.items = l; G.loading = 0; G.empty = 0; timer_start(&G.fade, 0.3f); G.idx = 0; G.ring.shown = 0;
+  fprintf(stderr, "[similar] %d titles from TMDB's %s\n", l.n, G.triedSim ? "similar" : "recommendations");
+}
+static void tmdb_list(int similar) {
+  char path[160]; const char *lg = i18n_lang(); snprintf(path, sizeof path, "/%s/%d/%s?language=%s&page=1", !strcmp(G.p.it.type, "series") ? "tv" : "movie", G.tmdbId, similar ? "similar" : "recommendations", lg && *lg ? lg : "en");
+  if (!tmdb_request(path, on_tmdb_list, (void *)(uintptr_t)G.gen)) fallback_cinemeta();
+}
+static void on_tmdb_find(int st, const unsigned char *body, size_t len, void *ud) {
+  (void)len; if ((unsigned)(uintptr_t)ud != G.gen || SCR != SCR_SIM) return;
+  cJSON *j = st == 200 ? net_json(body) : NULL; const cJSON *a = js_arr(j, !strcmp(G.p.it.type, "series") ? "tv_results" : "movie_results");
+  int tid = a && cJSON_GetArraySize(a) ? (int)js_num(cJSON_GetArrayItem(a, 0), "id", 0) : 0; net_json_free(j);
+  if (tid > 0) { G.tmdbId = tid; G.triedSim = 0; tmdb_list(0); } else fallback_cinemeta();
+}
+/* a TMDB title opened from Similar: its IMDb id first (the addons' streams are found by it) */
+static void on_ext_ids(int st, const unsigned char *body, size_t len, void *ud) {
+  (void)len; Item *it = ud; if (G.openGen != G.gen || SCR != SCR_SIM) { free(it); return; }
+  cJSON *j = st == 200 ? net_json(body) : NULL; const char *imdb = js_str(j, "imdb_id", "");
+  if (!strncmp(imdb, "tt", 2)) { DetailParams p; memset(&p, 0, sizeof p); p.it = *it; snprintf(p.it.id, sizeof p.it.id, "%s", imdb); net_json_free(j); free(it); app_go(SCR_DETAIL, &p, 0); return; }
+  net_json_free(j); free(it); toast(T("Nothing found."), 2000, NULL);
 }
 static void on_meta(cJSON *m, void *ud) {
   if ((unsigned)(uintptr_t)ud != G.gen || SCR != SCR_SIM) return;
@@ -63,6 +99,11 @@ static void on_meta(cJSON *m, void *ud) {
   for (const char *q = g; *q; q++) if ((unsigned char)*q >= 0x80) { g = ""; break; } /* a translated name: the top titles instead */
   char u[512], ge[128] = ""; if (*g) { const char *s = g; char *d = ge; while (*s && d < ge + 120) { if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '-') *d++ = *s; else { snprintf(d, 4, "%%%02X", (unsigned char)*s); d += 3; } s++; } *d = 0; }
   if (ge[0]) snprintf(u, sizeof u, CINEMETA "/catalog/%s/top/genre=%s.json", G.p.it.type, ge); else snprintf(u, sizeof u, CINEMETA "/catalog/%s/top.json", G.p.it.type);
+  snprintf(G.fbUrl, sizeof G.fbUrl, "%s", u);
+  /* Stremio Origin (from Stremio Origin PR #80): TMDB's recommendations for this title when there is a key; Cinemeta's genre when not */
+  const char *id = G.p.it.id; int tt = !strncmp(id, "tt", 2);
+  for (const char *q = id + 2; tt && *q; q++) if (*q < '0' || *q > '9') tt = 0;
+  if (tt && tmdb_has_key()) { char path[96]; snprintf(path, sizeof path, "/find/%s?external_source=imdb_id", id); if (tmdb_request(path, on_tmdb_find, (void *)(uintptr_t)G.gen)) return; }
   sb_catalog_url(u, G.p.it.type, 31, on_cat, (void *)(uintptr_t)G.gen);
 }
 /* a collection (from a film's page or the Library's Collections): its films in the order they came out, the one it
@@ -91,7 +132,10 @@ static void enter(const void *pp) {
   sb_meta(G.p.it.type, G.p.it.id, on_meta, (void *)(uintptr_t)G.gen);
 }
 static const Item *focused(void) { return G.idx < G.items.n ? &G.items.items[G.idx] : NULL; }
-static void open_it(const Item *it) { if (!strncmp(it->id, "tmdb:", 5)) { G.pendTmdb = atoi(it->id + 5); G.pendAt = app_now(); return; } /* (its IMDb id on its way: opened when it comes, see tick) */
+static void open_it(const Item *it) {
+  if (!G.coll && !strncmp(it->id, "tmdb:", 5)) { Item *c = malloc(sizeof *c); if (!c) return; *c = *it; char path[64]; G.openGen = G.gen; /* (a TMDB recommendation: its IMDb id first) */
+    snprintf(path, sizeof path, "/%s/%d/external_ids", !strcmp(it->type, "series") ? "tv" : "movie", atoi(it->id + 5)); if (!tmdb_request(path, on_ext_ids, c)) free(c); return; }
+  if (!strncmp(it->id, "tmdb:", 5)) { G.pendTmdb = atoi(it->id + 5); G.pendAt = app_now(); return; } /* (its IMDb id on its way: opened when it comes, see tick) */
   DetailParams p; memset(&p, 0, sizeof p); p.it = *it; app_go(SCR_DETAIL, &p, 0); }
 static int key(int k) {
   if (!G.items.n) { if (k == K_UP) topnav_focus(); return k != K_BACK; } int i0 = G.idx;

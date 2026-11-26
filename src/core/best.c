@@ -138,6 +138,7 @@ static int seeds_of(const char *t) {
   for (const char *p = t; *p; p++) { if (!is_dig((unsigned char)*p)) continue; const char *q = p; while (is_dig((unsigned char)*q)) q++; while (*q == ' ') q++; if (ci_eq(q, "seed")) return num_at(p); }
   return -1;
 }
+int best_stream_seeds(const Stream *s) { char t[2048]; best_stream_info(s, t, sizeof t); return s->p2p ? seeds_of(t) : -1; } /* */
 static int res_n(const char *r) { return !strcmp(r, "4K") ? 2160 : !strcmp(r, "1440p") ? 1440 : !strcmp(r, "1080p") ? 1080 : !strcmp(r, "720p") ? 720 : !strcmp(r, "SD") ? 480 : 0; }
 static double by_res(int r, double r2160, double r1440, double r1080, double r720, double r480) { return r == 2160 ? r2160 : r == 1440 ? r1440 : r == 1080 ? r1080 : r == 720 ? r720 : r480; }
 /* Number#toFixed(1): half-way cases round up on the exact decimal value, as the web shows sizes */

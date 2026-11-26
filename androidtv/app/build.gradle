@@ -1,0 +1,79 @@
+// Stremio Origin for Android TV. The C app is built by app/jni/CMakeLists.txt; SDL's Java comes from deps/SDL (tools/android-deps.sh);
+// the assets are the same files tools/package.sh puts in the webOS package. Version: pkg/appinfo.json, as on webOS.
+import groovy.json.JsonSlurper
+
+plugins { id 'com.android.application' }
+
+def root = rootProject.projectDir.parentFile
+def appinfo = new JsonSlurper().parse(new File(root, 'pkg/appinfo.json'))
+def ver = appinfo.version as String
+def parts = ver.tokenize('.').collect { it as int }
+def code = parts[0] * 10000 + parts[1] * 100 + parts[2]
+
+android {
+    namespace 'tv.stremioorigin.app'
+    compileSdk 35
+    ndkVersion '27.2.12479018'
+    defaultConfig {
+        applicationId 'tv.stremioorigin.app'
+        minSdk 24
+        targetSdk 35
+        versionCode code
+        versionName ver
+        // every Android TV runs 32-bit ARM apps, the 64-bit ones too; -PoriginAbis=x86_64 builds for an emulator (the CI's test)
+        ndk { abiFilters(*((project.findProperty('originAbis') ?: 'armeabi-v7a') as String).split(',')) }
+        externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_static', '-DANDROID_ARM_NEON=ON' } }
+    }
+    externalNativeBuild { cmake { path 'jni/CMakeLists.txt'; version '3.22.1' } }
+    sourceSets {
+        main {
+            java.srcDirs += new File(root, 'androidtv/deps/SDL/android-project/app/src/main/java')
+            assets.srcDirs = [layout.buildDirectory.dir('generated/originAssets').get().asFile]
+            jniLibs.srcDirs += new File(root, 'build/android-jni')   // the torrent engine, tools/build-engine-android.sh (missing: no torrents)
+        }
+    }
+    signingConfigs {
+        release {
+            // a keystore of your own (keep it: Android only updates an app signed with the same key). Without one the
+            // release is signed with the debug key, fine to try it.
+            def ks = System.getenv('ORIGIN_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('ORIGIN_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ORIGIN_KEY_ALIAS') ?: 'origin'
+                keyPassword System.getenv('ORIGIN_KEY_PASSWORD') ?: System.getenv('ORIGIN_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('ORIGIN_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    packaging { jniLibs { useLegacyPackaging true } }
+    lint { abortOnError false; checkReleaseBuilds false }
+}
+
+dependencies {
+    def media3 = '1.5.1'
+    implementation "androidx.media3:media3-exoplayer:$media3"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3"
+    implementation "androidx.media3:media3-exoplayer-dash:$media3"
+    implementation "androidx.media3:media3-ui:$media3"
+    implementation 'androidx.annotation:annotation:1.9.1'
+}
+
+// the files the app reads at run time, as tools/package.sh lists them, under assets/origin/ (OriginActivity copies them out)
+def originAssets = tasks.register('originAssets', Sync) {
+    from(new File(root, 'assets')) {
+        include 'icon.png', 'logo.png', 'splashicon.png', 'splashbg.jpg', 'cacert.pem', 'whatsnew.json', 'icons*.json'
+        include 'fonts/**', 'i18n/**', 'sounds/**', 'guide/**'
+    }
+    from(new File(root, 'pkg/appinfo.json'))
+    from(new File(root, 'third_party/licenses')) { into 'licenses' }
+    into layout.buildDirectory.dir('generated/originAssets/origin')
+}
+preBuild.dependsOn originAssets

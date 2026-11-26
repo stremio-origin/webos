@@ -33,7 +33,7 @@ void plat_pre_init(const char *appId) {
   if (!getenv("XDG_RUNTIME_DIR")) setenv("XDG_RUNTIME_DIR", "/tmp/xdg", 1);
   SDL_SetHint(SDL_HINT_WEBOS_ACCESS_POLICY_KEYS_BACK, "true");
   SDL_SetHint(SDL_HINT_WEBOS_ACCESS_POLICY_KEYS_EXIT, "true");
-  SDL_SetHint(SDL_HINT_WEBOS_CURSOR_SLEEP_TIME, "5000"); /* the TV's own pointer sleeps after 5 s still, as the app puts it away (left unset, 5 minutes; a TV whose SDL does not know it ignores it) */
+  SDL_SetHint(SDL_HINT_WEBOS_CURSOR_SLEEP_TIME, "86400000"); /* a day; only Back puts the pointer away (5 s made it vanish a second after it came out) */ /* the TV's own pointer sleeps after 5 s still, as the app puts it away (left unset, 5 minutes; a TV whose SDL does not know it ignores it) */
   char *base = SDL_GetBasePath(); /* from /proc/self/exe: inside the jail, the jail's own path to the app */
   snprintf(assetDir, sizeof assetDir, "%sassets", base ? base : "./");
   /* the app's writable folder, kept across updates where the install allows it. The first that takes a file:

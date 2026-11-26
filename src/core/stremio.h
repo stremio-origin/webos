@@ -23,7 +23,7 @@ typedef struct { Item *items; int n; int total; /* total: the metas in the answe
 
 /* url: the first page as asked (also the cache's name); path: the address before the extra part, extra: what the
    first page is asked with (a required property's first option, or none), skip: the catalog takes "skip" (pages) */
-typedef struct { char title[96], type[16], url[512], key[48], path[512], extra[200]; int skip; } CatalogDef;
+typedef struct { char title[96], type[16], url[512], key[48], path[512], extra[200]; int skip, top10, round, wide; } CatalogDef;   /* top10: the first ten, with their ranks */
 
 int  sb_init(void);
 /* ---- account ---- */
@@ -44,10 +44,16 @@ unsigned sb_lib_sync_age(void);        /* ms since the last library pull began (
 cJSON *sb_addons(void);                /* the installed addon list (array), including those off on this TV */
 int  sb_addon_on(const cJSON *addon);  /* not switched off on this TV ("adOn_<key>") */
 void sb_addon_key(const cJSON *addon, char *out, size_t cap);  /* its manifest id, or its URL */
+/* (Stremio Claude) an addon added by its link (https://.../manifest.json or stremio://...), put last on the account */
+void sb_addon_install(const char *link, void (*cb)(int ok, void *ud), void *ud);
+int  sb_addon_link_ok(const char *link);   /* looks like an addon link */
+const char *sb_addon_last_name(void);      /* the name of the last one added */
 
 /* ---- catalogs ---- */
 int  sb_home_defs(CatalogDef *out, int max);
 int  sb_disc_defs(CatalogDef *out, int max);
+int  sb_type_defs(const char *type, CatalogDef *out, int max);   /* the Films / Series tabs, one type by category */
+int  sb_anime_defs(CatalogDef *out, int max);                    /* the Anime tab, the installed anime catalogs */
 int  sb_disc_defs_f(CatalogDef *out, int max, const char *type, const char *genre); /* Discover filtered: type "" / movie / series, genre "" for any */
 int  sb_disc_genres(char (*out)[48], int max, const char *type); /* the genres the installed catalogs of that type offer */
 /* cached copy first (cb with cached=1), then the fresh one if it differs; the list is malloc'd for the callback owner */
@@ -102,6 +108,7 @@ cJSON *lib_new_item(const Item *it);
 void lib_save(cJSON *lit);              /* mtime, store, push */
 /* force = push to the account now (pause, close, end); otherwise at most once a minute */
 void lib_set_progress(const char *id, const Item *it, const char *vid, double timeOffsetMs, double durationMs, int force);
+void lib_reset_sync(void);
 void lib_invalidate(void);
 unsigned lib_version(void);             /* bumps on every change: boards rebuild when it moves */
 

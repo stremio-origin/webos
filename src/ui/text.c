@@ -739,7 +739,8 @@ static int wrap_lines(const char *utf8, float maxW, int maxLines, int px, int we
     /* where this line may end: spaces, the paragraph's end, and between CJK characters */
     int stop = at; while (stop < n && cps[stop] != '\n') stop++;
     int nc = 0, cjk = 0;
-    for (int p = at + 1; p <= stop; p++) { if (p == stop || cps[p] == ' ') cand[nc++] = p; else if (brk_cjk(cps, at, p) && !cluster_cont(cps, p)) { cand[nc++] = p; cjk = 1; } }
+    for (int p = at + 1; p <= stop; p++) { if (p == stop || cps[p] == ' ') cand[nc++] = p; else if (brk_cjk(cps, at, p) && !cluster_cont(cps, p)) { cand[nc++] = p; cjk = 1; }
+      else if (!cluster_cont(cps, p) && cps[p] != ' ' && (cps[p - 1] == '.' || cps[p - 1] == '_' || cps[p - 1] == '-' || cps[p - 1] == '/')) cand[nc++] = p; } /* (Stremio Origin PR #67: a release name, Show.S02E01.2160p.WEB, breaks at its separators) */
     int fitEnd = -1; char tmp[1024];
     (void)cjk; { /* the longest prefix that fits, found by halving (widths grow with the prefix; each try is shaped once);
                    a single word wider than the line is cut by the ellipsis */

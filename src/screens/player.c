@@ -1482,11 +1482,13 @@ static void srcs_begin(const char *vid) {
 }
 /* the tabs: All, then each addon with how many it has (a dot while it is asked) */
 static int src_count(int g) { int n = 0; for (int i = 0; i < P.srcs.g[g].n; i++) if (P.srcs.g[g].items[i].url[0]) n++; return n; }
+static int srcTabG[40]; /* each addon tab's group: an addon with nothing to offer has no tab */
 static void src_tabs(void) { int tot = 0; P.tray.ntabs = 0;
   for (int g = 0; g < P.srcs.ng; g++) tot += src_count(g);
   { char n[12]; snprintf(n, sizeof n, "%d", tot); snprintf(P.tray.tabs[P.tray.ntabs++], 48, "%s  %s", T("All"), tot ? n : "\xc2\xb7"); }
-  for (int g = 0; g < P.srcs.ng && P.tray.ntabs < 40; g++) { char n[12]; if (P.srcs.g[g].st >= 2) snprintf(n, sizeof n, "%d", src_count(g)); else snprintf(n, sizeof n, "\xc2\xb7");
-    snprintf(P.tray.tabs[P.tray.ntabs++], 48, "%.36s  %s", P.srcs.g[g].name, n); }
+  for (int g = 0; g < P.srcs.ng && P.tray.ntabs < 40; g++) { char n[12]; if (P.srcs.g[g].st == 3 || (P.srcs.g[g].st >= 2 && !src_count(g))) continue; /* (no sources: no tab, it only took room) */
+    if (P.srcs.g[g].st >= 2) snprintf(n, sizeof n, "%d", src_count(g)); else snprintf(n, sizeof n, "\xc2\xb7");
+    srcTabG[P.tray.ntabs - 1] = g; snprintf(P.tray.tabs[P.tray.ntabs++], 48, "%.36s  %s", P.srcs.g[g].name, n); }
   if (P.tray.tab >= P.tray.ntabs) P.tray.tab = 0; }
 /* the rows' heights: a stream two lines (three with its note), a pinned one the same, an addon's name a short line */
 #define SN_PX 27      /* a stream's facts: 27 px on 34 */
@@ -1516,7 +1518,7 @@ static void src_rows(void) {
     for (int g = 0; g < P.srcs.ng; g++) { int st = P.srcs.g[g].st; if (st == 3) continue; sr_add(5, g, -1);
       if (st <= 1) { sr_add(1, g, 0); sr_add(1, g, 1); } else src_add_group(g); }
     int any = 0; for (int i = 0; i < SR.n; i++) if (SR.r[i].k != 0) any = 1; if (!any) sr_add(0, -1, 0); }
-  else { int g = tab - 1; if (g < P.srcs.ng) { int st = P.srcs.g[g].st;
+  else { int g = tab - 1 < P.tray.ntabs - 1 ? srcTabG[tab - 1] : P.srcs.ng; if (g >= 0 && g < P.srcs.ng) { int st = P.srcs.g[g].st;
       if (st <= 1) { sr_add(1, g, 0); sr_add(1, g, 1); sr_add(1, g, 2); } else if (st == 3) sr_add(0, g, 0); else src_add_group(g); } }
   float y = 0;
   for (int i = 0; i < SR.n; i++) { SRow *r = &SR.r[i];
@@ -1823,8 +1825,7 @@ static void back(void) {
   if (P.prompt.k && P.prompt.autoN) { P.prompt.autoN = 0; paint_prompt(); return; } /* a countdown running (skip, next episode): Back stops it, the controls up or not; the prompt stays */
   if (P.mode == 3) { dismiss_prompt(); return; }
   if (P.seekT >= 0) { cancel_seek(); return; }
-  if (P.mode == 1 && !paused()) { hide_osd(); return; }
-  close_player(0, 0);
+  close_player(0, 0); /* with the controls up too, Back goes back to the title (it used to only hide them) */
 }
 static void ss_exit(void) { P.ssOn = 0; P.lastAct = now_(); }
 static void try_next(void);
@@ -3044,7 +3045,7 @@ static void draw_tray(void) {
   if (ak == 4) { CP = P.tray.ncols && P.tray.ncols <= 2 ? 340 : 282; CPW = CP - 50; }
   float colH = 6 + (6 + L18 + 14) + COL_LH + 4, listH = ak == 4 ? colH : srcs ? SRC_VH : rowH;
   float W = ak == 4 ? 56 + (P.tray.ncols ? P.tray.ncols : 4) * CP - 10 /* the last column as far from the edge as the first */ : srcs ? SRC_W : fminf(SB_W * 0.6f, 2 + 60 + fmaxf(rowW, hdW)), H = 2 + 22 + hdH + 8 + listH + 8 + 20, x = SB_W - 72 - W, y;
-  if (P.tray.ntabs && W < tabsW - TAB_GAP + 62) W = tabsW - TAB_GAP + 62; /* the tabs all in view: never cut */
+  if (P.tray.ntabs && !srcs && W < tabsW - TAB_GAP + 62) W = fminf(tabsW - TAB_GAP + 62, SB_W - 144); /* the tabs all in view: never cut (never wider than the screen; the sources' tray keeps its width and its tabs slide) */
   /* every tray takes the size of what is in it, and glides there when that changes (a group folded, a tab switched) */
   { static Mo tH, tW; static int tk; if (tk != ak || P.tray.openA.v < 0.02f) { mo_set(&tH, H); mo_set(&tW, W); tk = ak; } else { if (fabsf(tH.to - H) > 0.5f) mo_to(&tH, H, .26f, C_OUT, 0); if (fabsf(tW.to - W) > 0.5f) mo_to(&tW, W, .26f, C_OUT, 0); } static double lt; double nw = now_(); float fdt = lt ? (float)(nw - lt) : 0; lt = nw; if (fdt > 0.05f) fdt = 0.05f; mo_tick(&tH, fdt); mo_tick(&tW, fdt); H = tH.v; W = tW.v; }
   x = SB_W - 72 - W; y = SB_H - 178 - H;

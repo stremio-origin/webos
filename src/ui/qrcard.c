@@ -10,6 +10,7 @@
 #include "core/hit.h"
 #include "core/i18n.h"
 #include "core/httpd.h"
+#include "core/stremio.h"
 #include "core/tmdb.h"
 #include "core/trakt.h"
 #include <stdio.h>
@@ -110,6 +111,22 @@ void qrcard_show(const QrCardOpts *o) {
 }
 
 /* ---- the ready-made cards ---- */
+/* (Stremio Claude) Settings > Addons > Add an addon: the phone page; each link sent is added to the account */
+static struct { void (*cb)(int, void *); void *ud; int seq, busy, added; } ad;
+static void addon_done(int ok, void *ud) { (void)ud; ad.busy = 0;
+  if (ok) { ad.added++; char m[200]; snprintf(m, sizeof m, T("Added: %s"), sb_addon_last_name()); toast(m, 2600, NULL); }
+  else toast(T("Couldn\xe2\x80\x99t add this addon: check its link"), 3200, NULL); }
+static int addon_check(void *ud) { (void)ud; char l[4096]; int s = httpd_addon_link(ad.seq, l, sizeof l);
+  if (s > ad.seq && !ad.busy) { ad.seq = s; ad.busy = 1; toast(T("Adding the addon\xe2\x80\xa6"), 1500, NULL); sb_addon_install(l, addon_done, NULL); }
+  return 0; } /* open for more until Back */
+static void addon_closed(void *ud) { (void)ud; void (*cb)(int, void *) = ad.cb; ad.cb = NULL; if (cb) cb(ad.added, ad.ud); }
+void qrcard_show_addon(void (*onClose)(int added, void *ud), void *ud) {
+  char url[600]; httpd_url("/addon", url, sizeof url);
+  QrCardOpts o; memset(&o, 0, sizeof o);
+  o.title = T("Add an addon"); o.sub = T("Scan with your phone and paste the addon\xe2\x80\x99s link (manifest.json or stremio://)"); o.url = url;
+  o.check = addon_check; o.onClose = addon_closed;
+  qrcard_show(&o); ad.cb = onClose; ad.ud = ud; ad.added = 0; ad.busy = 0; ad.seq = httpd_addon_link(0, NULL, 0);
+}
 static struct { void (*cb)(int, void *); void *ud; unsigned gen; } tm;
 /* the TV notices the key by itself: one saved from the phone since the card opened (a key that was there
    already does not close the card before the new one is in) */

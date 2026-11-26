@@ -25,6 +25,8 @@ void qrcard_close(void);
 /* the ready-made cards */
 /* Settings > Language > Titles and descriptions: the TMDB key page; onClose(hasKey, ud) once it is closed */
 void qrcard_show_tmdb(void (*onClose)(int hasKey, void *ud), void *ud);
+/* (Stremio Claude) Settings > Addons: add one by its link, pasted on the phone; onClose(how many were added, ud) */
+void qrcard_show_addon(void (*onClose)(int added, void *ud), void *ud);
 /* Settings > Keys > Ratings and reviews: the Trakt client id page */
 void qrcard_show_trakt(void (*onClose)(int hasKey, void *ud), void *ud);
 #endif

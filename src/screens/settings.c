@@ -116,6 +116,7 @@ static void set_act(Setting *s, const char *k, const char *lb, const char *ds) {
 static int addon_opts(void) {
   int n = 0; cJSON *l = sb_addons(); const cJSON *a;
   set_act(&addonS[n++], "__sync", "Sync addons now", "Fetch your addon list from your account");
+  set_act(&addonS[n++], "__addAddon", "Add an addon", "By its link, pasted from your phone"); /* (Stremio Claude) */
   if (l) cJSON_ArrayForEach(a, l) { const cJSON *m = js_obj(a, "manifest"); const char *nm = js_str(m, "name", ""); if (!*nm || n >= 40) continue;
     char key[160], ak[150]; sb_addon_key(a, ak, sizeof ak); snprintf(key, sizeof key, "adOn_%s", ak);
     Setting *s = &addonS[n++]; set_s(s, key, nm, "", OO, 2, "true"); s->raw = 1;
@@ -328,6 +329,7 @@ static void on_sync_addons(int changed, void *ud) { (void)ud; /* what happened, 
   else toast(T("Addons updated"), 2200, NULL); /* the same addons, their order or settings changed */
   if (changed > 0) board_invalidate(); cats[5].n = addon_opts(); if (S.cat == 5 && S.idx >= cats[5].n) S.idx = cats[5].n - 1; S.dirty = 1; }
 static void on_sync_lib(int changed, void *ud) { (void)ud; if (changed) board_invalidate(); }
+static void on_addon_card(int added, void *ud) { (void)ud; if (added) { board_invalidate(); cats[5].n = addon_opts(); S.dirty = 1; } }
 static void sync_now(void) { toast(T("Syncing…"), 1500, NULL); sb_pull_library(on_sync_lib, NULL); sb_sync_addons(on_sync_addons, NULL); }
 /* the best stream: switched on only once the line is measured (once, kept); the row says why meanwhile */
 static int ab_busy(const Setting *o) { return !strcmp(o->k, "autoBest") && best_speed_busy(); }
@@ -515,6 +517,7 @@ static int key(int k) {
     if (op->action) { if (!strcmp(op->k, "__tmdb")) { qrcard_show_tmdb(on_tmdb_card, NULL); return 1; }
       if (!strcmp(op->k, "__tmdbOff")) { tmdb_key_clear(); relang(); toast(T("Titles and descriptions in English"), 2000, NULL); return 1; }
       if (!strcmp(op->k, "__trakt")) { qrcard_show_trakt(on_trakt_card, NULL); return 1; }
+      if (!strcmp(op->k, "__addAddon")) { qrcard_show_addon(on_addon_card, NULL); return 1; }
       if (!strcmp(op->k, "__traktOff")) { trakt_key_clear(); relang(); toast(T("The Trakt id is gone"), 2000, NULL); return 1; }
       if (!strcmp(op->k, "__keys")) { settings_open_keys(); return 1; }
       if (!strcmp(op->k, "__traktUnlink")) { scrobble_unlink(); board_invalidate(); trakt_relayout(); toast(T("Trakt is disconnected"), 2000, NULL); return 1; }

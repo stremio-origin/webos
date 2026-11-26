@@ -1,0 +1,13 @@
+{
+"Add an addon": "Aggiungi un componente",
+"By its link, pasted from your phone": "Con il suo link, incollato dal telefono",
+"Added: %s": "Aggiunto: %s",
+"Couldn’t add this addon: check its link": "Impossibile aggiungerlo: controlla il link",
+"Adding the addon…": "Aggiunta del componente…",
+"Scan with your phone and paste the addon’s link (manifest.json or stremio://)": "Scansiona con il telefono e incolla il link del componente (manifest.json o stremio://)",
+"Copy the link of an addon (its manifest.json, or the stremio:// link of an install button), then paste it here.": "Copia il link di un componente (il suo manifest.json, o il link stremio:// di un pulsante di installazione), poi incollalo qui.",
+"It is added to your Stremio account, so it shows on all your devices.": "Viene aggiunto al tuo account Stremio e compare su tutti i tuoi dispositivi.",
+"Add": "Aggiungi",
+"Sent. Look at your TV.": "Inviato. Guarda la TV.",
+"This isn’t an addon link (it ends in manifest.json).": "Questo non è un link di componente (finisce con manifest.json)."
+}

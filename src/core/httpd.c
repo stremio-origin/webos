@@ -1,3 +1,4 @@
+#include "core/stremio.h"
 #include "core/httpd.h"
 #include "core/app.h"
 #include "core/i18n.h"
@@ -22,13 +23,14 @@
 #define MSG_NOSIGNAL 0   /* the Mac: SO_NOSIGPIPE on each socket instead */
 #endif
 #define IDLE_SEC (15 * 60)
-#define MAX_REQ 4096     /* a request line and its headers; anything longer is not one of ours */
+#define MAX_REQ 8192     /* a request line and its headers; anything longer is not one of ours */
 #define MAX_CONN 8
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static int alive, stopReq, nconn; static double deadline;
 static char tok[17];
 static struct { int seq; char text[400]; } typed;
+static struct { int seq; char link[4096]; } addonLink; /* (Stremio Claude) an addon link sent from the phone */
 static unsigned hits;
 static int (*keyFn)(const char *key), (*traktFn)(const char *key);
 
@@ -38,7 +40,9 @@ static const char *PK[] = { "Search on TV", "Search on your TV", "What you type 
   "Titles and descriptions", "Titles and descriptions in your language", "Paste your TMDB API key (or API Read Access Token). Get one at", "It stays on your TV.",
   "API key", "Save", "Checking\xe2\x80\xa6", "Saved. You can close this page.", "TMDB didn\xe2\x80\x99t accept this key.",
   "Ratings and reviews", "Ratings and reviews from Trakt", "Paste your Trakt Client ID. To get one:", "open", "sign in, then Settings \xe2\x80\xba Your API Apps \xe2\x80\xba New Application. Any name; as the redirect URI paste",
-  "then Save and copy the Client ID.", "Client ID", "Trakt didn\xe2\x80\x99t accept this id.", "This code has changed. Scan the code on your TV again." };
+  "then Save and copy the Client ID.", "Client ID", "Trakt didn\xe2\x80\x99t accept this id.", "This code has changed. Scan the code on your TV again.",
+  /* (Stremio Claude) the addon page */ "Add an addon", "Copy the link of an addon (its manifest.json, or the stremio:// link of an install button), then paste it here.",
+  "It is added to your Stremio account, so it shows on all your devices.", "Add", "Sent. Look at your TV.", "This isnât an addon link (it ends in manifest.json)." };
 #define NPK (int)(sizeof PK / sizeof PK[0])
 static struct { char lang[8]; int rtl; char *t[NPK]; } str;
 
@@ -123,6 +127,15 @@ static void trakt_page(Buf *b) {
     "x.onerror=function(){s.textContent="); js(b, pt("Can\xe2\x80\x99t reach the TV")); b_s(b, ";};x.send();};</script></body></html>");
 }
 
+static void addon_page(Buf *b) { /* (Stremio Claude) an addon by its link */
+  head(b, pt("Add an addon")); b_s(b, "<h1>"); hx(b, pt("Add an addon")); b_s(b, "</h1><p>"); hx(b, pt("Copy the link of an addon (its manifest.json, or the stremio:// link of an install button), then paste it here."));
+  b_s(b, " "); hx(b, pt("It is added to your Stremio account, so it shows on all your devices.")); b_s(b, "</p>");
+  b_s(b, "<input id=\"k\" dir=\"ltr\" autocomplete=\"off\" autocapitalize=\"off\" spellcheck=\"false\" placeholder=\"https://\xe2\x80\xa6/manifest.json\"><button id=\"b\">"); hx(b, pt("Add")); b_s(b, "</button><small id=\"s\"></small><script>"
+    "var k=document.getElementById(\"k\"),s=document.getElementById(\"s\");document.getElementById(\"b\").onclick=function(){var x=new XMLHttpRequest();"
+    "x.open(\"GET\",location.pathname+\"/set?url=\"+encodeURIComponent(k.value.trim()));x.onload=function(){if(x.status===204)k.value=\"\";s.textContent=x.status===204?"); js(b, pt("Sent. Look at your TV.")); b_s(b, ":"); js(b, pt("This isn\xe2\x80\x99t an addon link (it ends in manifest.json).")); b_s(b, ";};"
+    "x.onerror=function(){s.textContent="); js(b, pt("Can\xe2\x80\x99t reach the TV")); b_s(b, ";};x.send();};</script></body></html>");
+}
+
 /* ---- requests ------------------------------------------------------------------------------------ */
 static void sendall(int fd, const char *p, size_t n) { while (n) { ssize_t w = send(fd, p, n, MSG_NOSIGNAL); if (w <= 0) { if (w < 0 && errno == EINTR) continue; return; } p += w; n -= (size_t)w; } }
 static void reply(int fd, int code, const char *extra, const char *body, size_t blen) {
@@ -168,19 +181,23 @@ static void handle(int fd) {
   const char *rest = NULL;
   if (!strncmp(target, "/t/", 3) && strlen(target) >= 19 && !strncmp(target + 3, tok, 16)) {
     rest = target + 19;
-    if (*rest && strcmp(rest, "/q") && strcmp(rest, "/tmdb") && strcmp(rest, "/tmdb/set") && strcmp(rest, "/trakt") && strcmp(rest, "/trakt/set")) rest = NULL; }
+    if (*rest && strcmp(rest, "/q") && strcmp(rest, "/tmdb") && strcmp(rest, "/tmdb/set") && strcmp(rest, "/trakt") && strcmp(rest, "/trakt/set") && strcmp(rest, "/addon") && strcmp(rest, "/addon/set")) rest = NULL; }
   if (!rest) { if (!strncmp(target, "/t/", 3) || !strcmp(target, "/")) { Buf b = { 0 }; pthread_mutex_lock(&mu); stale_page(&b); pthread_mutex_unlock(&mu); reply(fd, 404, "Content-Type: text/html; charset=utf-8\r\n", b.p, b.n); free(b.p); } else reply(fd, 404, NULL, NULL, 0); return; }
-  if (strcmp(rest, "/q") && strcmp(rest, "/tmdb/set") && strcmp(rest, "/trakt/set")) { pthread_mutex_lock(&mu); hits++; pthread_mutex_unlock(&mu); } /* a code was opened */
+  if (strcmp(rest, "/q") && strcmp(rest, "/tmdb/set") && strcmp(rest, "/trakt/set") && strcmp(rest, "/addon/set")) { pthread_mutex_lock(&mu); hits++; pthread_mutex_unlock(&mu); } /* a code was opened */
   if (!strcmp(rest, "/tmdb/set") || !strcmp(rest, "/trakt/set")) {
     char key[1024]; qparam(q, "key", key, sizeof key);
     pthread_mutex_lock(&mu); int (*fn)(const char *) = rest[1] == 't' && rest[2] == 'm' ? keyFn : traktFn; pthread_mutex_unlock(&mu);
     reply(fd, fn && fn(key) ? 204 : 400, NULL, NULL, 0); return; }
+  if (!strcmp(rest, "/addon/set")) { /* kept for the main thread, which adds it */
+    char *l = malloc(4096); qparam(q, "url", l, 4096); int ok = sb_addon_link_ok(l);
+    if (ok) { pthread_mutex_lock(&mu); addonLink.seq++; snprintf(addonLink.link, sizeof addonLink.link, "%s", l); pthread_mutex_unlock(&mu); }
+    free(l); reply(fd, ok ? 204 : 400, NULL, NULL, 0); return; }
   if (!strcmp(rest, "/q")) {
     char raw[1024], t[400]; qparam(q, "text", raw, sizeof raw); clean_text(raw, t, sizeof t);
     pthread_mutex_lock(&mu); typed.seq++; snprintf(typed.text, sizeof typed.text, "%s", t); pthread_mutex_unlock(&mu);
     reply(fd, 204, NULL, NULL, 0); return; }
   Buf b = { 0 };
-  pthread_mutex_lock(&mu); if (!strcmp(rest, "/tmdb")) tmdb_page(&b); else if (!strcmp(rest, "/trakt")) trakt_page(&b); else search_page(&b); pthread_mutex_unlock(&mu);
+  pthread_mutex_lock(&mu); if (!strcmp(rest, "/tmdb")) tmdb_page(&b); else if (!strcmp(rest, "/trakt")) trakt_page(&b); else if (!strcmp(rest, "/addon")) addon_page(&b); else search_page(&b); pthread_mutex_unlock(&mu);
   reply(fd, 200, "Content-Type: text/html; charset=utf-8\r\n", b.p, b.n); free(b.p);
 }
 static void *conn_main(void *arg) {
@@ -273,3 +290,5 @@ int httpd_typed(int since, char *out, size_t cap) {
 unsigned httpd_hits(void) { pthread_mutex_lock(&mu); unsigned h = hits; pthread_mutex_unlock(&mu); return h; }
 void httpd_set_key_handler(int (*fn)(const char *key)) { pthread_mutex_lock(&mu); keyFn = fn; pthread_mutex_unlock(&mu); }
 void httpd_set_trakt_handler(int (*fn)(const char *key)) { pthread_mutex_lock(&mu); traktFn = fn; pthread_mutex_unlock(&mu); }
+int httpd_addon_link(int since, char *out, size_t cap) {
+  pthread_mutex_lock(&mu); int s = addonLink.seq; if (s > since && out && cap) snprintf(out, cap, "%s", addonLink.link); pthread_mutex_unlock(&mu); return s; }

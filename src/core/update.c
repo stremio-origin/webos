@@ -151,7 +151,7 @@ static void on_releases(int st, const unsigned char *body, size_t len, void *ud)
       if (strncmp(dg->valuestring, "sha256:", 7) || !is_hex64(dg->valuestring + 7)) continue;
       char ver[24]; snprintf(ver, sizeof ver, "%.*s", used, n + pl);
       if (has && ver_cmp(ver, best.ver) <= 0) continue;
-      memset(&best, 0, sizeof best); has = 1; snprintf(best.ver, sizeof best.ver, "%s", ver); snprintf(best.url, sizeof best.url, "%s", du->valuestring); snprintf(best.sha, sizeof best.sha, "%s", dg->valuestring + 7);
+      memset(&best, 0, sizeof best); has = 1; snprintf(best.ver, sizeof best.ver, "%s", ver); snprintf(best.url, sizeof best.url, "%s", du->valuestring); (void)n; snprintf(best.sha, sizeof best.sha, "%s", dg->valuestring + 7);
       cJSON *b = cJSON_GetObjectItemCaseSensitive(r, "body"); best.nnotes = notes_from(cJSON_IsString(b) ? b->valuestring : NULL, best.notes);
     }
   }
@@ -267,18 +267,13 @@ static const char *pill_badge(void) { return U.kind == 1 ? U.n.badge : U.avail.v
 static float ver_w(void) { return U.kind == 1 ? 0 : 12 + text_width(pill_badge(), 21, 600, 0.2f); }
 static float pill_w(void) { return 92 + text_width(pill_lb(), 23, 600, 0.1f) + ver_w() + 16 + KEY_W + 26; }
 /* Search makes room when it sits beyond the Settings icon (the notice's side), with the notice's own motion */
-float update_search_shift(float searchX, float setX) {
-  if ((U.kind == 0 && !U.has) || U.slide.v <= 0.001f) return 0;
-  int beyond = app_rtl() ? searchX < setX : searchX > setX; if (!beyond) return 0;
-  return (pill_w() - 76) * ease_apply(EASE_ROW, U.slide.v) * (app_rtl() ? -1 : 1);
-}
-void update_pill_draw(float setX) {
+void update_pill_draw(float setX, float y) {
   float a = U.pa.v; if (a <= 0.001f || (U.kind == 0 && !U.has)) return;
   const char *lb = pill_lb(), *ver = pill_badge(); int rtl = app_rtl(), f = U.pf;
   float tw = text_width(lb, 23, 600, 0.1f), vw = ver_w();
-  float W = pill_w(), h = 76, y = 12, dx = -36 * (1 - ease_apply(EASE_ROW, U.slide.v)) * (rtl ? -1 : 1);
+  float W = pill_w(), h = 76, dx = -36 * (1 - ease_apply(EASE_ROW, U.slide.v)) * (rtl ? -1 : 1);
   float x0 = (rtl ? setX + 76 - W : setX) + dx;
-  if (U.pill && a > 0.5f) hit_act(rtl ? x0 : setX + 76, y, W - 76, h, pill_click, 0, 0); /* beside the icon: the icon keeps its own clicks */
+  if (U.pill && a > 0.5f) hit_act(x0, y, W, h, pill_click, 0, 0);
   /* frosted glass, like the sheets: the page behind baked once where the capsule settles, then a light tint over it */
   if (U.glassFor != U.shown) { U.glassFor = U.shown; float xf = rtl ? setX + 76 - W : setX; sglass_bake(&U.glass, xf, y, W, h); }
   gfx_opacity_push(a);
@@ -290,9 +285,9 @@ void update_pill_draw(float setX) {
   if (go > 0) gfx_rrect(x0, y, W, h, 38, acc_a(0.75f * go));
   { float ph = (float)fmod(now - U.shownAt, 3.2) / 1.1f; if (ph < 1) gfx_glare(x0, y, W, h, 38, -0.2f + 1.4f * ph * ph * (3 - 2 * ph), WHITE_A(46)); } /* every few seconds a soft light crosses it: there is something to open */
   gfx_ring(x0, y, W, h, 38, 1.5f, go > 0 ? col_alpha(ACC2, 0.4f + 0.6f * go) : WHITE_A(44));
-  float tx = rtl ? x0 + W - 92 : x0 + 92, kx = rtl ? x0 + 26 : x0 + W - 26 - KEY_W, ky = 50 - KEY_H / 2;
-  text_draw(lb, tx, 50 - text_line_height(23) / 2.0f, 23, 600, f ? WHITE_A(255) : WHITE_A(230), 0.1f, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT);
-  if (vw > 0) text_draw(ver, rtl ? tx - tw - 12 : tx + tw + 12, 50 - text_line_height(21) / 2.0f, 21, 600, f ? WHITE_A(220) : WHITE_A(170), 0.2f, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT);
+  float tx = rtl ? x0 + W - 92 : x0 + 92, kx = rtl ? x0 + 26 : x0 + W - 26 - KEY_W, ky = y + h / 2 - KEY_H / 2;
+  text_draw(lb, tx, y + h / 2 - text_line_height(23) / 2.0f, 23, 600, f ? WHITE_A(255) : WHITE_A(230), 0.1f, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT);
+  if (vw > 0) text_draw(ver, rtl ? tx - tw - 12 : tx + tw + 12, y + h / 2 - text_line_height(21) / 2.0f, 21, 600, f ? WHITE_A(220) : WHITE_A(170), 0.2f, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT);
   { float br = 0.5f + 0.5f * sinf((float)(now - U.shownAt) * 2.4f); /* the red key, as on the remote: a soft rounded block, two small dots; it glows gently */
     gfx_shadow(kx, ky + 2, KEY_W, KEY_H, 8, 8, BLACK_A(90)); gfx_rrect(kx, ky, KEY_W, KEY_H, 8, RGB(0xef, 0x3b, 0x3b)); gfx_rrect_v(kx, ky, KEY_W, KEY_H, 8, WHITE_A((int)(40 + 30 * br)), WHITE_A(0));
     gfx_circle(kx + KEY_W / 2 - 7, ky + KEY_H / 2, 2.6f, RGBA(90, 10, 10, 170)); gfx_circle(kx + KEY_W / 2 + 7, ky + KEY_H / 2, 2.6f, RGBA(90, 10, 10, 170)); }

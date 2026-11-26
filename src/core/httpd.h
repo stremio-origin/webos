@@ -26,4 +26,6 @@ unsigned httpd_hits(void);
 void httpd_set_key_handler(int (*fn)(const char *key));
 /* the same for the Trakt page's Save (the Trakt module): 1 = Trakt accepted the client id */
 void httpd_set_trakt_handler(int (*fn)(const char *key));
+/* (Stremio Claude) an addon link sent from the phone page ("/addon"): as httpd_typed */
+int  httpd_addon_link(int since, char *out, size_t cap);
 #endif

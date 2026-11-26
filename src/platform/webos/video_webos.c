@@ -302,7 +302,7 @@ static int ss_answer(const char *p, char *out, size_t cap) {
   char ts[64]; if (!ssreq_active(p, ts, sizeof ts)) { if (p && strstr(p, "state")) fprintf(stderr, "[video] screen saver request not about starting: %.100s\n", p); return 0; } /* (read whatever its spacing: it came pretty-printed) */
   pthread_mutex_lock(&mu); int hold = screensaverHeld(); int pl = S.playing, pz = S.pausedByUs; pthread_mutex_unlock(&mu);
   if (hold && pz && app_behind()) hold = 0; /* (#69: behind another app, its own screen saver never shows over a paused film: the TV's comes) */
-  extern volatile int saver_tv_hold; int own = 0; if (!hold && saver_tv_hold && !app_behind()) hold = own = 1; /* the app's own screen saver is on (Settings): it comes, never the TV's over it; Off: the TV's as before */
+  extern volatile int saver_tv_hold; int own = 0; if (!hold && !app_behind()) hold = own = 1; (void)saver_tv_hold; /* in front, never the TV's (the app's own, Settings, guards the screen) */ /* the app's own screen saver is on (Settings): it comes, never the TV's over it; Off: the TV's as before */
   snprintf(out, cap, "{\"clientName\":\"%s\",\"ack\":%s,\"timestamp\":%s}", SB_APP_ID, hold ? "false" : "true", ts); /* the timestamp sent back exactly as it came */
   fprintf(stderr, "[video] screen saver asked: %s\n", !hold ? "let through" : own ? "held (the app's own screen saver comes instead)" : pz ? "held (a film is paused: the app's own screen saver comes over it)" : pl ? "held (a film plays)" : "held (a film is loading, buffering or seeking)");
   return 1;
@@ -491,9 +491,12 @@ int video_set_crop(int sx, int sy, int sw, int sh, float dx, float dy, float dw,
   if (have) apply_plane();
   return !noCrop;
 }
-void video_pump(void) {
+void video_ss_tick(void) { /* called by the app every frame */
   if (ssRefused == 1) { ssRefused = 2; char b[160]; snprintf(b, sizeof b, "{\"subscribe\":true,\"clientName\":\"%s\"}", SB_APP_ID);
     fprintf(stderr, "[video] screen saver requests through the app's luna handle: %s\n", plat_luna_subscribe_app(SS_REGISTER, b, on_screensaver_app, NULL) ? "asked" : "not possible"); }
+}
+void video_pump(void) {
+  video_ss_tick();
   int bind = 0, again = 0, died = 0; double pos = 0; int aud = 0, txt = -1, loaded = 0;
   pthread_mutex_lock(&mu);
   if (S.bindWanted & 1) bind = acb != 0; if (S.bindWanted & 2) again = 1; S.bindWanted = 0;

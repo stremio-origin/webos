@@ -143,7 +143,7 @@ static void act(int a) {
     case A_STREAMS: close(); detail_open_streams(it.videoId); break;
     case A_PLAY: close(); app_open_item(&it); break;
     case A_RESTART: close(); app_play_from_start(&it); break;
-    case A_DETAILS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
+    case A_DETAILS: { close(); { extern int kids_open(const Item *it); if (kids_open(&it)) break; } DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
     case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
     case A_DISMISS: sound_play(SND_TOGGLE); close(); if (it.cw) { notify_cw_dismiss(&it); tw_play_drop(it.id); } else notify_up_dismiss(&it); /* (Trakt's pause of it: deleted there too) */ app_refresh_boards(); break; /* (the card fades where it stood, the rest glide over) */
     case A_PIN: { int on = !live_pinned(it.id); sound_play(SND_TOGGLE); live_pin(&it, on); fx_start(on ? 1 : 2, on ? "star" : "minus", T(on ? "Added to favorites" : "Removed from favorites")); close(); board_invalidate(); board_rebuild(); break; }
@@ -231,6 +231,8 @@ void cwmenu_show(const Item *it) {
     int pn = live_pinned(it->id); add(A_PIN, pn ? "minus" : "star", T(pn ? "Remove from favorites" : "Add to favorites"));
     if (live_used()) { ItemList b; int in = 0; if (live_band(&b)) { for (int i = 0; i < b.n; i++) if (!strcmp(b.items[i].id, it->id)) in = 1; itemlist_clear(&b); } if (in) add(A_FORGET, "eyeOff", T("Remove from Live now")); }
     goto laid; }
+  if (!strncmp(it->id, "plat:", 5)) { add(A_PLAY, "play", T("Open")); goto laid; } /* (a platform: its page) */
+  if (!strncmp(it->id, "tmdb:", 5)) { add(A_PLAY, "play", T("Play")); add(A_DETAILS, "info", T("Details")); goto laid; } /* (a TMDB title has no IMDb id yet: the library and marks wait for its page) */
   if (it->ep) add(A_STREAMS, "play", T("Streams")); else add(A_PLAY, "play", T(it->cw ? "Resume" : "Play"));
   Uint32 tm0 = SDL_GetTicks(); CwInfo ci; if (lib_cw_info(it, &ci) && (!it->ep || !strcmp(ci.vid, it->videoId))) add(A_RESTART, "restart", T("Watch from the beginning"));
   { int inL = lib_has(it->id); add(A_LIB, inL ? "minus" : "plus", T(inL ? "Remove from Library" : "Add to Library")); } /* (among the first) */

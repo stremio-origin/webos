@@ -43,7 +43,7 @@ static const char *F_IC[NF] = { "lib_all", "lib_movie", "lib_series", "lib_coll"
 static const char *S_KEY[4] = { "added", "watched", "az", "year" };
 static const char *S_LB[4] = { "Recently added", "Recently watched", "A\xe2\x80\x93Z", "Newest" };
 
-typedef struct { Item it; int year, cw, done; double added, seen; float pct, left; char poster[512]; char ckey[24]; int nIn, nAll, det; } LibIt; /* ckey: a collection's card (nIn: its films in the Library; det: its own pictures and words in) */ /* poster: the address the card draws */
+typedef struct { Item it; int year, cw, done, hist; double added, seen; float pct, left; char poster[512]; char ckey[24]; int nIn, nAll, det; } LibIt; /* ckey: a collection's card (nIn: its films in the Library; det: its own pictures and words in) */ /* poster: the address the card draws */
 /* the head's words: its facts (they can come a moment later than the title, then they crossfade in place); mp and
    lftW: the meta line and the time left, measured when the facts are made */
 typedef struct { int left; float pct; char meta[200], gen[200], bits[120], lft[80], desc[1024]; int measured; float lftW; MetaParts mp; } Facts;
@@ -74,8 +74,12 @@ static void load(void) {
   free(L.all); L.all = NULL; L.nall = L.nreal = L.capall = 0; L.collVer = 0; cJSON *lib = store_node("lib"); if (!cJSON_IsObject(lib)) return;
   int cap = cJSON_GetArraySize(lib); if (!cap) return; L.capall = cap * 2; L.all = calloc((size_t)L.capall, sizeof *L.all); /* (room for a collection card per film at most) */
   const cJSON *x; cJSON_ArrayForEach(x, lib) {
-    if (js_bool(x, "removed", 0) || !js_str(x, "name", "")[0]) continue;
-    LibIt *o = &L.all[L.nall++]; Item *it = &o->it; const cJSON *st = js_obj(x, "state");
+    /* a title watched without being added keeps a temporary entry (removed, temp): its progress and its watched mark.
+       It shows under In progress and Watched, never under the Library's own lists */
+    int hist = 0; if (js_bool(x, "removed", 0)) { const cJSON *hs = js_obj(x, "state");
+      if (!js_bool(x, "temp", 0) || !(js_num(hs, "timesWatched", 0) > 0 || js_num(hs, "flaggedWatched", 0) > 0 || js_num(hs, "timeOffset", 0) > 0)) continue; hist = 1; }
+    if (!js_str(x, "name", "")[0]) continue;
+    LibIt *o = &L.all[L.nall++]; Item *it = &o->it; const cJSON *st = js_obj(x, "state"); o->hist = hist;
     snprintf(it->id, sizeof it->id, "%s", js_str(x, "_id", "")); snprintf(it->type, sizeof it->type, "%s", !strcmp(js_str(x, "type", ""), "series") ? "series" : "movie");
     snprintf(it->name, sizeof it->name, "%s", js_str(x, "name", "")); snprintf(it->poster, sizeof it->poster, "%s", js_str(x, "poster", ""));
     snprintf(it->background, sizeof it->background, "%s", js_str(x, "background", "")); snprintf(it->logo, sizeof it->logo, "%s", js_str(x, "logo", ""));
@@ -95,7 +99,7 @@ static void load(void) {
 static int coll_cards(void) {
   int before = L.nall - L.nreal; L.nall = L.nreal;
   static struct { char key[24]; int n; char name[160], poster[400], bd[400], ov[600]; } LD[256]; static int nld; int asks = 0;
-  for (int j = 0; j < L.nreal; j++) { const LibIt *o = &L.all[j]; char key[24]; const char *nm; if (coll_of(o->it.type, o->it.id, key, sizeof key, &nm) != 1) continue;
+  for (int j = 0; j < L.nreal; j++) { const LibIt *o = &L.all[j]; char key[24]; if (o->hist) continue; const char *nm; if (coll_of(o->it.type, o->it.id, key, sizeof key, &nm) != 1) continue;
     int li = -1; for (int i = 0; i < nld; i++) if (!strcmp(LD[i].key, key)) { li = i; break; }
     if (li < 0) { if (nld >= 256) continue; int kn = asks < 8 ? coll_known(key) : 0; /* (eight on their way at a time: the collections' own small store never drops one; those kept on disk come at once) */
       if (kn == 0) { asks++; continue; } const Coll *d = kn > 0 ? coll_get(key) : NULL;
@@ -109,6 +113,7 @@ static int coll_cards(void) {
   return L.nall - L.nreal != before || asks;
 }
 static int pass(const LibIt *o, int f) {
+  if (o->hist) return f == 4 ? o->cw : f == 5 ? o->done : 0; /* (watched, not added: only under In progress and Watched) */
   if (o->ckey[0] || f == F_COLL) return o->ckey[0] && f == F_COLL; /* (a collection's card: under Collections only) */
   switch (f) { case 0: return 1; case 1: return !strcmp(o->it.type, "movie"); case 2: return !strcmp(o->it.type, "series");
     case 4: return o->cw; case 5: return o->done; default: return !o->done && !o->cw; } /* (3: Collections, above) */

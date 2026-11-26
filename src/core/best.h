@@ -41,6 +41,7 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
 int  best_dur(const cJSON *meta, const char *type);
 /* the text a stream is read from (name or addon, title, file name), as the player reads it */
 void best_stream_info(const Stream *s, char *out, size_t cap);
+int  best_stream_seeds(const Stream *s);   /* a torrent's seeds as it says them; -1 when it does not say (or not a torrent) */
 /* the tags read from that text, as the player's info chips read them ("4K", "DV · HDR10", "EAC3 Atmos 5.1") */
 const char *best_res_of(const char *label);
 void best_hdr_of(const char *label, char *out, size_t cap);

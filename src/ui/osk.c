@@ -4,6 +4,7 @@
 #include "ui/gfx.h"
 #include "ui/text.h"
 #include "ui/icon.h"
+#include "core/hit.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -16,6 +17,10 @@ static const char *ROWS[4] = { "abcdefghij", "klmnopqrst", "uvwxyz1234", "567890
 static float key_w(int r, int c) { if (r < 4) return KW; return c == 1 ? 3 * KW + 2 * GAP : c == 3 ? 2 * KW + GAP : KW * 1.5f + GAP / 2; }
 static float key_x(int r, int c) { if (r < 4) return c * (KW + GAP); float x = 0; for (int i = 0; i < c; i++) x += key_w(r, i) + GAP; return x; }
 static int ncols(int r) { return r < 4 ? COLS : 4; }
+/* the pointer: pointing at a key moves the ring there, a click is OK on it (before, the keys had no place for
+   the pointer, so with the Magic Remote out a click typed nothing) */
+static Osk *hitOsk;
+static void osk_hit(int r, int c) { if (hitOsk && hitOsk->open) { hitOsk->r = r; hitOsk->c = c; } }
 void osk_open(Osk *k) { k->open = 1; k->r = 0; k->c = 0; tween_to(&k->a, 1, 0.25f, EASE_OUT); k->shown = 0; }
 void osk_close(Osk *k) { k->open = 0; tween_to(&k->a, 0, 0.2f, EASE_OUT); }
 float osk_height(void) { return 5 * (KH + GAP) - GAP; }
@@ -43,6 +48,7 @@ void osk_draw(Osk *k, float x, float y, float w) {
   if (!k->shown) { tween_set(&k->fx, tx); tween_set(&k->fy, ty); tween_set(&k->fw, tw); k->shown = 1; } else { tween_to(&k->fx, tx, 0.14f, EASE_OUT); tween_to(&k->fy, ty, 0.14f, EASE_OUT); tween_to(&k->fw, tw, 0.14f, EASE_OUT); }
   gfx_offset_push(nudge_x(&k->nudge), nudge_y(&k->nudge)); gfx_rrect(k->fx.v, k->fy.v, k->fw.v, KH, 14, ACC); gfx_offset_pop();
   for (int r = 0; r < 5; r++) for (int c = 0; c < ncols(r); c++) { float kx = x + key_x(r, c), ky = y + r * (KH + GAP), kw = key_w(r, c); int f = r == k->r && c == k->c; float nx = f ? nudge_x(&k->nudge) : 0, ny = f ? nudge_y(&k->nudge) : 0;
+    if (k->open) { hitOsk = k; hit_add(kx, ky, kw, KH, osk_hit, NULL, r, c); }
     if (!f) gfx_rrect(kx, ky, kw, KH, 14, WHITE_A(r == 4 && c == 0 && k->shift ? 46 : 15)); uint32_t fg = f ? ACC_FG : WHITE_A(219);
     if (r < 4) { char s[2] = { ROWS[r][c], 0 }; if (k->shift && s[0] >= 'a' && s[0] <= 'z') s[0] -= 32; text_draw(s, kx + kw / 2 + nx, ky + (KH - text_line_height(26)) / 2 + ny, 26, 700, fg, 0, 0, ALIGN_CENTER); }
     else if (c == 0) text_draw(k->shift ? "ABC" : "abc", kx + kw / 2 + nx, ky + (KH - text_line_height(22)) / 2 + ny, 22, 700, fg, 0.5f, 0, ALIGN_CENTER);

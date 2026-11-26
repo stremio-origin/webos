@@ -145,7 +145,9 @@ static const sbd_api *D; static int dTried;
 static int dts_load(void) { /* the converter library, beside the app */
   if (D) return 1; if (dTried) return 0; dTried = 1;
   char *base = SDL_GetBasePath(), p[1200];
-#ifdef __APPLE__
+#if defined(SB_ANDROID)
+  { const char *d = getenv("SB_LIBDIR"); snprintf(p, sizeof p, "%s/libsbdts.so", d ? d : "."); } /* the APK's native library folder */
+#elif defined(__APPLE__)
   snprintf(p, sizeof p, "%slibsbdts.dylib", base ? base : "");
 #else
   snprintf(p, sizeof p, "%slibsbdts.so", base ? base : "");

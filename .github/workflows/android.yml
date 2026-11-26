@@ -1,0 +1,103 @@
+# Stremio Origin for Android TV: builds the APK (with the torrent engine) (armeabi-v7a, every Android TV / Google TV) and opens an x86_64 build of the
+# same code on an emulator (tools/android-smoke.sh: it must draw frames, reach the network and not crash).
+# On main, or by hand, the APK goes on the release "android-tv-v<version>" (what FreeTV installs on Android TV), but only when the
+# repository has the ORIGIN_KEYSTORE secret (base64 of a keystore) and ORIGIN_KEYSTORE_PASSWORD: Android only updates an app signed
+# with the same key, and a debug key is made anew on every runner.
+name: Android TV
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: '27.2.12479018'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.14.3' }
+      - name: NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "cmake;3.22.1" > /dev/null
+      - name: The signing key, when the repository has it
+        env:
+          KEYSTORE: ${{ secrets.ORIGIN_KEYSTORE }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/origin.keystore"; echo "ORIGIN_KEYSTORE=$RUNNER_TEMP/origin.keystore" >> "$GITHUB_ENV"
+          else echo "No ORIGIN_KEYSTORE secret: debug key (fine to try, not published)" | tee -a "$GITHUB_STEP_SUMMARY"; fi
+      - name: Build the APK
+        env:
+          ORIGIN_KEYSTORE_PASSWORD: ${{ secrets.ORIGIN_KEYSTORE_PASSWORD }}
+        run: GRADLE=gradle tools/build-android.sh
+      - name: Signed with the release key?
+        id: signed
+        run: echo "signed=${ORIGIN_KEYSTORE:+1}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: apk, path: dist/*.apk }
+    outputs:
+      signed: ${{ steps.signed.outputs.signed }}
+
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.14.3' }
+      - name: NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "cmake;3.22.1" > /dev/null
+      - name: Build for the emulator (x86_64), with the torrent engine
+        run: |
+          tools/build-engine-android.sh x86_64
+          tools/android-deps.sh
+          (cd androidtv && gradle --no-daemon -q -PoriginAbis=x86_64 :app:assembleDebug)
+      - name: Let the emulator use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: tv_1080p
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: P2P_TEST=p2p://dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c tools/android-smoke.sh androidtv/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: smoke, path: dist/smoke/ }
+
+  release:
+    needs: [build, emulator]
+    if: needs.build.outputs.signed == '1' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: apk, path: dist }
+      - name: Publish
+        # --latest=false: the webOS release (the .ipk) stays the repository's "latest"; FreeTV's Store and the app's own updater look for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(python3 -c 'import json; print(json.load(open("pkg/appinfo.json"))["version"])')
+          tag="android-tv-v$ver"
+          (cd dist && sha256sum *.apk > SHA256SUMS)
+          # a version already published is never replaced: FreeTV's Android TV Store pins each APK's SHA-256 (a new file needs a new version)
+          if gh release view "$tag" >/dev/null 2>&1; then echo "$tag is already published: left as it is" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          gh release create "$tag" dist/*.apk dist/SHA256SUMS --latest=false --title "Stremio Origin $ver for Android TV" \
+            --notes "Stremio Origin for Android TV and Google TV (Sony Bravia, TCL, Philips, Chromecast with Google TV…). Install the APK on the TV (Downloader, a USB drive or adb install),."

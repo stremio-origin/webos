@@ -23,13 +23,36 @@ static volatile int profN; /* the profiler is the TV's */
 /* SB_PROF=1: a sampling profiler (SIGPROF every 2 ms records the program counter; the frame log prints the
    hottest addresses as offsets into the binary, to resolve with `nm -n build/webos/stremioorigin.dbg`) */
 #include <sys/time.h>
+/* the registers a crash report and the profiler read: ARM32 on the TVs (and the Android TV build); other CPUs where
+   the same code is built for an emulator */
+#if defined(__arm__)
+#  define UC_PC(u) ((u)->uc_mcontext.arm_pc)
+#  define UC_LR(u) ((u)->uc_mcontext.arm_lr)
+#  define UC_FP(u) ((u)->uc_mcontext.arm_fp)
+#  define UC_SP(u) ((u)->uc_mcontext.arm_sp)
+#elif defined(__aarch64__)
+#  define UC_PC(u) ((u)->uc_mcontext.pc)
+#  define UC_LR(u) ((u)->uc_mcontext.regs[30])
+#  define UC_FP(u) ((u)->uc_mcontext.regs[29])
+#  define UC_SP(u) ((u)->uc_mcontext.sp)
+#elif defined(__x86_64__)
+#  define UC_PC(u) ((u)->uc_mcontext.gregs[REG_RIP])
+#  define UC_LR(u) (0UL)
+#  define UC_FP(u) ((u)->uc_mcontext.gregs[REG_RBP])
+#  define UC_SP(u) ((u)->uc_mcontext.gregs[REG_RSP])
+#else
+#  define UC_PC(u) (0UL)
+#  define UC_LR(u) (0UL)
+#  define UC_FP(u) (0UL)
+#  define UC_SP(u) (0UL)
+#endif
 #define PROF_N 8192
 static unsigned long profPc[PROF_N], profLr[PROF_N], profUp[PROF_N][3]; static volatile int profN; static unsigned long profBase; static unsigned long stackLo, stackHi;
 #include <sys/syscall.h>
 static long profTid; /* SB_PROF=main: only the drawing thread's samples */
-static void on_prof(int sig, siginfo_t *si, void *uc) { (void)sig; (void)si; if (profTid && syscall(SYS_gettid) != profTid) return; ucontext_t *u = uc; int n = profN; if (n < PROF_N) { profPc[n] = u->uc_mcontext.arm_pc; profLr[n] = u->uc_mcontext.arm_lr;
+static void on_prof(int sig, siginfo_t *si, void *uc) { (void)sig; (void)si; if (profTid && syscall(SYS_gettid) != profTid) return; ucontext_t *u = uc; int n = profN; if (n < PROF_N) { profPc[n] = UC_PC(u); profLr[n] = UC_LR(u);
     /* three callers up the frame-pointer chain (a build with SB_FP=1: [fp] = the caller's fp, [fp + 4] = its return address) */
-    unsigned long fp = u->uc_mcontext.arm_fp; for (int k = 0; k < 3; k++) { if (fp < stackLo || fp + 8 > stackHi || (fp & 3)) { profUp[n][k] = 0; fp = 0; continue; } profUp[n][k] = ((unsigned long *)fp)[1]; fp = ((unsigned long *)fp)[0]; }
+    unsigned long fp = UC_FP(u); for (int k = 0; k < 3; k++) { if (fp < stackLo || fp + 8 > stackHi || (fp & 3)) { profUp[n][k] = 0; fp = 0; continue; } profUp[n][k] = ((unsigned long *)fp)[1]; fp = ((unsigned long *)fp)[0]; }
     profN = n + 1; } }
 static void prof_maps(void) { FILE *m = fopen("/proc/self/maps", "r"); if (!m) return; char l[300]; while (fgets(l, sizeof l, m)) if (strstr(l, "r-xp") && strchr(l, '/')) fprintf(stderr, "[maps] %s", l); fclose(m); }
 /* the hottest 64-byte buckets, and for the hottest one the callers (link register) in our own binary */
@@ -61,7 +84,7 @@ static void prof_start(void) {
   struct itimerval it = { { 0, 2000 }, { 0, 2000 } }; setitimer(ITIMER_PROF, &it, NULL);
 }
 static void on_crash(int sig, siginfo_t *si, void *uc) {
-  ucontext_t *u = uc; char b[512]; int n = snprintf(b, sizeof b, "[crash] signal %d addr %p pc %p lr %p sp %p\n", sig, si ? si->si_addr : NULL, (void *)u->uc_mcontext.arm_pc, (void *)u->uc_mcontext.arm_lr, (void *)u->uc_mcontext.arm_sp);
+  ucontext_t *u = uc; char b[512]; int n = snprintf(b, sizeof b, "[crash] signal %d addr %p pc %p lr %p sp %p\n", sig, si ? si->si_addr : NULL, (void *)UC_PC(u), (void *)UC_LR(u), (void *)UC_SP(u));
   if (write(2, b, n) < 0) {}
   FILE *m = fopen("/proc/self/maps", "r"); if (m) { char l[300]; while (fgets(l, sizeof l, m)) if (strstr(l, "stremioorigin")) fputs(l, stderr); fclose(m); }
   fflush(stderr); _exit(4);
@@ -97,6 +120,8 @@ static int vsyncOn __attribute__((unused));   /* SB_VSYNC=1: let the driver wait
 #include "screens/search.h"
 #include "screens/settings.h"
 #include "screens/splash.h"
+#include "screens/profiles.h"
+#include "core/profiles.h"
 #include "screens/player.h"
 #include "core/away.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -232,7 +257,7 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 #endif
   gl_config(getenv("SB_GLCFG") ? atoi(getenv("SB_GLCFG")) : 0); /* 0 RGBA8, 1 RGB8 (no alpha), 2 RGB565: which surface the compositor takes without a copy */
-  store_init(plat_data_dir()); /* before the window: the drawing size is a setting */
+  store_init(plat_data_dir()); profiles_init(); /* before the window: the drawing size is a setting */
   { extern void supportcard_start(int autoReload); supportcard_start(argc > 1 && argv[1] && strstr(argv[1], "autoReload") != NULL); } /* (a real start counted for the support card; the TV relaunching it on its own is not one) */
   int memMb = plat_mem_total_mb();
   int w, h; Uint32 flags; plat_window_size(&w, &h, &flags);
@@ -292,10 +317,10 @@ int main(int argc, char **argv) {
   if (getenv("SB_SUPCARD_FIT")) { extern int supportcard_fit_check(const char *assetDir); int bad = supportcard_fit_check(plat_asset_dir()); return bad ? 2 : 0; } /* (development / test: the support card's words in every language against the card) */
   text_set_rtl(i18n_rtl()); icon_init(plat_asset_dir()); sb_init();
   app_init(); player_init();
-  app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen);
+  app_register(SCR_PROFILES, &profileScreen); app_register(SCR_LOGIN, &loginScreen); app_register(SCR_HOME, &homeScreen); app_register(SCR_DISC, &discScreen); app_register(SCR_LIB, &libScreen); app_register(SCR_MOVIES, &moviesScreen); app_register(SCR_SERIES, &seriesScreen); app_register(SCR_ANIME, &animeScreen); app_register(SCR_PLATFORM, &platformScreen);
   app_register(SCR_DETAIL, &detailScreen); app_register(SCR_SIM, &simScreen); app_register(SCR_SEARCH, &searchScreen); app_register(SCR_SET, &setScreen); app_card_menu_hook = cwmenu_show;
-  if (sb_signed_in() || getenv("SB_SKIP_LOGIN")) { app_go(SCR_HOME, NULL, 1); splash_start(1, 0); } /* SB_SKIP_LOGIN: the default rows without an account (development) */
-  else { app_splash_done = 1; app_go(SCR_LOGIN, NULL, 1); }
+  if (getenv("SB_SKIP_LOGIN")) { profiles_select(profiles_id(0)); app_go(SCR_HOME, NULL, 1); splash_start(1, 0); } /* development without an account */
+  else { app_splash_done = 1; app_go(sb_signed_in() ? SCR_PROFILES : SCR_LOGIN, NULL, 1); }
 
   const char *shot = getenv("SB_SHOT"); int shotAt = shot ? atoi(getenv("SB_SHOT_FRAME") ? getenv("SB_SHOT_FRAME") : "40") : -1;
   const char *script = getenv("SB_SCRIPT");
@@ -438,9 +463,9 @@ int main(int argc, char **argv) {
     mem_guard();
     { /* every 30 s a line of where the memory is (the TV ends an app that takes too much: the shared log then says what grew) */
       static Uint32 memAt; if (SDL_GetTicks() - memAt >= 30000 || !memAt) { memAt = SDL_GetTicks(); int rss, swp; plat_mem_self(&rss, &swp); long tb, pb; int tn; gfx_mem(&tb, &tn, &pb);
-        static const char *SN[] = { "sign-in", "home", "discover", "library", "title", "similar", "search", "settings" };
+        static const char *SN[] = { "sign-in", "home", "discover", "library", "title", "similar", "search", "settings", "profiles", "movies", "series", "anime", "platform" };
         fprintf(stderr, "[mem] app %d MB (swap %d) · TV free %d MB · pictures %d of %d MB · textures %ld MB in %d (kept for reuse %ld MB) · %s%s%s\n", rss, swp, plat_mem_free_mb(), img_used_mb(), img_budget_mb(),
-          tb >> 20, tn, pb >> 20, (unsigned)SCR < 8 ? SN[SCR] : "?", player_open() ? " · player" : "", asssubs_on() ? " · styled subtitles" : ""); img_log_stats(); } }
+          tb >> 20, tn, pb >> 20, (unsigned)SCR < SCR_N ? SN[SCR] : "?", player_open() ? " · player" : "", asssubs_on() ? " · styled subtitles" : ""); img_log_stats(); } }
     if (shot && frame == shotAt) { screenshot(shot, dw, dh); if (getenv("SB_SHOT_EXIT")) app_quit(); }
     if (frame % 60 == 0) { struct stat sst; if (!stat("/tmp/sb_shot_now", &sst)) { remove("/tmp/sb_shot_now"); screenshot("/tmp/sb_shot.png", dw, dh); } } /* development: a screenshot when that file appears (the TV has no capture of its own here) */
   }

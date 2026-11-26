@@ -1,3 +1,4 @@
+#include "core/profiles.h"
 /* Trakt's rows on Home (see traktrows.h) */
 #include "core/traktrows.h"
 #include "core/scrobble.h"
@@ -17,24 +18,36 @@ static const struct { const char *list, *type, *title, *key; } ROWS[6] = {
 #define PFX "trakt:"
 int traktrows_is(const char *url) { return url && !strncmp(url, PFX, strlen(PFX)); }
 int traktrows_official(void) {
+  if (profiles_active() > PROFILE_DEFAULT) return 0;
   cJSON *a = sb_addons(); const cJSON *ad; if (!a) return 0;
   cJSON_ArrayForEach(ad, a) { const char *u = js_str(ad, "transportUrl", ""); if (strstr(u, "strem.io/trakt/addon/")) return 1; }
   return 0; }
+static void row_url(int i, char *url, size_t cap) {
+  int id = profiles_active();
+  if (id == PROFILE_DEFAULT) snprintf(url, cap, PFX "%s/%s", ROWS[i].list, ROWS[i].type);
+  else snprintf(url, cap, PFX "%d/%s/%s", id, ROWS[i].list, ROWS[i].type);
+}
 static int wanted(void) { return scrobble_state() == TRAKT_LINKED && strcmp(store_get("traktRows", "true"), "false") && !traktrows_official(); }
 int traktrows_defs(CatalogDef *out, int max) {
   if (!wanted()) return 0; int n = 0;
   for (int i = 0; i < 6 && n < max; i++) { CatalogDef *d = &out[n++]; memset(d, 0, sizeof *d);
     snprintf(d->title, sizeof d->title, "%s · %s", ROWS[i].title, T(!strcmp(ROWS[i].type, "movie") ? "Movies" : "Series"));
-    snprintf(d->type, sizeof d->type, "%s", ROWS[i].type); snprintf(d->path, sizeof d->path, PFX "%s/%s", ROWS[i].list, ROWS[i].type);
+    snprintf(d->type, sizeof d->type, "%s", ROWS[i].type); row_url(i, d->path, sizeof d->path);
     snprintf(d->url, sizeof d->url, "%s", d->path); snprintf(d->key, sizeof d->key, "%s", ROWS[i].key); } /* (no paging: skip 0) */
   return n; }
-void traktrows_forget(void) { for (int i = 0; i < 6; i++) { char k[64]; snprintf(k, sizeof k, "cat:" PFX "%s/%s", ROWS[i].list, ROWS[i].type); cache_write(k, (const unsigned char *)"[]", 2); } }
+void traktrows_forget(void) { for (int i = 0; i < 6; i++) { char k[80] = "cat:"; row_url(i, k + 4, sizeof k - 4); cache_write(k, (const unsigned char *)"[]", 2); } }
 
 /* Trakt's answer made an addon's: one entry a title (history repeats it for every play and every episode), its IMDb id
    (what the cards, the title page and the streams go by: titles Trakt knows only by another id are left out) */
-typedef struct { NetCb cb; void *ud; char list, type; } Ask;
+typedef struct { NetCb cb; void *ud; unsigned generation; char list, type; } Ask;
 static void on_answer(int st, const unsigned char *b, size_t n, void *ud) {
-  (void)n; Ask *k = ud; cJSON *j = st == 200 ? net_json(b) : NULL;
+  (void)n; Ask *k = ud;
+  if (k->generation != scrobble_generation()) {
+    k->cb(0, NULL, 0, k->ud);
+    free(k);
+    return;
+  }
+  cJSON *j = st == 200 ? net_json(b) : NULL;
   if (!cJSON_IsArray(j)) { net_json_free(j); k->cb(st == 200 ? 502 : st, NULL, 0, k->ud); free(k); return; } /* (not a list: kept copy stays) */
   cJSON *o = cJSON_CreateObject(), *metas = cJSON_AddArrayToObject(o, "metas"); cJSON_AddNumberToObject(o, "cacheMaxAge", 300); /* (five minutes: Home made again soon after asks no more) */
   const char *tp = k->type == 'm' ? "movie" : "series", *field = k->type == 'm' ? "movie" : "show"; int got = 0;
@@ -48,11 +61,17 @@ static void on_answer(int st, const unsigned char *b, size_t n, void *ud) {
   k->cb(200, (const unsigned char *)(s ? s : "{\"metas\":[]}"), s ? strlen(s) : 12, k->ud); free(s); free(k); }
 void traktrows_fetch(const char *url, NetCb cb, void *ud) {
   char list = 0, type = 0; const char *p = traktrows_is(url) ? url + strlen(PFX) : "";
+  if (*p >= '0' && *p <= '9') {
+    char *end;
+    long id = strtol(p, &end, 10);
+    if (*end != '/' || id != profiles_active()) { cb(404, NULL, 0, ud); return; }
+    p = end + 1;
+  } else if (profiles_active() != PROFILE_DEFAULT) { cb(404, NULL, 0, ud); return; }
   if (p[0] && p[1] == '/') { list = p[0]; type = !strcmp(p + 2, "movie") ? 'm' : !strcmp(p + 2, "series") ? 's' : 0; }
   if (!type || !strchr("hwr", list)) { cb(404, NULL, 0, ud); return; }
   const char *t = type == 'm' ? "movies" : "shows"; char path[200];
   if (list == 'h') snprintf(path, sizeof path, "/sync/history/%s?page=1&limit=100", t);           /* most recent first */
   else if (list == 'w') snprintf(path, sizeof path, "/sync/watchlist/%s/added/desc?page=1&limit=60", t); /* newest added first */
   else snprintf(path, sizeof path, "/recommendations/%s?limit=40&ignore_collected=true", t);
-  Ask *k = calloc(1, sizeof *k); if (!k) { cb(0, NULL, 0, ud); return; } k->cb = cb; k->ud = ud; k->list = list; k->type = type;
+  Ask *k = calloc(1, sizeof *k); if (!k) { cb(0, NULL, 0, ud); return; } k->cb = cb; k->ud = ud; k->generation = scrobble_generation(); k->list = list; k->type = type;
   if (!scrobble_get(path, on_answer, k)) { free(k); cb(0, NULL, 0, ud); } }

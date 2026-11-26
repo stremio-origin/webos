@@ -229,7 +229,7 @@ void card_prep(CardPrep *cp, const Item *it, int wide, const char *artOverride) 
   cp->lg = i18n_gen(); cp->lbl[0] = cp->left[0] = 0; cp->leftW = 0;
   if (artOverride) { Item *tmp = malloc(sizeof *tmp); if (tmp) { *tmp = *it; snprintf(tmp->poster, sizeof tmp->poster, "%s", artOverride); sb_poster_of(tmp, cp->art, sizeof cp->art); free(tmp); } else cp->art[0] = 0;
     snprintf(cp->pre, sizeof cp->pre, "%s", artOverride); } /* the card shows the address as a poster; the fetch ahead asks for it as given */
-  else { if (wide) sb_bg_small(it, cp->art, sizeof cp->art); else sb_poster_of(it, cp->art, sizeof cp->art); snprintf(cp->pre, sizeof cp->pre, "%s", cp->art); }
+  else { if (wide) sb_bg_mid(it, cp->art, sizeof cp->art); /* (Stremio Origin PR #55: the 480x270 one was soft on these cards) */ else sb_poster_of(it, cp->art, sizeof cp->art); snprintf(cp->pre, sizeof cp->pre, "%s", cp->art); }
   if (!wide) return;
   const char *c = strrchr(it->videoId, ':'); int ep = 0, se = 0;
   if (c) { ep = atoi(c + 1); const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') se = atoi(p + 1); }
@@ -256,7 +256,10 @@ static void logo_tint(const char *url, uint32_t *c1, uint32_t *c2) {
 }
 void card_draw_round(const Item *it, float x, float y, float d) {
   float r = d / 2, cx = x + r, cy = y + r;
-  if (!strcmp(it->id, LIVE_ALL_ID)) { livewall_card(x, y, d, d, r, 0); return; } /* the one marked LIVE: the channels' own wall, panning */
+  if (!strcmp(it->id, LIVE_ALL_ID)) { livewall_card(x, y, d, d, r, 0); return; }
+  if (!strcmp(it->id, "surp:")) { gfx_rrect_v(x, y, d, d, r, RGB(0x8b, 0x5c, 0xf6), RGB(0xec, 0x48, 0x99)); icon_draw("g_spark", cx - d * 0.24f, cy - d * 0.24f, d * 0.48f, WHITE_A(255)); return; } /* (Surprise me) */
+  if (!strcmp(it->type, "platform")) { GLuint pt = it->logo[0] ? img_get(it->logo, (int)d, (int)d, NULL) : 0; /* (a platform, its own icon) */
+    if (pt) gfx_image(pt, x, y, d, d, r, WHITE_A(255), 0, 0, 1, 1); else gfx_rrect(x, y, d, d, r, RGBA(26, 24, 36, 235)); return; } /* the one marked LIVE: the channels' own wall, panning */
   /* a channel: a soft dark glass disc, its logo large on it, a faint glow of the logo's own colour behind */
   const char *art = it->logo[0] ? it->logo : it->poster[0] ? it->poster : it->background; uint32_t c1, c2; logo_tint(art, &c1, &c2);
   gfx_rrect(x, y, d, d, r, RGBA(26, 24, 36, 235)); gfx_rrect_v(x, y, d, d, r, col_alpha(c1, 0.55f), col_alpha(c2, 0.2f)); gfx_rrect_v(x, y, d, d, r, WHITE_A(16), WHITE_A(0));

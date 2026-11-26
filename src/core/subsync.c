@@ -320,7 +320,7 @@ static int same_times(SubSync *j, const Cue *c, int n) {
   return cnt >= 10 && hit >= cnt * 0.9;
 }
 /* each reference's answer; several are asked for, and the job decides once one is clearly right or two agree */
-typedef struct { double f, d, r, m; int ok, local; } RefAns;
+typedef struct { double f, d, r, m; int ok, local, ci; } RefAns;   /* ci: the candidate it came from */
 #define REF_TRIES 6
 static int agree(const SubSync *j, const RefAns *a, const RefAns *b) {
   double t0, t1; x_span(j, &t0, &t1);
@@ -356,7 +356,7 @@ static void *ref_main(void *arg) {
     subs_free(cs, n);
     fprintf(stderr, "[sync] reference read: %d lines (%d kept)\n", n, j->nr);
     j->stage = 0; SyncResult one = { SYNC_UNSURE, 0, 1, 0, 0 }; TimingAns tm; int ok = match_ref(j, &one, &tm);
-    RefAns a; memset(&a, 0, sizeof a);
+    RefAns a; memset(&a, 0, sizeof a); a.ci = i;
     if (ok) { a.ok = 1; a.f = one.f; a.d = one.d; a.r = one.byWords ? 1 : tm.best.r; a.m = one.byWords ? 1 : tm.best.r - tm.second.r; a.local = !one.byWords && tm.best.r > 0 && tm.local; }
     else if (tm.best.r >= .35 && tm.z >= 5) { a.f = tm.best.f; a.d = round(tm.best.d * 100) / 100; a.r = tm.best.r; a.m = tm.best.r - tm.second.r; a.local = tm.local; } /* not clear alone: kept in case another agrees */
     else { fprintf(stderr, "[sync] nothing clear against reference %d\n", tried); continue; }
@@ -364,6 +364,10 @@ static void *ref_main(void *arg) {
     fprintf(stderr, "[sync] reference %d says %+.2f s x%.4f (score %.2f, margin %.2f)%s\n", tried, a.d, a.f, a.r, a.m, a.ok ? "" : ", not clear alone");
     if (a.ok && a.r >= .55 && a.m >= .15) { r.st = SYNC_OK; r.f = a.f; r.d = a.d; r.score = (float)a.r; done = 1; fprintf(stderr, "[sync] clear answer from reference %d\n", tried); break; }
     for (int q2 = 0; q2 < na - 1 && !done; q2++) if (agree(j, &ans[q2], &a)) { const RefAns *w = ans[q2].r >= a.r ? &ans[q2] : &a;
+      /* two answers that are each unsure, from one release in two languages (same name, translated from the same timing), are
+         one opinion, not two: they agree with each other whatever their offset from this file is (seen: +45 s on a film that needed none) */
+      if (!ans[q2].ok && !a.ok && name_score(j->c[ans[q2].ci].r.rel, c->r.rel) >= .8f) {
+        fprintf(stderr, "[sync] references %d and %d agree, but both are unsure and from the same release: not a second opinion\n", q2 + 1, tried); continue; }
       r.st = SYNC_OK; r.f = w->f; r.d = w->d; r.score = (float)w->r; done = 1; fprintf(stderr, "[sync] references %d and %d agree: %+.2f s x%.4f\n", q2 + 1, tried, w->d, w->f); } }
   if (!done && !j->cancel) { int best = -1, clash = 0; /* the clear answers left: taken when they do not contradict each other */
     for (int i = 0; i < na; i++) if (ans[i].ok && (best < 0 || ans[i].r > ans[best].r)) best = i;

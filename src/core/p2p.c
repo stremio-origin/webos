@@ -76,7 +76,11 @@ static struct { char ih[41]; uint64_t size, lastBytes; double lastT, rate, dur, 
 
 static double now_s(void) { return SDL_GetTicks() / 1000.0; }
 static double idle_limit(void) { const char *e = getenv("SB_P2PIDLE"); return e ? atof(e) : 300; } /* SB_P2PIDLE=5: development, stop cycles */
-static void lib_path(char *p, size_t cap) { char *base = SDL_GetBasePath();
+static void lib_path(char *p, size_t cap) {
+#ifdef SB_ANDROID
+  { const char *d = getenv("SB_LIBDIR"); snprintf(p, cap, "%s/libsbengine.so", d ? d : "."); return; } /* the APK's native library folder (OriginActivity sets it) */
+#endif
+  char *base = SDL_GetBasePath();
 #ifdef __APPLE__
   snprintf(p, cap, "%slibsbengine.dylib", base ? base : "");
 #else

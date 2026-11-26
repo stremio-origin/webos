@@ -58,12 +58,10 @@ static void start_qr(void) { if (L.started) return; L.started = 1; L.stat[0] = 0
 static void step(void) { if (--L.left <= 0 && !L.restarting) { L.restarting = 1; timer_start(&L.restart, 0.5f); } }
 static void on_user(int ok, const char *err, void *ud) { (void)ok; (void)err; (void)ud; step(); }
 static void on_addons(int changed, void *ud) { (void)changed; (void)ud; step(); }
-static void on_lib(int changed, void *ud) { (void)changed; (void)ud; step(); }
-/* signed in: the two halves step back, a slim line runs while the account comes down (library, addons), then
-   the start screen fades in over it and Home is revealed from there like at any start: complete, never in pieces */
+/* Load the shared account and add-ons before showing the profile picker. */
 void login_finish(const char *ak) {
-  if (L.done) return; L.done = 1; L.editing = 0; SDL_StopTextInput(); timer_start(&L.doneT, 0.6f); L.doneAt = app_now(); L.left = 3;
-  sb_finish_login(ak, on_user, NULL); sb_sync_addons(on_addons, NULL); sb_pull_library(on_lib, NULL);
+  if (L.done) return; L.done = 1; L.editing = 0; SDL_StopTextInput(); timer_start(&L.doneT, 0.6f); L.doneAt = app_now(); L.left = 2;
+  sb_finish_login(ak, on_user, NULL); sb_sync_addons(on_addons, NULL);
 }
 static void on_login(int ok, const char *err, void *ud) { (void)ud;
   if (!ok) { snprintf(L.err, sizeof L.err, "%s", err && *err ? err : T("Sign-in failed")); return; }
@@ -103,8 +101,8 @@ static void tick(float dt) {
   if (L.qrOk && !L.done && !L.pollReq && app_now() >= L.pollAt) { char u[320]; snprintf(u, sizeof u, "https://link.stremio.com/api/read?code=%s", L.code); L.pollReq = net_get(u, on_read, NULL); L.pollAt = app_now() + 2.5; }
   if (L.done) { timer_tick(&L.doneT, dt);
     if (!L.restarting && app_now() - L.doneAt > 9) { L.restarting = 1; timer_start(&L.restart, 0.5f); } /* a slow network never keeps it here */
-    if (L.restarting && timer_tick(&L.restart, dt) >= 1 && !L.restart.on) { /* the app restarts behind the start screen */
-      L.restart.on = 0; L.restarting = 2; app_splash_done = 0; splash_start(1, L.doneAt); topNav.idx = NAV_HOME; app_go(SCR_HOME, NULL, 1); memset(&L, 0, sizeof L); } }
+    if (L.restarting && timer_tick(&L.restart, dt) >= 1 && !L.restart.on) {
+      L.restart.on = 0; L.restarting = 2; app_splash_done = 1; topNav.idx = NAV_HOME; app_go(SCR_PROFILES, &L.doneAt, 1); memset(&L, 0, sizeof L); } }
 }
 /* the glow: two big soft discs wandering slowly (as rings of falling alpha: no radial shader needed) */
 static void blob(float cx, float cy, uint32_t c, float peak) {

@@ -28,5 +28,6 @@ int      tw_cw_on(void);              /* connected and the setting on */
 int      tw_plays(const TwPlay **out); /* newest first (0 when off) */
 const TwPlay *tw_play_of(const char *id); /* a title's newest, NULL none */
 void     tw_play_drop(const char *id);  /* dismissed: each of the title's entries deleted on Trakt, gone here at once */
+void     tw_reset(void);
 void     tw_forget(void);             /* another connection: the account's marks and hidden ones go */
 #endif
