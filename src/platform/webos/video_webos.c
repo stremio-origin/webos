@@ -369,8 +369,10 @@ int video_init(const char *ignored) {
   return 1;
 }
 static void stop_session(void) {
-  pthread_mutex_lock(&mu); char mid[64]; snprintf(mid, sizeof mid, "%s", S.mediaId); session++; memset(&S, 0, sizeof S); S.st = VID_IDLE; S.curTxt = -1; pthread_mutex_unlock(&mu);
+  pthread_mutex_lock(&mu);
+  char mid[64]; snprintf(mid, sizeof mid, "%s", S.mediaId); session++; memset(&S, 0, sizeof S); S.st = VID_IDLE; S.curTxt = -1;
   seekTarget = -1; seekRefusedTries = 0; seekRetryAt = 0; seekWait = 0; hold = 0; lastCT = -1;
+  pthread_mutex_unlock(&mu);
   if (mid[0]) { char b[128]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", mid); call("unload", b, NULL, NULL); }
 }
 void video_unload(void) { resume.on = 0; resume.pause = 0; S.diedBehind = 0; timed.on = 0; url[0] = 0; stop_session(); }
@@ -423,13 +425,13 @@ void video_set_volume(int pct, int easeMs) {
 void video_pause(void) { pthread_mutex_lock(&mu); S.pos = pos_now(); posAt = SDL_GetTicks() / 1000.0; S.playing = 0; S.pausedByUs = 1; S.st = VID_PAUSED; pthread_mutex_unlock(&mu); simple("pause"); } /* (the time no longer guessed on from here: only the TV's own reports move it, so a pause it ignores shows) */
 /* presses add up: the shown position moves at once, the pipeline gets one seek 350 ms after the last (four
    seeks in under a second were followed by a dead pipeline) */
-void video_seek(double sec) { if (sec < 0) sec = 0; pthread_mutex_lock(&mu); S.pos = sec; posAt = SDL_GetTicks() / 1000.0; hold_on(); pthread_mutex_unlock(&mu); seekTarget = sec; seekAt = SDL_GetTicks() + 350; }
+void video_seek(double sec) { if (sec < 0) sec = 0; pthread_mutex_lock(&mu); S.pos = sec; posAt = SDL_GetTicks() / 1000.0; hold_on(); seekTarget = sec; seekAt = SDL_GetTicks() + 350; pthread_mutex_unlock(&mu); }
 static void seek_now(double sec) {
   if (timed.on) { /* the stream starts again from there, with the tracks it had */
     pthread_mutex_lock(&mu); int aud = S.curAud, txt = S.curTxt; pthread_mutex_unlock(&mu);
     timed.off = sec; snprintf(url, sizeof url, "%s?t=%.3f", timed.base, sec); fprintf(stderr, "[video] the stream again from %.0f s\n", sec);
     resume.on = 1; resume.at = 0; resume.aud = aud; resume.txt = txt; start_load(); return; }
-  seekWait = 1; seekWaitAt = SDL_GetTicks(); char mid[64]; pthread_mutex_lock(&mu); snprintf(mid, sizeof mid, "%s", S.mediaId); pthread_mutex_unlock(&mu); if (!mid[0]) return; char b[160]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", mid, (int)(sec * 1000)); call("seek", b, NULL, NULL); }
+  char mid[64]; pthread_mutex_lock(&mu); seekWait = 1; seekWaitAt = SDL_GetTicks(); snprintf(mid, sizeof mid, "%s", S.mediaId); pthread_mutex_unlock(&mu); if (!mid[0]) return; char b[160]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", mid, (int)(sec * 1000)); call("seek", b, NULL, NULL); }
 /* the TV reports the time only now and then (on some sets every few seconds): between reports it runs on with the
    clock while playing, and stands where it was when paused (a paused frame asked again lands on the right second), while
    buffering and from a seek until the picture moves again (a set that reports rarely: let go after 10 s of play) */
@@ -440,16 +442,16 @@ double video_time(void) { pthread_mutex_lock(&mu); double p = pos_now(); pthread
 double video_duration(void) { pthread_mutex_lock(&mu); double d = S.dur; pthread_mutex_unlock(&mu); return d; }
 double video_buffered_end(void) { pthread_mutex_lock(&mu); double b = S.bufEnd; pthread_mutex_unlock(&mu); return b; }
 VidState video_state(void) { pthread_mutex_lock(&mu); VidState s = S.st; pthread_mutex_unlock(&mu); return s; }
-const char *video_error(void) { return S.err; }
+const char *video_error(void) { static char errCopy[160]; pthread_mutex_lock(&mu); snprintf(errCopy, sizeof errCopy, "%s", S.err); pthread_mutex_unlock(&mu); return errCopy; }
 int video_live(void) { pthread_mutex_lock(&mu); int l = S.live; pthread_mutex_unlock(&mu); return l; }
-int video_settling(void) { return seekTarget >= 0 || (seekWait && SDL_GetTicks() - seekWaitAt < 8000); }
-int video_width(void) { return S.w; }
-int video_height(void) { return S.h; }
+int video_settling(void) { pthread_mutex_lock(&mu); int s = seekTarget >= 0 || (seekWait && SDL_GetTicks() - seekWaitAt < 8000); pthread_mutex_unlock(&mu); return s; }
+int video_width(void) { pthread_mutex_lock(&mu); int w = S.w; pthread_mutex_unlock(&mu); return w; }
+int video_height(void) { pthread_mutex_lock(&mu); int h = S.h; pthread_mutex_unlock(&mu); return h; }
 double video_fps(void) { pthread_mutex_lock(&mu); double f = S.fps; pthread_mutex_unlock(&mu); return f; }
 int video_hdr(char *out, int cap) { pthread_mutex_lock(&mu); snprintf(out, (size_t)cap, "%s", S.hdr); pthread_mutex_unlock(&mu); return out[0] != 0; }
-int video_audio_unsupported(void) { return S.audioUnsup; }
+int video_audio_unsupported(void) { pthread_mutex_lock(&mu); int u = S.audioUnsup; pthread_mutex_unlock(&mu); return u; }
 int video_audio_tracks(VidTrack *out, int max) { pthread_mutex_lock(&mu); int n = S.naud < max ? S.naud : max; memcpy(out, S.aud, n * sizeof *out); pthread_mutex_unlock(&mu); return n; }
-int video_audio_current(void) { return S.curAud; }
+int video_audio_current(void) { pthread_mutex_lock(&mu); int a = S.curAud; pthread_mutex_unlock(&mu); return a; }
 void video_select_audio(int idx) {
   char mid[64]; pthread_mutex_lock(&mu); snprintf(mid, sizeof mid, "%s", S.mediaId); if (idx != S.curAud) S.audioUnsup = 0; S.curAud = idx; pthread_mutex_unlock(&mu); if (!mid[0]) return;
   char b[192]; snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"audio\",\"index\":%d}", mid, idx); call("selectTrack", b, NULL, NULL);
@@ -510,8 +512,13 @@ void video_pump(void) {
     resume.on = 0; if (resume.aud > 0) video_select_audio(resume.aud); if (resume.txt >= 0) video_select_text(resume.txt); if (resume.at > 1) { seek_now(resume.at); }
     if (resume.pause && !resume.on) { resume.pause = 0; video_pause(); } /* (it was paused for the other app: it stays paused; a converted stream's seek loads again first) */
   }
-  if (seekTarget >= 0 && SDL_TICKS_PASSED(SDL_GetTicks(), seekAt)) { double t = seekTarget; seekTarget = -1; seek_now(t); }
-  if (seekRetryAt && SDL_TICKS_PASSED(SDL_GetTicks(), seekRetryAt)) { seekRetryAt = 0; double t = video_time(); fprintf(stderr, "[video] seek refused: again (%d)\n", seekRefusedTries); seek_now(t); }
+  double doSeek = -1, doRetry = -1; int retryNum = 0; Uint32 nowTicks = SDL_GetTicks();
+  pthread_mutex_lock(&mu);
+  if (seekTarget >= 0 && SDL_TICKS_PASSED(nowTicks, seekAt)) { doSeek = seekTarget; seekTarget = -1; }
+  if (seekRetryAt && SDL_TICKS_PASSED(nowTicks, seekRetryAt)) { seekRetryAt = 0; doRetry = pos_now(); retryNum = seekRefusedTries; }
+  pthread_mutex_unlock(&mu);
+  if (doSeek >= 0) seek_now(doSeek);
+  if (doRetry >= 0) { fprintf(stderr, "[video] seek refused: again (%d)\n", retryNum); seek_now(doRetry); }
 }
 
 int video_edge_colors(uint32_t *out4) { (void)out4; return 0; } /* (the picture is on the TV's own plane: the app never sees it) */

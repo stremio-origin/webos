@@ -286,7 +286,11 @@ int main(int argc, char **argv) {
   cache_prune_start(400);
 #endif
   snprintf(p, sizeof p, "%s/cache", store_data_dir()); img_init(p); img_set_draw_scale(gfx_scale());
+#ifdef SB_WEBOS
+  if (memMb > 0) img_set_budget_mb(memMb < 1200 ? 40 : memMb < 2500 ? 80 : 128); /* ~2 GB TVs share RAM with compositor + 4K media pipeline: 80 MB (~400 posters) stays clear of OOM while keeping tab warm-up active */
+#else
   if (memMb > 0) img_set_budget_mb(memMb < 1200 ? 40 : memMb < 3000 ? 128 : 192); /* pictures under the RAM the TV has (the shared atlas, backdrop and text add ~20 MB) */
+#endif
   i18n_init(plat_asset_dir(), getenv("SB_LANG") ? getenv("SB_LANG") : store_get("uiLang", "auto")); /* SB_LANG=ar: development */
   if (!text_init(plat_asset_dir(), gfx_scale())) return 1;
   if (getenv("SB_SUPCARD_FIT")) { extern int supportcard_fit_check(const char *assetDir); int bad = supportcard_fit_check(plat_asset_dir()); return bad ? 2 : 0; } /* (development / test: the support card's words in every language against the card) */
@@ -405,9 +409,9 @@ int main(int argc, char **argv) {
 #ifdef SB_WEBOS
           med = hzIv[hzN / 2]; /* (webOS: the middle one. Its quicker quarter came out at 20.1 ms on a TV that shows 48 (20.8 ms): paced at 50 its frames still came every 20.9 ms, the worst ones 24-25 ms; at 48 they come in step) */
 #endif
-          static const int R[] = { 48, 50, 60 }; int hz = 0;
-          for (int i = 0; i < 3; i++) { float d = fabsf(1000.0f / R[i] - med); if (d < best && d < 0.6f) { best = d; hz = R[i]; } }
-          fprintf(stderr, "[pace] frames reach the screen every %.1f ms (%.1f to %.1f)\n", med, hzIv[hzN / 10], hzIv[hzN - 1 - hzN / 10]); if (hz) pace_set_hz(hz); else { if (++hzTries < 30) { hzState = 0; hzNext = SDL_GetTicks() + 20000; }
+          static const int R[] = { 48, 50, 60, 120 }; int hz = 0;
+          for (int i = 0; i < 4; i++) { float d = fabsf(1000.0f / R[i] - med); if (d < best && d < 0.6f) { best = d; hz = R[i]; } }
+          fprintf(stderr, "[pace] frames reach the screen every %.1f ms (%.1f to %.1f)\n", med, hzIv[hzN / 10], hzIv[hzN - 1 - hzN / 10]); if (hz) pace_set_hz(hz > 60 ? 60 : hz); else { if (++hzTries < 30) { hzState = 0; hzNext = SDL_GetTicks() + 20000; }
 #ifdef SB_WEBOS
             if (med > 1000.0f / 48 + 0.6f && hzTries == 1) { pace_set_hz(48); fprintf(stderr, "[pace] no rate matched (busy): paced at 48 meanwhile, measured again later\n"); } /* (webOS shows an app's frames at 48 at most, and its frames came slower still: aimed at 60 they alternate 21 and 33 ms, a judder; held at 48 each comes in step with the screen) */
 #endif

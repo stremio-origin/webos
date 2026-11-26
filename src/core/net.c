@@ -69,6 +69,7 @@ typedef struct Req {
   int status; unsigned char *body; size_t len, cap; int cancelled, done;
   int size; double total;  /* net_size: only the headers are read */
   int file;                /* net_file: url is a local path */
+  int pri;                 /* interactive priority: jumps ahead of background catalog rows */
   struct Req *next;
 } Req;
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -283,25 +284,30 @@ int net_init(const char *ca) {
 }
 static void push_req(Req *r) { /* under mu */
   if (r->timeoutMs > 20000) { if (slowTail) slowTail->next = r; else slowQ = r; slowTail = r; pthread_cond_signal(&slowCv); }
+  else if (r->pri && queue && !queue->pri) { r->next = queue; queue = r; pthread_cond_signal(&cv); }
+  else if (r->pri && queue) { Req *p = queue; while (p->next && p->next->pri) p = p->next; r->next = p->next; p->next = r; if (!r->next) queueTail = r; pthread_cond_signal(&cv); }
   else { if (queueTail) queueTail->next = r; else queue = r; queueTail = r; pthread_cond_signal(&cv); }
 }
 /* one that is waited on as the user types (search suggestions): ahead of everything queued */
 unsigned net_get_first(const char *url, NetCb cb, void *ud) {
-  Req *r = calloc(1, sizeof *r); r->url = strdup(url); r->cb = cb; r->ud = ud;
+  Req *r = calloc(1, sizeof *r); r->url = strdup(url); r->cb = cb; r->ud = ud; r->pri = 2;
   pthread_mutex_lock(&mu); r->id = nextId++; r->next = queue; queue = r; if (!queueTail) queueTail = r; npending++; pthread_cond_signal(&cv); pthread_mutex_unlock(&mu); return r->id; }
-static unsigned enqueue_x(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, int size, NetCb cb, void *ud) {
-  Req *r = calloc(1, sizeof *r); r->url = strdup(url); r->hdr = hdr ? strdup(hdr) : NULL; r->post = post ? strdup(post) : NULL; r->ctype = ctype ? strdup(ctype) : NULL; r->cb = cb; r->ud = ud; r->timeoutMs = timeoutMs; r->size = size;
+static unsigned enqueue_xp(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, int size, int pri, NetCb cb, void *ud) {
+  Req *r = calloc(1, sizeof *r); r->url = strdup(url); r->hdr = hdr ? strdup(hdr) : NULL; r->post = post ? strdup(post) : NULL; r->ctype = ctype ? strdup(ctype) : NULL; r->cb = cb; r->ud = ud; r->timeoutMs = timeoutMs; r->size = size; r->pri = pri;
   pthread_mutex_lock(&mu);
   r->id = nextId++; push_req(r); npending++;
   pthread_mutex_unlock(&mu);
   return r->id;
 }
+static unsigned enqueue_x(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, int size, NetCb cb, void *ud) { return enqueue_xp(url, hdr, post, ctype, timeoutMs, size, 0, cb, ud); }
 static unsigned enqueue_c(const char *url, const char *hdr, const char *post, const char *ctype, long timeoutMs, NetCb cb, void *ud) { return enqueue_x(url, hdr, post, ctype, timeoutMs, 0, cb, ud); }
 static unsigned enqueue_t(const char *url, const char *hdr, const char *post, long timeoutMs, NetCb cb, void *ud) { return enqueue_x(url, hdr, post, NULL, timeoutMs, 0, cb, ud); }
 static unsigned enqueue(const char *url, const char *hdr, const char *post, NetCb cb, void *ud) { return enqueue_t(url, hdr, post, 0, cb, ud); }
 unsigned net_get_timeout(const char *url, int timeoutMs, NetCb cb, void *ud) { return enqueue_t(url, NULL, NULL, timeoutMs, cb, ud); }
 unsigned net_get(const char *url, NetCb cb, void *ud) { return enqueue(url, NULL, NULL, cb, ud); }
+unsigned net_get_pri(const char *url, NetCb cb, void *ud) { return enqueue_xp(url, NULL, NULL, NULL, 0, 0, 1, cb, ud); }
 unsigned net_get_hdr(const char *url, const char *hdr, NetCb cb, void *ud) { return enqueue(url, hdr, NULL, cb, ud); }
+unsigned net_get_hdr_pri(const char *url, const char *hdr, NetCb cb, void *ud) { return enqueue_xp(url, hdr, NULL, NULL, 0, 0, 1, cb, ud); }
 unsigned net_size(const char *url, NetCb cb, void *ud) { return enqueue_x(url, NULL, NULL, NULL, 10000, 1, cb, ud); }
 unsigned net_post_json(const char *url, const char *json, NetCb cb, void *ud) { return enqueue(url, NULL, json, cb, ud); }
 unsigned net_post_hdr_t(const char *url, const char *body, const char *contentType, const char *headers, int timeoutMs, NetCb cb, void *ud) {

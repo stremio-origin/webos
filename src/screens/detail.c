@@ -490,18 +490,24 @@ static int key_in(int k) {
     else if (k == K_UP) { if (D.nppl) { D.zone = 3; D.pRingEnter = 1; timer_start(&D.pRingPop, 0.2f); paint(); return 1; } topnav_focus(); return 1; } /* Up: the people, then the top tabs */
     else if (k == K_OK) { if (D.btnIdx < D.nbtn && D.btn[D.btnIdx].kind == B_PLAY && best_on()) { if (!D.playHold) { D.playHold = 1; D.holdSwell = 0; D.playHoldAt = app_now(); } } /* Play: a tap plays, a hold opens all the streams (on release or when full) */
       else { fpill_press(&D.pill); if (D.btnIdx < D.nbtn) btn_act(D.btn[D.btnIdx].kind); } }
-    else if (k == K_DOWN) { if (is_series()) { if (D.nseasons) D.zone = 1; else nudge_btn(K_DOWN); } else { char im[32]; if (imdb_of(im, sizeof im)[0]) { Item it = meta_item(); sound_focus(); D.pageZone = 0; revpanel_show_page(&it); } else nudge_btn(K_DOWN); return 1; } } /* (best stream on: Play holds the streams, Down brings the reviews up) */ /* film: Down re-opens the streams sheet */
+    else if (k == K_DOWN || k == K_CH_DOWN) {
+      if (is_series()) { if (k == K_CH_DOWN && D.neps) { flush_season(); D.zone = 2; } else if (D.nseasons) D.zone = 1; else nudge_btn(K_DOWN); }
+      else { char im[32]; if (imdb_of(im, sizeof im)[0]) { Item it = meta_item(); sound_focus(); D.pageZone = 0; revpanel_show_page(&it); } else nudge_btn(K_DOWN); return 1; }
+    } /* (best stream on: Play holds the streams, Down brings the reviews up) */
+    else if (k == K_CH_UP) { if (D.nppl) { D.zone = 3; D.pRingEnter = 1; timer_start(&D.pRingPop, 0.2f); paint(); return 1; } topnav_focus(); return 1; }
     else if (k == K_BACK) return 0;
     if ((k == K_LEFT || k == K_RIGHT) && D.btnIdx == b0) nudge_btn(k);
     paint(); return 1; }
   if (D.zone == 3) { int p0 = D.pIdx;
     if (k == K_RIGHT) D.pIdx = D.pIdx + 1 < D.nppl ? D.pIdx + 1 : D.pIdx; else if (k == K_LEFT) D.pIdx = D.pIdx > 0 ? D.pIdx - 1 : 0;
-    else if (k == K_DOWN) D.zone = 0; else if (k == K_UP) { topnav_focus(); return 1; } else if (k == K_OK) { ppl_open(); return 1; } else if (k == K_BACK) return 0;
+    else if (k == K_DOWN || k == K_CH_DOWN) D.zone = 0; else if (k == K_UP || k == K_CH_UP) { topnav_focus(); return 1; } else if (k == K_OK) { ppl_open(); return 1; } else if (k == K_BACK) return 0;
     if ((k == K_LEFT || k == K_RIGHT) && D.pIdx == p0) nudge_start(&D.nudge, k); /* (a move: the ring travels, swelling a little on the way: drawn from its glide) */
     paint(); return 1; }
   if (D.zone == 1) {
     if (k == K_RIGHT) { if (D.seasonIdx < D.nseasons - 1) { D.seasonIdx++; queue_season(); } else nudge_start(&D.nudge, k); }
     else if (k == K_LEFT) { if (D.seasonIdx > 0) { D.seasonIdx--; queue_season(); } else nudge_start(&D.nudge, k); }
+    else if (k == K_CH_DOWN) { if (D.seasonIdx < D.nseasons - 1) { D.seasonIdx = D.seasonIdx + 4 < D.nseasons ? D.seasonIdx + 4 : D.nseasons - 1; queue_season(); } else if (D.neps) { flush_season(); D.zone = 2; } else nudge_start(&D.nudge, K_DOWN); }
+    else if (k == K_CH_UP) { if (D.seasonIdx > 0) { D.seasonIdx = D.seasonIdx > 4 ? D.seasonIdx - 4 : 0; queue_season(); } else { flush_season(); D.zone = 0; } }
     else if (k == K_UP) { flush_season(); D.zone = 0; }
     else if (k == K_DOWN || k == K_OK) { flush_season(); if (D.neps) D.zone = 2; else if (k == K_DOWN) nudge_start(&D.nudge, K_DOWN); }
     else if (k == K_BACK) return 0;
@@ -509,13 +515,15 @@ static int key_in(int k) {
   int e0 = D.epIdx;
   if (k == K_RIGHT) D.epIdx = D.epIdx + 1 < D.neps ? D.epIdx + 1 : D.epIdx;
   else if (k == K_LEFT) D.epIdx = D.epIdx > 0 ? D.epIdx - 1 : 0;
+  else if (k == K_CH_DOWN) D.epIdx = D.epIdx + 8 < D.neps ? D.epIdx + 8 : (D.neps ? D.neps - 1 : 0);
+  else if (k == K_CH_UP) { if (D.epIdx > 0) D.epIdx = D.epIdx > 8 ? D.epIdx - 8 : 0; else D.zone = 1; }
   else if (k == K_UP) D.zone = 1;
   else if (k == K_OK) { if (D.epIdx < D.neps) { const char *v = js_str(D.eps[D.epIdx], "id", ""); if (ep_hidden(D.epIdx)) { spoil_reveal(v); sound_play(SND_TOGGLE); paint(); return 1; } /* a hidden one: OK shows it first */ if (unreleased(D.eps[D.epIdx])) { not_aired(v); return 1; } if (best_on()) { if (!D.epHold) { D.epHold = 1; D.epSwell = 0; D.epHoldAt = app_now(); snprintf(D.epVid, sizeof D.epVid, "%s", v); } } else detail_open_streams(v); return 1; } } /* best stream on: a tap plays it, a hold opens its streams */
   else if ((k == K_YELLOW || k == K_BLUE) && D.epIdx < D.neps) { const Item *fi = focused(); if (fi) { Item it = *fi; sound_play(SND_TOGGLE); lib_toggle_watched(&it, js_arr(D.meta, "videos")); app_refresh_boards(); detail_refresh_watched();
       toast(T(lib_is_marked_watched(&it) ? "Marked as watched" : "Marked as unwatched"), 1800, NULL); } return 1; } /* the yellow or blue key: this episode watched, or not */
   else if (k == K_DOWN && D.epIdx < D.neps) { char im[32]; if (imdb_of(im, sizeof im)[0]) { const Item *fi = focused(); if (fi) { Item it = *fi; sound_focus(); D.pageZone = 2; revpanel_show_page(&it); return 1; } } } /* Down: this episode's reviews, risen into the page as a film's */
   else if (k == K_BACK) { D.zone = 1; paint(); return 1; }
-  if (((k == K_LEFT || k == K_RIGHT) && D.epIdx == e0) || k == K_DOWN) nudge_start(&D.nudge, k);
+  if (((k == K_LEFT || k == K_RIGHT || k == K_CH_DOWN) && D.epIdx == e0) || k == K_DOWN) nudge_start(&D.nudge, k == K_CH_DOWN ? K_RIGHT : k);
   paint(); return 1;
 }
 /* a film in a collection: "Part 3 of 8 · Harry Potter Collection" in its facts, and the collection's button */

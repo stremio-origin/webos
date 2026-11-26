@@ -398,14 +398,14 @@ static int topnav_key(int k) {
     Scr t = chipScr(i);
     if ((t == SCR_SEARCH || t == SCR_SET) && SCR != t) { topnav_flush(1); topNav.idx = i; topnav_paint(); return 1; }
     topNav.idx = i; topnav_paint(); topNav.want = i; topNav.swAt = NOW + 0.15;
-  } else if (k == K_DOWN || k == K_OK) {
+  } else if (k == K_DOWN || k == K_CH_DOWN || k == K_OK) {
     topnav_flush(0); Scr tg = chipScr(topNav.idx);
     if ((tg == SCR_SEARCH || tg == SCR_SET) && SCR != tg) {
       if (k == K_OK) { topNav.active = 1; app_go(tg, NULL, 1); topnav_enter_content(); return 1; }
       /* Down from a corner icon: into the page you are on */
       Scr cur = (SCR == SCR_DETAIL || SCR == SCR_SIM) ? SCR_HOME : SCR; for (int j = 2; j < 5; j++) if (chipScr(j) == cur) topNav.idx = j; }
     topnav_enter_content();
-  } else if (k == K_UP) topnav_nudge();
+  } else if (k == K_UP || k == K_CH_UP) topnav_nudge();
   return 1;
 }
 void topnav_tick(float dt) {
@@ -496,7 +496,10 @@ void topnav_draw(void) {
   if (!topNav.laidOut) topnav_paint();
   int signin = SCR == SCR_LOGIN; float pg = revpanel_page_k(); /* the reviews risen into the title page: the bar goes up and away for its buttons */
   if (pg >= 0.999f) return;
-  if (!signin && pg < 0.3f) for (int i = 0; i < 5; i++) { float h = i < 2 ? 76 : 66; hit_add_nav(topNav.chipX[i] + (i == NAV_SEARCH ? update_search_shift(topNav.chipX[NAV_SEARCH], topNav.chipX[NAV_SET]) : 0), 50 - h / 2, topNav.chipW[i], h, chip_focus, chip_act, i, 0); }
+  if (!signin && pg < 0.3f) for (int i = 0; i < 5; i++) {
+    float sh = i == NAV_SEARCH ? update_search_shift(topNav.chipX[NAV_SEARCH], topNav.chipX[NAV_SET]) : 0;
+    if (i == NAV_SEARCH && search_fade(sh) < 0.05f) continue; /* faded out: no ghost click target over the tabs */
+    float h = i < 2 ? 76 : 66; hit_add_nav(topNav.chipX[i] + sh, 50 - h / 2, topNav.chipW[i], h, chip_focus, chip_act, i, 0); }
   static float barOut, barV; { float want = btr_melt() > 0.04f ? 1.0f : 0.0f, w = 11.0f, dt = DT > 0.05f ? 0.05f : DT; barV += (w * w * (want - barOut) - 2 * w * barV) * dt; barOut += barV * dt; if (fabsf(want - barOut) < 0.002f && fabsf(barV) < 0.01f) { barOut = want; barV = 0; } } /* its own motion: a spring that starts softly, travels and settles (half a second), turning back smoothly from wherever it is */
   float mt = barOut < 0 ? 0 : barOut > 1 ? 1 : barOut, ma = mt < 0.15f ? 0 : mt > 0.75f ? 1 : (mt - 0.15f) / 0.6f, rv = ease_apply(EASE_CSS_EASE, app_reveal_x(0, 0.4f)) * (1 - ma * ma * (3 - 2 * ma)); rv *= 1 - pg; if (rv < 1) gfx_opacity_push(rv); /* the background trailer: the bar rises out of the screen, fading across the middle of its way, and comes back as it goes */ float lift = -70 * pg - 140 * mt; if (lift < 0) gfx_offset_push(0, lift);
   float nx = nudge_x(&topNav.nudge), ny = nudge_y(&topNav.nudge);
@@ -874,7 +877,7 @@ void app_pointer_button(int down, float x, float y) {
   const Hit *d = hit_at(x, y); if (d && hit_same(d, &PTR.act)) PTR.act.act(PTR.act.a, PTR.act.b); /* released on it: its own action */
 }
 /* the wheel = the Up/Down arrows (Left/Right for a sideways wheel), one per notch; it leaves the pointer out */
-void app_pointer_wheel(float dx, float dy) { double now = NOW; if (saver_on()) return; if (now - PTR.wheelAt < PTR_WHEEL || (!dx && !dy)) return; PTR.wheelAt = now; idle_touch(); int k = dy > 0 ? K_UP : dy < 0 ? K_DOWN : dx > 0 ? K_RIGHT : K_LEFT; key_core(app_mirror_key(k), 1, 0); key_core(k, 0, 0); }
+void app_pointer_wheel(float dx, float dy) { double now = NOW; if (saver_on()) return; if (now - PTR.wheelAt < PTR_WHEEL || (!dx && !dy)) return; PTR.wheelAt = now; idle_touch(); int k = dy > 0 ? K_UP : dy < 0 ? K_DOWN : dx > 0 ? K_RIGHT : K_LEFT; key_core(k, 1, 0); key_core(k, 0, 0); }
 void app_pointer_system(int show) { if (!show) { ptr_hide(); return; } if (player_open()) { ptr_hush(); return; } if (PTR.arrowHid) return; ptr_show(); }
 void app_key(int k, int down, int repeat) {
   if (k == K_CURSOR_SHOW || k == K_CURSOR_HIDE) { if (down) app_pointer_system(k == K_CURSOR_SHOW); return; } /* a notice from the TV, not a key */
@@ -915,11 +918,11 @@ static void key_core(int k, int down, int repeat) {
      picked up): not input that stops the background trailer */
   if (k != K_CURSOR_SHOW && k != K_CURSOR_HIDE) { char why[32]; snprintf(why, sizeof why, "key %d", k); curKey = k; idle_touch_by(why); }
   k = app_mirror_key(k); /* mirrored layout: Left moves forward (every screen sees the logical direction) */
-  if (k >= K_LEFT && k <= K_DOWN) { /* an arrow: a tap when the focus moved (a screen's own sound, e.g. a filter, wins) */
+  if ((k >= K_LEFT && k <= K_DOWN) || k == K_CH_UP || k == K_CH_DOWN) { /* an arrow or channel page: a tap when the focus moved */
     FocusSig f0, f1; focus_sig(&f0); double t0 = NOW; key_dispatch(k, repeat); focus_sig(&f1);
     /* the glows lean the way it went: a tab sweeps them across, a step only leans them (held keys, less) */
     if (f1.nav && f1.navIdx != f0.navIdx) orbs_pulse(f1.navIdx > f0.navIdx ? ORB_TAB_R : ORB_TAB_L, 0.8f);
-    else orbs_pulse(k == K_LEFT ? ORB_LEFT : k == K_RIGHT ? ORB_RIGHT : k == K_UP ? ORB_UP : ORB_DOWN, repeat ? 0.15f : memcmp(&f0, &f1, sizeof f0) ? 0.35f : 0.2f);
+    else orbs_pulse(k == K_LEFT ? ORB_LEFT : k == K_RIGHT ? ORB_RIGHT : (k == K_UP || k == K_CH_UP) ? ORB_UP : ORB_DOWN, repeat ? 0.15f : memcmp(&f0, &f1, sizeof f0) ? 0.35f : 0.2f);
     if (sound_last() < t0 - 1e-6 && memcmp(&f0, &f1, sizeof f0)) sound_play(f1.nav && f1.navIdx != f0.navIdx ? SND_TAB : SND_FOCUS);
     else if (sound_last() < t0 - 1e-6 && !f1.known) sound_play(SND_FOCUS); /* a sheet that cannot say where its focus is: every move */
     return; }

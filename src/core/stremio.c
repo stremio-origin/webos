@@ -139,16 +139,19 @@ static void def_set(CatalogDef *d, const char *title, const char *type, const ch
    search or a list of ids. from: how many to pass over first */
 static int board_defs(CatalogDef *out, int max, int from) {
   int n = 0, seen = 0; cJSON *a = sb_addons(); const cJSON *ad; if (!a) return 0; int ai = 0;
-  cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
+  char *base = malloc(SB_URL_MAX), *path = malloc(SB_URL_MAX);
+  if (!base || !path) { free(base); free(path); return 0; }
+  cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; addon_base(ad, base, SB_URL_MAX); int ci = 0;
     if (cats) cJSON_ArrayForEach(cat, cats) {
-      const char *ctype = js_str(cat, "type", NULL), *cid = js_str(cat, "id", NULL); char ex[200];
+      const char *ctype = js_str(cat, "type", NULL), *cid = js_str(cat, "id", NULL); char ex[256];
       if (ctype && cid && *ctype && *cid && addon_cat_default_extra(cat, ex, sizeof ex) == 0 && seen++ >= from && n < max) {
-        CatalogDef *d = &out[n++]; const char *nm = js_str(cat, "name", ""); char title[96], key[48], path[512], te[96], ie[300];
+        CatalogDef *d = &out[n++]; const char *nm = js_str(cat, "name", ""); char title[96], key[48], te[96], ie[300];
         snprintf(title, sizeof title, "%s%s%s", nm, *nm ? " · " : "", type_label(ctype)); snprintf(key, sizeof key, "a%d_%d", ai, ci);
-        addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+        addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, SB_URL_MAX, "%s/catalog/%s/%s", base, te, ie);
         def_set(d, title, ctype, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key); }
       ci++; }
     ai++; }
+  free(base); free(path);
   return n;
 }
 /* Home: every installed catalog, in the addons' order (it showed the first 8 and dropped the rest) */
@@ -179,15 +182,17 @@ int sb_disc_types(char (*out)[16], int max) {
 }
 int sb_disc_cats(const char *type, CatalogDef *out, char (*addon)[64], int max) {
   int n = 0, ai = 0; cJSON *a = sb_addons(); const cJSON *ad;
-  if (a) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
-    if (cats) cJSON_ArrayForEach(cat, cats) { char ex[200];
+  char *base = malloc(SB_URL_MAX), *path = malloc(SB_URL_MAX);
+  if (a && base && path) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; addon_base(ad, base, SB_URL_MAX); int ci = 0;
+    if (cats) cJSON_ArrayForEach(cat, cats) { char ex[256];
       if (n < max && disc_cat_ok(cat, ex, sizeof ex) && !strcmp(js_str(cat, "type", ""), type)) {
-        char key[48], path[512], te[96], ie[300]; const char *nm = js_str(cat, "name", ""), *cid = js_str(cat, "id", "");
-        snprintf(key, sizeof key, "dc%d_%d", ai, ci); addon_urlenc(type, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+        char key[48], te[96], ie[300]; const char *nm = js_str(cat, "name", ""), *cid = js_str(cat, "id", "");
+        snprintf(key, sizeof key, "dc%d_%d", ai, ci); addon_urlenc(type, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, SB_URL_MAX, "%s/catalog/%s/%s", base, te, ie);
         def_set(&out[n], *nm ? nm : cid, type, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key);
         if (addon) copy_str(addon[n], 64, js_str(js_obj(ad, "manifest"), "name", "")); n++; }
       ci++; }
     ai++; }
+  free(base); free(path);
   if (!n && max > 0) { int sr = !strcmp(type, "series"); def_set(&out[0], "Popular", sr ? "series" : "movie", sr ? CINEMETA "/catalog/series/top" : CINEMETA "/catalog/movie/top", NULL, 1, sr ? "dcs" : "dcm"); if (addon) copy_str(addon[0], 64, "Cinemeta"); n = 1; }
   return n;
 }
@@ -228,19 +233,21 @@ static int has_opt(const cJSON *opts, const char *v) { const cJSON *o; cJSON_Arr
 int sb_disc_defs_f(CatalogDef *out, int max, const char *type, const char *genre) {
   if (!*type && !*genre) return sb_disc_defs(out, max);
   int n = 0;
-  if (!*genre) { static CatalogDef all[128]; int m = sb_disc_defs(all, 128); for (int i = 0; i < m && n < max; i++) if (type_ok(all[i].type, type)) out[n++] = all[i]; return n; }
+  if (!*genre) { CatalogDef *all = calloc(128, sizeof *all); if (!all) return 0; int m = sb_disc_defs(all, 128); for (int i = 0; i < m && n < max; i++) if (type_ok(all[i].type, type)) out[n++] = all[i]; free(all); return n; }
   static const char *const G[] = { "genre" }; cJSON *a = sb_addons(); const cJSON *ad; int ai = 0;
-  if (a) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base); int ci = 0;
+  char *base = malloc(SB_URL_MAX), *path = malloc(SB_URL_MAX);
+  if (a && base && path) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) { ai++; continue; } const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; addon_base(ad, base, SB_URL_MAX); int ci = 0;
     if (cats) cJSON_ArrayForEach(cat, cats) { const char *ct = js_str(cat, "type", ""), *cid = js_str(cat, "id", ""); const cJSON *opts = NULL;
       if (n < max && *cid && type_ok(ct, type) && addon_cat_extra(cat, "genre", NULL, &opts, NULL) && opts && has_opt(opts, genre) && addon_cat_accepts(cat, G, 1)) {
-        char ex[200] = "", title[96], key[48], path[512], te[96], ie[300]; const char *nm = js_str(cat, "name", ""); addon_extra_add(ex, sizeof ex, "genre", genre);
+        char ex[256] = "", title[96], key[48], te[96], ie[300]; const char *nm = js_str(cat, "name", ""); addon_extra_add(ex, sizeof ex, "genre", genre);
         snprintf(title, sizeof title, "%s%s%s", nm, *nm ? " · " : "", type_label(ct)); snprintf(key, sizeof key, "f%d_%d", ai, ci);
-        addon_urlenc(ct, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+        addon_urlenc(ct, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, SB_URL_MAX, "%s/catalog/%s/%s", base, te, ie);
         def_set(&out[n++], title, ct, path, ex, addon_cat_extra(cat, "skip", NULL, NULL, NULL), key); }
       ci++; }
     ai++; }
-  if (!n) { const char *ty[2] = { "movie", "series" }; for (int i = 0; i < 2 && n < max; i++) { if (!type_ok(ty[i], type)) continue; char ex[200] = "", path[200], key[16]; addon_extra_add(ex, sizeof ex, "genre", genre); snprintf(path, sizeof path, CINEMETA "/catalog/%s/top", ty[i]); snprintf(key, sizeof key, "fc_%d", i);
-      def_set(&out[n++], i ? "Popular · Series" : "Popular · Movies", ty[i], path, ex, 1, key); } }
+  free(base); free(path);
+  if (!n) { const char *ty[2] = { "movie", "series" }; for (int i = 0; i < 2 && n < max; i++) { if (!type_ok(ty[i], type)) continue; char ex[256] = "", path2[200], key[16]; addon_extra_add(ex, sizeof ex, "genre", genre); snprintf(path2, sizeof path2, CINEMETA "/catalog/%s/top", ty[i]); snprintf(key, sizeof key, "fc_%d", i);
+      def_set(&out[n++], i ? "Popular · Series" : "Popular · Movies", ty[i], path2, ex, 1, key); } }
   return n;
 }
 /* the genres the installed catalogs of that type offer (each once, in the order met); a short list when none says */
@@ -253,8 +260,15 @@ int sb_disc_genres(char (*out)[48], int max, const char *type) {
     for (int i = 0; i < (int)(sizeof D / sizeof *D) && n < max; i++) snprintf(out[n++], 48, "%s", D[i]); }
   return n;
 }
+static void iso_year(const char *s, char *out, size_t cap) {
+  if (!s || strlen(s) < 4) return;
+  for (int i = 0; i < 4; i++) if (s[i] < '0' || s[i] > '9') return;
+  int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
+  if (y >= 1900 && y <= 2100) snprintf(out, cap, "%.4s", s);
+}
 void sb_meta_line(const cJSON *m, char *out, size_t cap) {
-  const char *rel = js_str(m, "releaseInfo", NULL); char yr[32] = ""; if (rel) copy_str(yr, sizeof yr, rel); else { double y = js_num(m, "year", 0); if (y) snprintf(yr, sizeof yr, "%d", (int)y); else copy_str(yr, sizeof yr, js_str(m, "year", "")); }
+  const char *rel = js_str(m, "releaseInfo", NULL); char yr[32] = ""; if (rel && *rel) copy_str(yr, sizeof yr, rel); else { double y = js_num(m, "year", 0); if (y) snprintf(yr, sizeof yr, "%d", (int)y); else copy_str(yr, sizeof yr, js_str(m, "year", "")); }
+  if (!yr[0]) iso_year(js_str(m, "released", NULL), yr, sizeof yr);
   const char *rt = js_str(m, "runtime", ""); const cJSON *ir = cJSON_GetObjectItemCaseSensitive(m, "imdbRating"); char irs[16] = "";
   if (cJSON_IsNumber(ir)) snprintf(irs, sizeof irs, "%.1f", ir->valuedouble); else if (cJSON_IsString(ir) && ir->valuestring[0]) copy_str(irs, sizeof irs, ir->valuestring);
   snprintf(out, cap, "%s%s%s%s%s%s", yr, (*yr && (*rt || *irs)) ? "   " : "", rt, (*rt && *irs) ? "   " : "", *irs ? "IMDb " : "", irs);
@@ -265,6 +279,9 @@ void sb_fill_item(Item *it, const cJSON *m, const char *type) {
   copy_str(it->name, sizeof it->name, js_str(m, "name", "")); copy_str(it->poster, sizeof it->poster, js_str(m, "poster", "")); copy_str(it->background, sizeof it->background, js_str(m, "background", ""));
   copy_str(it->logo, sizeof it->logo, js_str(m, "logo", "")); copy_str(it->description, sizeof it->description, js_str(m, "description", ""));
   const char *ml = js_str(m, "metaLine", NULL); if (ml) copy_str(it->metaLine, sizeof it->metaLine, ml); else sb_meta_line(m, it->metaLine, sizeof it->metaLine); /* the cached slim list keeps it ready-made */
+  const char *fv = js_str(m, "videoId", NULL);
+  if (!fv || !*fv) fv = js_str(js_obj(m, "behaviorHints"), "featuredVideoId", NULL);
+  if (fv && *fv) copy_str(it->videoId, sizeof it->videoId, fv);
 }
 void itemlist_free(ItemList *l) { if (l) { free(l->items); free(l); } }
 void itemlist_clear(ItemList *l) { if (l) { free(l->items); l->items = NULL; l->n = 0; } } /* a list that lives in its owner */
@@ -273,7 +290,7 @@ static ItemList *list_from_metas(const cJSON *metas, const char *type, int max) 
   const cJSON *m; cJSON_ArrayForEach(m, metas) { if (l->n >= n) break; sb_fill_item(&l->items[l->n], m, type); if (l->items[l->n].id[0]) l->n++; }
   return l;
 }
-typedef struct { char url[512], type[16], key[600]; int n; /* key: "cat:" + the whole address (cut short, every catalog of one addon shared one file) */ void (*cb)(ItemList *, int, void *); void *ud; char *cachedJson; int force; } CatReq; /* force: asked past the addon's cacheMaxAge, the kept copy not shown again */
+typedef struct { char url[SB_URL_MAX], type[16], key[SB_URL_MAX + 32]; int n; /* key: "cat:" + the whole address (cut short, every catalog of one addon shared one file) */ void (*cb)(ItemList *, int, void *); void *ud; char *cachedJson; int force; } CatReq; /* force: asked past the addon's cacheMaxAge, the kept copy not shown again */
 /* a big list (a live addon's 500 channels: turning it into items and its slim copy took 100-450 ms) is done on a
    thread of its own and handed back on the next frame; the rows' small lists stay as they were (at once) */
 #define CAT_BIG 100
@@ -284,10 +301,10 @@ static int cat_gone(int st, const cJSON *j) { const cJSON *m = js_arr(j, "metas"
 /* a list counts as gone on a second launch that finds it so (a hotel's sign-in page or an addon's source down for an
    hour leaves it), at once for a 404/410; any answer with channels clears the count */
 static long launchId(void) { static long id; if (!id) id = (long)time(NULL); return id; }
-static int cat_strike(const CatReq *r, int how) { char k[620]; snprintf(k, sizeof k, "gone:%s", r->url);
-  if (!how) { size_t l; unsigned char *d = cache_read(k, 0, &l); if (d && l > 1) cache_write(k, (const unsigned char *)"0", 1); free(d); return 0; }
-  if (how == 2) return 1; size_t l; unsigned char *d = cache_read(k, 0, &l); long was = d ? atol((const char *)d) : 0; free(d);
-  if (was > 0 && was != launchId()) return 1; if (was != launchId()) fprintf(stderr, "[addon] a list answered without channels: kept, dropped if the next launch finds it so too\n"); char v[24]; int n = snprintf(v, sizeof v, "%ld", launchId()); cache_write(k, (const unsigned char *)v, (size_t)n); return 0; }
+static int cat_strike(const CatReq *r, int how) { char *k = malloc(SB_URL_MAX + 32); if (!k) return 0; snprintf(k, SB_URL_MAX + 32, "gone:%s", r->url);
+  if (!how) { size_t l; unsigned char *d = cache_read(k, 0, &l); if (d && l > 1) cache_write(k, (const unsigned char *)"0", 1); free(d); free(k); return 0; }
+  if (how == 2) { free(k); return 1; } size_t l; unsigned char *d = cache_read(k, 0, &l); long was = d ? atol((const char *)d) : 0; free(d);
+  if (was > 0 && was != launchId()) { free(k); return 1; } if (was != launchId()) fprintf(stderr, "[addon] a list answered without channels: kept, dropped if the next launch finds it so too\n"); char v[24]; int n = snprintf(v, sizeof v, "%ld", launchId()); cache_write(k, (const unsigned char *)v, (size_t)n); free(k); return 0; }
 static void cat_drop(CatReq *r, void (*cb)(ItemList *, int, void *), void *ud) { cache_write(r->key, (const unsigned char *)"[]", 2); fprintf(stderr, "[addon] a list the addon no longer serves: its kept copy dropped\n");
   ItemList *l = calloc(1, sizeof *l); l->items = calloc(1, sizeof(Item)); l->total = -2; cb(l, 0, ud); }
 typedef struct { CatReq *r; cJSON *j; ItemList *l; int st, same, fresh, cached, age, none, gone; } CatJob;
@@ -317,12 +334,12 @@ static void on_catalog(int st, const unsigned char *b, size_t len, void *ud) {
     /* the slim list is what is cached; a copy under 12 h old stays on screen (the fresh order shows next launch) */
     cJSON *slim = cJSON_CreateArray(); for (int i = 0; i < l->n; i++) { Item *it = &l->items[i]; cJSON *o = cJSON_CreateObject();
       cJSON_AddStringToObject(o, "id", it->id); cJSON_AddStringToObject(o, "type", it->type); cJSON_AddStringToObject(o, "name", it->name); cJSON_AddStringToObject(o, "poster", it->poster);
-      cJSON_AddStringToObject(o, "background", it->background); cJSON_AddStringToObject(o, "logo", it->logo); cJSON_AddStringToObject(o, "description", it->description); cJSON_AddStringToObject(o, "metaLine", it->metaLine); cJSON_AddItemToArray(slim, o); }
+      cJSON_AddStringToObject(o, "background", it->background); cJSON_AddStringToObject(o, "logo", it->logo); cJSON_AddStringToObject(o, "description", it->description); cJSON_AddStringToObject(o, "metaLine", it->metaLine); if (it->videoId[0]) cJSON_AddStringToObject(o, "videoId", it->videoId); cJSON_AddItemToArray(slim, o); }
     char *txt = cJSON_PrintUnformatted(slim); cJSON_Delete(slim);
     int same = r->cachedJson && !strcmp(r->cachedJson, txt);
     int fresh = r->cachedJson && cat_kept_fresh(r->key, j, r->type);
     if (!fresh) cache_write(r->key, (unsigned char *)txt, strlen(txt));
-    { AddonCache h; addon_cache_hints(j, &h); char hk[620], v[24]; snprintf(hk, sizeof hk, "cah:%s", r->url); int k = snprintf(v, sizeof v, "%ld", h.maxAge > 0 ? h.maxAge : 0); cache_write(hk, (unsigned char *)v, (size_t)k); } /* how long the addon says it holds */
+    { AddonCache h; addon_cache_hints(j, &h); char *hk = malloc(SB_URL_MAX + 32), v[24]; if (hk) { snprintf(hk, SB_URL_MAX + 32, "cah:%s", r->url); int k = snprintf(v, sizeof v, "%ld", h.maxAge > 0 ? h.maxAge : 0); cache_write(hk, (unsigned char *)v, (size_t)k); free(hk); } } /* how long the addon says it holds */
     Uint32 tq2 = SDL_GetTicks(); if (!same && !fresh) r->cb(l, 0, r->ud); else itemlist_free(l);
     if (getenv("SB_SLOWLOG")) fprintf(stderr, "[cat] %d metas, %d kept: list %u ms, slim %u ms, page %u ms (%s)\n", cJSON_GetArraySize(metas), r->n, tq1 - tq0, tq2 - tq1, SDL_GetTicks() - tq2, same ? "same" : fresh ? "fresh copy shown" : "new");
     free(txt);
@@ -337,12 +354,12 @@ static void cat_work(CatJob *k) {
     ItemList *l = list_from_metas(metas, r->type, r->n);
     cJSON *slim = cJSON_CreateArray(); for (int i = 0; i < l->n; i++) { Item *it = &l->items[i]; cJSON *o = cJSON_CreateObject();
       cJSON_AddStringToObject(o, "id", it->id); cJSON_AddStringToObject(o, "type", it->type); cJSON_AddStringToObject(o, "name", it->name); cJSON_AddStringToObject(o, "poster", it->poster);
-      cJSON_AddStringToObject(o, "background", it->background); cJSON_AddStringToObject(o, "logo", it->logo); cJSON_AddStringToObject(o, "description", it->description); cJSON_AddStringToObject(o, "metaLine", it->metaLine); cJSON_AddItemToArray(slim, o); }
+      cJSON_AddStringToObject(o, "background", it->background); cJSON_AddStringToObject(o, "logo", it->logo); cJSON_AddStringToObject(o, "description", it->description); cJSON_AddStringToObject(o, "metaLine", it->metaLine); if (it->videoId[0]) cJSON_AddStringToObject(o, "videoId", it->videoId); cJSON_AddItemToArray(slim, o); }
     char *txt = cJSON_PrintUnformatted(slim); cJSON_Delete(slim);
     k->same = r->cachedJson && txt && !strcmp(r->cachedJson, txt);
     k->fresh = r->cachedJson && cat_kept_fresh(r->key, k->j, r->type);
     if (!k->fresh && txt) cache_write(r->key, (unsigned char *)txt, strlen(txt));
-    { AddonCache h; addon_cache_hints(k->j, &h); char hk[620], v[24]; snprintf(hk, sizeof hk, "cah:%s", r->url); int n = snprintf(v, sizeof v, "%ld", h.maxAge > 0 ? h.maxAge : 0); cache_write(hk, (unsigned char *)v, (size_t)n); }
+    { AddonCache h; addon_cache_hints(k->j, &h); char *hk = malloc(SB_URL_MAX + 32), v[24]; if (hk) { snprintf(hk, SB_URL_MAX + 32, "cah:%s", r->url); int n = snprintf(v, sizeof v, "%ld", h.maxAge > 0 ? h.maxAge : 0); cache_write(hk, (unsigned char *)v, (size_t)n); free(hk); } }
     if (getenv("SB_SLOWLOG")) fprintf(stderr, "[cat] %d metas, %d kept, on its own thread: %u ms (%s)\n", cJSON_GetArraySize(metas), r->n, SDL_GetTicks() - tq0, k->same ? "same" : k->fresh ? "fresh copy shown" : "new");
     free(txt); k->l = l; }
   else { k->none = 1; int g = cat_gone(k->st, k->j); k->gone = g && r->cachedJson && cat_strike(r, g); } /* (no answer, 5xx, 429: nothing counted, nothing cleared) */
@@ -361,7 +378,7 @@ static void on_cat_cached(int st, const unsigned char *b, size_t n, void *ud) { 
 static void *cat_cached_run(void *a) { plat_thread_background(5); CatJob *k = a; CatReq *r = k->r;
   size_t cl; unsigned char *t = cache_read(r->key, 0, &cl);
   if (t) { cJSON *c = cJSON_Parse((const char *)t); if (cJSON_IsArray(c) && cJSON_GetArraySize(c)) { r->cachedJson = (char *)t; if (!r->force) k->l = list_from_metas(c, r->type, r->n); } else free(t); cJSON_Delete(c); }
-  if (r->cachedJson) { char hk[620], cp[1200]; snprintf(hk, sizeof hk, "cah:%s", r->url); size_t hl; unsigned char *h = cache_read(hk, 0, &hl); long age = h ? atol((const char *)h) : 0; free(h);
+  if (r->cachedJson) { char *hk = malloc(SB_URL_MAX + 32), cp[1200]; long age = 0; if (hk) { snprintf(hk, SB_URL_MAX + 32, "cah:%s", r->url); size_t hl; unsigned char *h = cache_read(hk, 0, &hl); age = h ? atol((const char *)h) : 0; free(h); free(hk); }
     k->age = age > 0 && cache_file(r->key, age, cp, sizeof cp) && !r->force; }
   net_file("", on_cat_cached, k); return NULL; }
 void sb_catalog_url(const char *url, const char *type, int n, void (*cb)(ItemList *, int, void *), void *ud) {
@@ -370,7 +387,7 @@ void sb_catalog_url(const char *url, const char *type, int n, void (*cb)(ItemLis
   size_t cl; unsigned char *t = cache_read(r->key, 0, &cl);
   if (t) { cJSON *c = cJSON_Parse((const char *)t); if (cJSON_IsArray(c) && cJSON_GetArraySize(c)) { r->cachedJson = (char *)t; cb(list_from_metas(c, type, n), 1, ud); } else free(t); cJSON_Delete(c); }
   /* the addon's own cacheMaxAge: a copy younger than that is the answer (no request) */
-  if (r->cachedJson) { char hk[620], cp[1200]; snprintf(hk, sizeof hk, "cah:%s", url); size_t hl; unsigned char *h = cache_read(hk, 0, &hl); long age = h ? atol((const char *)h) : 0; free(h);
+  if (r->cachedJson) { char *hk = malloc(SB_URL_MAX + 32), cp[1200]; long age = 0; if (hk) { snprintf(hk, SB_URL_MAX + 32, "cah:%s", url); size_t hl; unsigned char *h = cache_read(hk, 0, &hl); age = h ? atol((const char *)h) : 0; free(h); free(hk); }
     if (age > 0 && cache_file(r->key, age, cp, sizeof cp)) { free(r->cachedJson); free(r); return; } }
   if (traktrows_is(url)) { traktrows_fetch(url, on_catalog, r); return; } /* (Trakt's rows: asked of Trakt with the account's token, answered as an addon would) */
   net_get_timeout(url, 45000, on_catalog, r); /* (an addon that makes its lists on demand, AIOMetadata from TMDB, took more than the 20 s of other calls: the row stayed hidden) */
@@ -398,24 +415,29 @@ static void on_page(int st, const unsigned char *b, size_t len, void *ud) {
   page_work(k); on_page_done(0, NULL, 0, k); /* (no thread: here, as before) */
 }
 void sb_catalog_page(const CatalogDef *d, int skip, void (*cb)(ItemList *, int, void *), void *ud) {
-  char ex[260], sk[16], url[800]; copy_str(ex, sizeof ex, d->extra); snprintf(sk, sizeof sk, "%d", skip); addon_extra_add(ex, sizeof ex, "skip", sk);
-  snprintf(url, sizeof url, "%s/%s.json", d->path, ex);
-  PageReq *r = calloc(1, sizeof *r); copy_str(r->type, sizeof r->type, d->type); r->cb = cb; r->ud = ud; net_get(url, on_page, r);
+  char ex[320], sk[16]; copy_str(ex, sizeof ex, d->extra); snprintf(sk, sizeof sk, "%d", skip); addon_extra_add(ex, sizeof ex, "skip", sk);
+  char *url = malloc(SB_URL_MAX + 360); if (!url) { cb(NULL, -1, ud); return; }
+  snprintf(url, SB_URL_MAX + 360, "%s/%s.json", d->path, ex);
+  PageReq *r = calloc(1, sizeof *r); copy_str(r->type, sizeof r->type, d->type); r->cb = cb; r->ud = ud; net_get_pri(url, on_page, r);
+  free(url);
 }
 /* every catalog that takes a search (and needs nothing else), in addon order */
 int sb_search_defs(const char *q, CatalogDef *out, int max) {
   int n = 0; cJSON *a = sb_addons(); const cJSON *ad; if (!a) return 0; static const char *const SN[1] = { "search" };
-  cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) continue; const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; char base[512]; addon_base(ad, base, sizeof base);
+  char *base = malloc(SB_URL_MAX), *path = malloc(SB_URL_MAX);
+  if (base && path) cJSON_ArrayForEach(ad, a) { if (!sb_addon_on(ad)) continue; const cJSON *cats = js_arr(js_obj(ad, "manifest"), "catalogs"), *cat; addon_base(ad, base, SB_URL_MAX);
     if (cats) cJSON_ArrayForEach(cat, cats) { const char *ctype = js_str(cat, "type", NULL), *cid = js_str(cat, "id", NULL);
       if (!ctype || !cid || !addon_cat_accepts(cat, SN, 1) || n >= max) continue;
-      char path[512], te[96], ie[300], ex[300] = ""; addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, sizeof path, "%s/catalog/%s/%s", base, te, ie);
+      char te[96], ie[300], ex[300] = ""; addon_urlenc(ctype, te, sizeof te); addon_urlenc(cid, ie, sizeof ie); snprintf(path, SB_URL_MAX, "%s/catalog/%s/%s", base, te, ie);
       addon_extra_add(ex, sizeof ex, "search", q); def_set(&out[n++], js_str(cat, "name", ""), ctype, path, ex, 0, ""); } }
+  free(base); free(path);
   return n;
 }
 
 /* ---- pictures ------------------------------------------------------------------------------ */
+static int valid_url(const char *s) { return s && (!strncmp(s, "https://", 8) || !strncmp(s, "http://", 7) || !strncmp(s, "file://", 7)); }
 const char *sb_poster_of(const Item *it, char *buf, size_t cap) { if (getenv("SB_POSTER_FAIL")) { snprintf(buf, cap, "https://invalid.invalid/poster/%s.jpg", it->id); return buf; } /* (development: every poster fails, to see the stand-ins) */
-  if (it->poster[0]) { copy_str(buf, cap, it->poster);
+  if (valid_url(it->poster)) { copy_str(buf, cap, it->poster);
     if (find_in(buf, "images.metahub.space/poster/")) { replace_in(buf, cap, "/poster/small/", "/poster/medium/"); replace_in(buf, cap, "/poster/large/", "/poster/medium/"); /* small is WebP; medium is JPEG */ }
     else if (find_in(buf, "image.tmdb.org/t/p/")) { const char *k[] = { "/t/p/w500/", "/t/p/w780/", "/t/p/w1280/", "/t/p/original/" }; for (int i = 0; i < 4; i++) replace_in(buf, cap, k[i], "/t/p/w342/"); }
     return buf; }
@@ -423,7 +445,7 @@ const char *sb_poster_of(const Item *it, char *buf, size_t cap) { if (getenv("SB
   buf[0] = 0; return buf;
 }
 static const char *bg_of(const Item *it, char *buf, size_t cap) {
-  if (it->background[0]) copy_str(buf, cap, it->background); else if (sb_is_imdb(it->id)) snprintf(buf, cap, "https://images.metahub.space/background/medium/%s/img", it->id); else copy_str(buf, cap, it->poster);
+  if (valid_url(it->background)) copy_str(buf, cap, it->background); else if (sb_is_imdb(it->id)) snprintf(buf, cap, "https://images.metahub.space/background/medium/%s/img", it->id); else copy_str(buf, cap, valid_url(it->poster) ? it->poster : "");
   return buf;
 }
 /* a wide card's backdrop (430 wide, 460 focused): a source at least that wide, never smaller (TMDB's w300 and
@@ -436,7 +458,7 @@ const char *sb_bg_mid(const Item *it, char *buf, size_t cap) { bg_of(it, buf, ca
   if (find_in(buf, "images.metahub.space/background/")) { const char *k[] = { "/background/small/", "/background/large/" }; for (int i = 0; i < 2; i++) replace_in(buf, cap, k[i], "/background/medium/"); }
   else if (find_in(buf, "image.tmdb.org/t/p/")) replace_in(buf, cap, "/t/p/original/", "/t/p/w1280/");
   return buf; }
-const char *sb_logo_of(const Item *it, char *buf, size_t cap) { if (it->logo[0]) copy_str(buf, cap, it->logo); else if (sb_is_imdb(it->id)) snprintf(buf, cap, "https://images.metahub.space/logo/medium/%s/img", it->id); else buf[0] = 0; return buf; }
+const char *sb_logo_of(const Item *it, char *buf, size_t cap) { if (valid_url(it->logo)) copy_str(buf, cap, it->logo); else if (sb_is_imdb(it->id)) snprintf(buf, cap, "https://images.metahub.space/logo/medium/%s/img", it->id); else buf[0] = 0; return buf; }
 /* "2h 10min", "130 min", "1 h 5 m" (a year or a year span is not a count of minutes) */
 static int unit_at(const char *q, char u, const char *longs[]) {
   if (*q != u) return 0; q++; for (int i = 0; longs[i]; i++) { size_t n = strlen(longs[i]); if (!strncmp(q, longs[i], n)) { q += n; break; } }
@@ -470,7 +492,7 @@ static void meta_put(const char *k, cJSON *m) { metaVer++; int slot = 0; unsigne
 /* a title page's disk copy: under the addons' setup too */
 static void meta_ck(char *out, size_t cap, const char *key) { snprintf(out, cap, "meta%08x:%s", addon_gen(), key); }
 #define META_BASES 8
-typedef struct { char type[16], id[SB_ID], key[SB_ID + 32]; void (*cb)(cJSON *, void *); void *ud; int fresh; char bases[META_BASES][512]; int nb, bi; } MetaReq;
+typedef struct { char type[16], id[SB_ID], key[SB_ID + 32]; void (*cb)(cJSON *, void *); void *ud; int fresh; char bases[META_BASES][SB_URL_MAX]; int nb, bi; } MetaReq;
 static void meta_try(MetaReq *r);
 static void on_meta(int st, const unsigned char *b, size_t n, void *ud) {
   MetaReq *r = ud; cJSON *j = st == 200 ? net_json(b) : NULL; cJSON *m = j ? cJSON_DetachItemFromObjectCaseSensitive(j, "meta") : NULL; net_json_free(j);
@@ -482,8 +504,11 @@ static void on_meta(int st, const unsigned char *b, size_t n, void *ud) {
 }
 static void meta_try(MetaReq *r) {
   if (r->bi >= r->nb) { if (!r->fresh) r->cb(NULL, r->ud); free(r); return; }
-  char url[800]; addon_url(url, sizeof url, r->bases[r->bi++], "meta", r->type, r->id, NULL);
-  net_get(url, on_meta, r);
+  char *url = malloc(SB_URL_MAX + 512);
+  if (!url) { if (!r->fresh) r->cb(NULL, r->ud); free(r); return; }
+  addon_url(url, SB_URL_MAX + 512, r->bases[r->bi++], "meta", r->type, r->id, NULL);
+  net_get_pri(url, on_meta, r);
+  free(url);
 }
 static void meta_go(MetaReq *r) {
   if (!r->nb && !r->fresh) { r->cb(NULL, r->ud); free(r); return; }
@@ -505,8 +530,8 @@ void sb_meta(const char *type, const char *id, void (*cb)(cJSON *, void *), void
   cJSON *m = sb_meta_cached(type, id); if (m) { cb(m, ud); return; }
   MetaReq *r = calloc(1, sizeof *r); copy_str(r->type, sizeof r->type, type); copy_str(r->id, sizeof r->id, id); snprintf(r->key, sizeof r->key, "%s_%s", type, id); r->cb = cb; r->ud = ud;
   cJSON *a = sb_addons(); const cJSON *ad; int cine = 0;
-  if (a) cJSON_ArrayForEach(ad, a) { if (r->nb >= META_BASES || !addon_serves(ad, "meta", type, id)) continue; addon_base(ad, r->bases[r->nb], 512); if (!strcmp(r->bases[r->nb], CINEMETA)) cine = 1; r->nb++; }
-  if (sb_is_imdb(id) && !cine && r->nb < META_BASES && (!strcmp(type, "movie") || !strcmp(type, "series"))) copy_str(r->bases[r->nb++], 512, CINEMETA);
+  if (a) cJSON_ArrayForEach(ad, a) { if (r->nb >= META_BASES || !addon_serves(ad, "meta", type, id)) continue; addon_base(ad, r->bases[r->nb], SB_URL_MAX); if (!strcmp(r->bases[r->nb], CINEMETA)) cine = 1; r->nb++; }
+  if (sb_is_imdb(id) && !cine && r->nb < META_BASES && (!strcmp(type, "movie") || !strcmp(type, "series"))) copy_str(r->bases[r->nb++], SB_URL_MAX, CINEMETA);
   /* a disk copy under 12 h old shows first (read and parsed on the file thread: a series' copy is a tree of hundreds of
      episodes), then the addons are asked anyway so the next visit is current */
   char ck[SB_ID + 48], cp[1200]; meta_ck(ck, sizeof ck, r->key);
@@ -527,12 +552,20 @@ static void push_item(cJSON *it) {
 }
 static void lib_store(cJSON *it, int push) { char iso[40]; now_iso(iso, sizeof iso); cJSON_DeleteItemFromObjectCaseSensitive(it, "_mtime"); cJSON_AddStringToObject(it, "_mtime", iso); libVer++; store_set_node("lib", store_node("lib")); if (push) push_item(it); }
 void lib_save(cJSON *it) { lib_store(it, 1); }
-static void set_str(cJSON *o, const char *k, const char *v) { cJSON_DeleteItemFromObjectCaseSensitive(o, k); cJSON_AddStringToObject(o, k, v ? v : ""); }
+static void set_str(cJSON *o, const char *k, const char *v) {
+  cJSON *nv = cJSON_CreateString(v ? v : "");
+  if (!nv) return;
+  cJSON_DeleteItemFromObjectCaseSensitive(o, k);
+  cJSON_AddItemToObject(o, k, nv);
+}
 static void set_bool(cJSON *o, const char *k, int v) { cJSON_DeleteItemFromObjectCaseSensitive(o, k); cJSON_AddBoolToObject(o, k, v); }
 /* the year as the title's metadata gives it ("2019", "2019–2021"), when that metadata is at hand */
 static void meta_year(const Item *it, char *out, size_t cap) {
   out[0] = 0; const cJSON *m = sb_meta_cached(it->type, it->id), *y = cJSON_GetObjectItemCaseSensitive(m, "year");
-  if (cJSON_IsString(y) && y->valuestring) copy_str(out, cap, y->valuestring); else if (cJSON_IsNumber(y)) snprintf(out, cap, "%d", (int)y->valuedouble);
+  if (cJSON_IsString(y) && y->valuestring && y->valuestring[0]) copy_str(out, cap, y->valuestring);
+  else if (cJSON_IsNumber(y) && y->valuedouble > 0) snprintf(out, cap, "%d", (int)y->valuedouble);
+  if (!out[0] && m) { const char *rel = js_str(m, "releaseInfo", NULL); if (rel && *rel) copy_str(out, cap, rel); else iso_year(js_str(m, "released", NULL), out, cap); }
+  if (!out[0]) iso_year(it->metaLine, out, cap);
 }
 cJSON *lib_new_item(const Item *it) {
   char iso[40]; now_iso(iso, sizeof iso); cJSON *o = cJSON_CreateObject();
@@ -557,14 +590,14 @@ void lib_toggle(const Item *it) {
   set_str(l, "year", yr[0] ? yr : js_str(l, "year", ""));
   lib_save(l);
 }
+static const char *clean_url(const char *s) { return valid_url(s) ? s : ""; }
 static void item_from_lib(Item *out, const cJSON *l) {
   memset(out, 0, sizeof *out); const cJSON *s = js_obj(l, "state");
   copy_str(out->id, sizeof out->id, js_str(l, "_id", "")); copy_str(out->type, sizeof out->type, js_str(l, "type", "movie")); copy_str(out->name, sizeof out->name, js_str(l, "name", ""));
-  copy_str(out->poster, sizeof out->poster, js_str(l, "poster", "")); copy_str(out->background, sizeof out->background, js_str(l, "background", "")); copy_str(out->logo, sizeof out->logo, js_str(l, "logo", ""));
+  copy_str(out->poster, sizeof out->poster, clean_url(js_str(l, "poster", ""))); copy_str(out->background, sizeof out->background, clean_url(js_str(l, "background", ""))); copy_str(out->logo, sizeof out->logo, clean_url(js_str(l, "logo", "")));
   const char *vid = js_str(s, "video_id", ""); copy_str(out->videoId, sizeof out->videoId, *vid ? vid : out->id);
   double d = js_num(s, "duration", 0), t = js_num(s, "timeOffset", 0); out->progress = d > 0 ? (float)(t / d) : 0; out->left = d > 0 ? (float)((d - t) / 60000.0) : 0;
 }
-static int cmp_mtime(const void *a, const void *b) { double x = tms(cJSON_GetObjectItemCaseSensitive(*(cJSON **)a, "_mtime")), y = tms(cJSON_GetObjectItemCaseSensitive(*(cJSON **)b, "_mtime")); return x < y ? 1 : x > y ? -1 : 0; }
 /* Continue Watching, as the official apps make it: what is part watched, and the series with an episode out since
    they were last watched; ordered by when each last moved (a new episode: when it came out), at most 100 */
 typedef struct { cJSON *it; double at; int newEp; char vid[SB_VID]; const TwPlay *tw; } CwPick; /* tw: Trakt's paused position, when it is the newer (it NULL: Trakt's alone) */
@@ -1036,10 +1069,12 @@ static unsigned streams_req(const char *type, const char *vid, int only, StreamP
   if (own) { r->own = cJSON_Duplicate(own, 1); StreamPart *p = calloc(1, sizeof *p); p->req = r; copy_str(p->name, sizeof p->name, T("This title")); r->pending = r->count = 1;
     net_file("", on_own_streams, p); return r->tok; } /* (a file that is not there: answered on the next frame, never inside this call) */
   int idx = 0; const cJSON *ad;
-  if (a) cJSON_ArrayForEach(ad, a) { if (!addon_serves(ad, "stream", type, vid)) continue; if (only >= 0 && idx != only) { idx++; continue; }
+  char *base = malloc(SB_URL_MAX), *url = malloc(SB_URL_MAX + 512);
+  if (a && base && url) cJSON_ArrayForEach(ad, a) { if (!addon_serves(ad, "stream", type, vid)) continue; if (only >= 0 && idx != only) { idx++; continue; }
     StreamPart *p = calloc(1, sizeof *p); p->req = r; p->idx = idx++; copy_str(p->name, sizeof p->name, addon_name(ad));
-    char base[512], url[900]; addon_base(ad, base, sizeof base); addon_url(url, sizeof url, base, "stream", type, vid, NULL);
+    addon_base(ad, base, SB_URL_MAX); addon_url(url, SB_URL_MAX + 512, base, "stream", type, vid, NULL);
     r->pending++; net_get_timeout(url, 45000, on_streams, p); } /* slow debrid addons can take 20-30 s: the phone and PC apps wait as long */
+  free(base); free(url);
   r->count = r->pending; if (!r->pending) { done(0, ud); free(r); return 0; }
   if (ans) ans(r->pending, r->count, ud); /* (how many were asked, at once: a wait can say how many are left from its start) */
   return r->tok;
@@ -1105,5 +1140,5 @@ void sb_suggest(const char *q, void (*cb)(ItemList *, char[6][128], int, void *)
   char s[128]; copy_str(s, sizeof s, q); for (char *p = s; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
   char first = (s[0] >= 'a' && s[0] <= 'z') || (s[0] >= '0' && s[0] <= '9') ? s[0] : 'x'; char enc[400]; urlenc(s, enc, sizeof enc);
   char url[600]; snprintf(url, sizeof url, "https://v3.sg.media-imdb.com/suggestion/%c/%s.json", first, enc);
-  SugReq *r = malloc(sizeof *r); r->cb = cb; r->ud = ud; net_get(url, on_sug, r);
+  SugReq *r = malloc(sizeof *r); r->cb = cb; r->ud = ud; net_get_first(url, on_sug, r);
 }

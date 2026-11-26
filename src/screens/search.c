@@ -151,12 +151,14 @@ static void live(void) {
 }
 static void cat_go(void) {
   char q[48]; snprintf(q, sizeof q, "%s", S.q); char *e = q + strlen(q); while (e > q && e[-1] == ' ') *--e = 0; const char *p = q; while (*p == ' ') p++;
-  CatalogDef defs[NCAT]; int n = sb_search_defs(p, defs, NCAT);
+  CatalogDef *defs = calloc(NCAT, sizeof *defs); if (!defs) return;
+  int n = sb_search_defs(p, defs, NCAT);
   if (!n) { char enc[200]; urlenc(p, enc, sizeof enc); const char *ty[2] = { "movie", "series" }; /* no installed catalog searches: Cinemeta's */
     for (int i = 0; i < 2; i++) { memset(&defs[n], 0, sizeof defs[n]); snprintf(defs[n].type, sizeof defs[n].type, "%s", ty[i]); snprintf(defs[n].url, sizeof defs[n].url, CINEMETA "/catalog/%s/top/search=%s.json", ty[i], enc); n++; } }
   for (int c = 0; c < S.ncat; c++) itemlist_clear(&S.cat[c]); S.ncat = n; for (int c = 0; c < n; c++) S.catDone[c] = S.catFail[c] = 0;
   fprintf(stderr, "[search] a query of %d character(s) in %d catalog(s)\n", (int)strlen(p), n); /* (never the words typed: the log may be shared) */
   for (int c = 0; c < n; c++) sb_catalog_url(defs[c].url, defs[c].type, 20, on_cat, (void *)(uintptr_t)(((uintptr_t)(S.tok & 0x7ffffff) << 5) | (uintptr_t)c));
+  free(defs);
 }
 /* the QR for typing on the phone, and what arrives from it (asked only while Search is up) */
 static void phone_ask(void) { if (S.qrOk) { httpd_start(); return; } S.qrAt = app_now(); S.qrOk = httpd_url("", S.qrUrl, sizeof S.qrUrl); }

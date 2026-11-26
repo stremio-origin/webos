@@ -1,0 +1,17 @@
+{
+ "Search on TV": "البحث على التلفاز",
+ "Search on your TV": "ابحث على تلفازك",
+ "What you type shows up on the TV as you type.": "ما تكتبه يظهر على التلفاز فور كتابته.",
+ "Film or series": "فيلم أو مسلسل",
+ "Sent": "تم الإرسال",
+ "Can’t reach the TV": "تعذّر الوصول إلى التلفاز",
+ "Paste your TMDB API key (or API Read Access Token). Get one at": "الصق مفتاح TMDB API الخاص بك (أو رمز القراءة). احصل عليه من",
+ "It stays on your TV.": "يبقى محفوظًا على تلفازك.",
+ "API key": "مفتاح API",
+ "Save": "حفظ",
+ "Checking…": "جارٍ التحقق…",
+ "Saved. You can close this page.": "تم الحفظ. يمكنك إغلاق هذه الصفحة.",
+ "TMDB didn’t accept this key.": "لم يقبل TMDB هذا المفتاح.",
+ "In the app’s language, from TMDB. OK to change the key": "بلغة التطبيق، من TMDB. اضغط OK لتغيير المفتاح",
+ "Only in English. OK to add a TMDB key from your phone": "بالإنجليزية فقط. اضغط OK لإضافة مفتاح TMDB من هاتفك"
+}
