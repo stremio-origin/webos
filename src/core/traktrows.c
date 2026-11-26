@@ -28,7 +28,7 @@ int traktrows_defs(CatalogDef *out, int max) {
     snprintf(d->type, sizeof d->type, "%s", ROWS[i].type); snprintf(d->path, sizeof d->path, PFX "%s/%s", ROWS[i].list, ROWS[i].type);
     snprintf(d->url, sizeof d->url, "%s", d->path); snprintf(d->key, sizeof d->key, "%s", ROWS[i].key); } /* (no paging: skip 0) */
   return n; }
-void traktrows_forget(void) { for (int i = 0; i < 6; i++) { char k[64]; snprintf(k, sizeof k, "cat:" PFX "%s/%s", ROWS[i].list, ROWS[i].type); cache_write(k, (const unsigned char *)"[]", 2); } }
+void traktrows_forget(void) { for (int i = 0; i < 6; i++) { char k[64]; snprintf(k, sizeof k, "cat2:" PFX "%s/%s", ROWS[i].list, ROWS[i].type); cache_write(k, (const unsigned char *)"[]", 2); } }
 
 /* Trakt's answer made an addon's: one entry a title (history repeats it for every play and every episode), its IMDb id
    (what the cards, the title page and the streams go by: titles Trakt knows only by another id are left out) */

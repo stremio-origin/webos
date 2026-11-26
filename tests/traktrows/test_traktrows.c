@@ -63,7 +63,7 @@ int main(void) {
   traktrows_fetch("trakt:w/movie", home_cb, NULL); answer(200, "[]"); CHECK(gotSt == 200 && metas_n() == 0, "an empty list: an empty row");
   traktrows_fetch("trakt:x/movie", home_cb, NULL); CHECK(gotSt == 404, "an unknown list");
   state = TRAKT_OFF; gotSt = -1; traktrows_fetch("trakt:h/movie", home_cb, NULL); CHECK(gotSt == 0, "not connected: answered at once, nothing asked"); state = TRAKT_LINKED;
-  traktrows_forget(); CHECK(ncache == 6 && !strcmp(cacheKeys[0], "cat:trakt:h/movie"), "a new connection: the six kept copies cleared (%d, %s)", ncache, cacheKeys[0]);
+  traktrows_forget(); CHECK(ncache == 6 && !strcmp(cacheKeys[0], "cat2:trakt:h/movie"), "a new connection: the six kept copies cleared (%d, %s)", ncache, cacheKeys[0]);
   cJSON_Delete(addons);
   printf(fails ? "%d failed\n" : "all ok\n", fails); return fails ? 1 : 0;
 }
